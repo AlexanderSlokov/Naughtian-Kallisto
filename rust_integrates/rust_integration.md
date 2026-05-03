@@ -9,12 +9,12 @@
 ### 🔥 C++ Data Plane (Hotpath - Luồng Dữ Liệu Nóng)
 Nhiệm vụ: Chịu tải hàng triệu RPS, độ trễ < 2ms, xử lý cấu trúc dữ liệu Lock-free.
 - **Thành phần:** `Dispatcher`, `WorkerPool` (Epoll, SO_REUSEPORT), `HttpHandler`, `KallistoCore`, `KvEngine`, `TlsBTreeManager` (RCU), `ShardedCuckooTable`, và `RocksDBStorage`.
-- **Encryption Barrier:** C++ trực tiếp gọi các thư viện tối ưu (OpenSSL/BoringSSL) để mã hóa/giải mã AES-256-GCM hàng triệu lần mỗi giây bằng Data Encryption Key (DEK) do Rust cấp.
+- **Encryption Barrier:** C++ trực tiếp gọi các thư viện tối ưu `BoringSSL` để mã hóa/giải mã `AES-256-GCM` hàng triệu lần mỗi giây bằng `Data Encryption Key` (DEK) do Rust cấp.
 - **Mạng lưới TLS:** TLS/mTLS termination được xử lý bằng C++ hoặc ủy thác (offload) cho Envoy Sidecar proxy.
 
 ### 🛡️ Rust Control Plane (Coldpath - Lớp Giáp An Toàn)
 Nhiệm vụ: Tính toán mật mã tĩnh, quản lý bộ nhớ an toàn (anti-leak/anti-swap), giao tiếp I/O ngoại vi bất đồng bộ (Network/Disk) mà không cản trở luồng C++.
-- **Thành phần:** Sinh khóa, Shamir's Secret Sharing, xoay vòng khóa Keyring, xuất Metrics, Audit Log, Gossip Protocol, quản lý ACL/RBAC, và Client TUI.
+- **Thành phần:** Sinh khóa, `Shamir's Secret Sharing`, xoay vòng khóa Keyring, xuất Metrics, Audit Log, Gossip Protocol, quản lý ACL/RBAC, và Client TUI.
 
 ---
 
@@ -23,25 +23,28 @@ Nhiệm vụ: Tính toán mật mã tĩnh, quản lý bộ nhớ an toàn (anti-
 Để xây dựng các module Rust đạt chuẩn công nghiệp, chúng ta sẽ sử dụng các crate mạnh mẽ nhất từ hệ sinh thái:
 
 ### 2.1 Bảo Mật & Quản Lý Vùng Nhớ (Core Crypto)
-- **Thuật toán Shamir:** `rusty_secrets` (chuẩn mực, tích hợp MAC) hoặc `vsss-rs` (có xác minh toán học Verifiable Secret Sharing).
+- **Thuật toán Shamir:** (Update 03/05/2026) Các thư viện Rust implement tính năng này đã xuống cấp trầm trọng, không còn maintained hoặc do duy nhất một cá nhân phát triển. Kallisto sẽ phải tự implement thuật toán dựa vào công thức của OpenBao / Vault.
 - **Vùng Nhớ An Toàn (Secure Memory):**
-  - `memsec` hoặc `secstr`: Bọc system calls như `mlock()` để cấm OS swap Master Key xuống đĩa cứng.
-  - `zeroize`: Tự động ghi đè vùng RAM thành số 0 khi khóa hết hạn (chống Cold Boot Attack).
-- **Ngăn Tràn Thông Tin (Anti-Leakage):** `secrecy` (Cung cấp `SecretString`, vô hiệu hóa trait `Debug` để chống in nhầm ra log `println!`).
-- **Phần Cứng An Toàn (Tương lai):** `fortanix-sgx-abi` để chạy thuật toán bên trong Intel SGX Enclave.
+  - Yêu cầu: Bọc system calls như `mlock()` để cấm OS swap Master Key xuống đĩa cứng. Tình hình hiện tại: Các thư viện hỗ trợ tính năng này đều chưa được maintain. Do vậy Kallisto sẽ tự implement thuật toán này.
+  - `zeroize` [Approved]: Tự động ghi đè vùng RAM thành số 0 khi khóa hết hạn (chống Cold Boot Attack).
+- **Ngăn Tràn Thông Tin (Anti-Leakage):** 
+  - `secrecy` [Approved]: (Cung cấp `SecretString`, vô hiệu hóa trait `Debug` để chống in nhầm ra log `println!`).
 
 ### 2.2 Quan Sát & Nhật Ký (Telemetry & Observability)
 *Chiến lược:* C++ ném dữ liệu thô vào **Lock-free Queue** cực nhanh rồi quay đi ngay. Rust dùng runtime bất đồng bộ hút dữ liệu xử lý.
-- **Runtime:** `tokio` (xử lý Async I/O không chặn).
-- **Metrics Exporter:** `prometheus` kết hợp với web framework siêu nhẹ `axum` hoặc `hyper` để mở port `8201` độc lập.
-- **Audit Logging:** Dùng `serde_json` để parse tốc độ cao, `tracing-appender` để ghi log xuống đĩa không chặn, và `reqwest` để đẩy log lên SIEM.
-
+- **Runtime:** `tokio` [Approved] (xử lý Async I/ệu không chặn).
+- **Metrics Exporter:** `prometheus` kết hợp với  `axum` [Approved] (better DX, more lightweight, cùng hệ sinh thái của Tokio) để mở port `8201` độc lập.
+- **Audit Logging:** 
+  - Dùng `serde_json` [Approved] Được phát triển bởi David Tolnay, một phần của dự án Serde. `serde_json` được dùng để parse JSON cực nhanh.
+  - `tracing-appender` [Approved]: Thuộc dự án Tokio, hệ sinh thái nền tảng cho lập trình bất đồng bộ (async) trong Rust. `tracing-appender` được dùng để ghi log xuống đĩa không chặn.
+  - `reqwest` [Approved]: Phát triển bởi Sean McArthur (thành viên core-team của dự án Hyper), có tài liệu hướng dẫn cực kỳ phong phú và tích hợp hoàn hảo với `serde_json`. `reqwest` được dùng để đẩy log lên SIEM.
+- **Logging async:** `flume` (ở chế độ Bounded Channel). Khởi tạo một flume::bounded(262144) (đủ chứa log trong ~2 giây ở mức tải tối đa). Lõi C++ khi có Audit Log sẽ gọi qua FFI một hàm C-ABI. Hàm này bọc cái Sync Sender của Flume và gọi tx.try_send(log). Tốc độ chèn mất đúng 10-20 nano-giây. Nếu queue đầy, nó quăng lỗi báo "Log bị drop do disk chậm" và quay lại phục vụ user tiếp. Hot path của C++ không hề bị nghẽn (block). Luồng lạnh của Rust dùng Tokio gọi rx.recv_async().await. Nó nằm ngủ ngoan ngoãn, không cắn 1% CPU nào cho đến khi Flume báo có dữ liệu. Nhận dữ liệu xong, nó đẩy xuống đĩa cứng bằng tracing-appender.
 ### 2.3 Quản Trị Cụm & Cấu Hình (Control Plane)
 - **Gossip Protocol:** `foca` (thực thi thuật toán SWIM) để tìm kiếm các node và đồng bộ cụm mạng.
-- **Cấu hình:** `hcl-rs` để parse các file cấu hình `kallisto.hcl`.
+- **Cấu hình:** `hcl-rs` [Approved] để parse các file cấu hình `kallisto.hcl`.
 
 ### 2.4 Cầu Nối C++ & Rust (FFI Bridge)
-- **Lựa chọn tối ưu:** Dùng crate **`cxx`** thay vì `cbindgen` và raw pointers truyền thống.
+- **Lựa chọn tối ưu:** Dùng crate **`cxx`** [Approved] và raw pointers truyền thống.
 - **Lý do:** `cxx` tự sinh file header C++ an toàn, hỗ trợ chuyển đổi trực tiếp các kiểu dữ liệu nâng cao (`String`, `Vec`, `Result`) mà không gặp lỗi rò rỉ bộ nhớ.
 
 ### 2.5 Storage Adapter (Khả Năng Thay Thế Trong Tương Lai)
@@ -50,7 +53,7 @@ Nhờ kiến trúc Hexagonal (Storage Engine là Plug-in), nếu RocksDB gặp v
 
 ### 2.6 TUI Client (Ứng Dụng Quản Trị)
 - Giao diện Admin CLI có thể được biên dịch độc lập bằng Rust thành Single Static Binary.
-- **Thư viện:** Dùng `ratatui` (vẽ giao diện terminal cực đẹp) kết hợp với `reqwest` để gọi API.
+- **Thư viện:** Dùng `ratatui` [Approved] (vẽ giao diện terminal cực đẹp) kết hợp với `reqwest` để gọi API.
 
 ---
 

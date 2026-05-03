@@ -6,19 +6,30 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 # For Corrosion - Rust FFI linking
 include(FetchContent)
+
+# Help Corrosion find Rust in some environments (like devcontainers)
+if(NOT Rust_COMPILER)
+    find_program(RUST_C rustc PATHS $ENV{HOME}/.cargo/bin /usr/bin /usr/local/bin)
+    if(RUST_C)
+        set(Rust_COMPILER ${RUST_C} CACHE FILEPATH "Rust compiler hint")
+    endif()
+endif()
+if(NOT Rust_CARGO)
+    find_program(RUST_CARGO cargo PATHS $ENV{HOME}/.cargo/bin /usr/bin /usr/local/bin)
+    if(RUST_CARGO)
+        set(Rust_CARGO ${RUST_CARGO} CACHE FILEPATH "Cargo hint")
+    endif()
+endif()
+
 FetchContent_Declare(
         Corrosion
         GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
         GIT_TAG v0.5.0
 )
-set(Rust_COMPILER $ENV{HOME}/.cargo/bin/rustc)
 FetchContent_MakeAvailable(Corrosion)
 
 ## Require CMake compile all Rust Workspace
 corrosion_import_crate(MANIFEST_PATH rust_integrates/ffi_bridge/Cargo.toml)
-
-## Link static package Rust in Kallisto C++ Core
-target_link_libraries(kallisto_lib PUBLIC ffi_bridge)
 
 # This project must use modern C++ 20 to fully leverage flagship features like Concepts, Coroutines, or Ranges.
 set(CMAKE_CXX_STANDARD 20)
@@ -85,6 +96,9 @@ add_library(kallisto_lib
     # Network infrastructure (Phase 2.2)
     src/net/listener.cpp
 )
+
+## Link static package Rust in Kallisto C++ Core
+target_link_libraries(kallisto_lib PUBLIC ffi_bridge)
 
 # Link pthread for threading support
 target_link_libraries(kallisto_lib PRIVATE pthread)

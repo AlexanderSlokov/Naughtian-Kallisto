@@ -33,5 +33,17 @@
     }
   },
   "remoteUser": "vscode",
+  "containerEnv": {
+    "VCPKG_ROOT": "/usr/local/vcpkg",
+    "RUSTUP_HOME": "/home/vscode/.rustup",
+    "CARGO_HOME": "/home/vscode/.cargo",
+    "PATH": "/home/vscode/.cargo/bin:/usr/local/vcpkg:${containerEnv:PATH}"
+  },
+  "remoteEnv": {
+    "VCPKG_ROOT": "/usr/local/vcpkg",
+    "RUSTUP_HOME": "/home/vscode/.rustup",
+    "CARGO_HOME": "/home/vscode/.cargo",
+    "PATH": "/home/vscode/.cargo/bin:/usr/local/vcpkg:${containerEnv:PATH}"
+  },
   "postCreateCommand": "sudo chown -R vscode:vscode /workspaces && pip install gcovr --break-system-packages"
 }
