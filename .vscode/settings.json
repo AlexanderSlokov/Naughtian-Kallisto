@@ -11,5 +11,9 @@
 	"editor.detectIndentation": false, // Không để VS Code tự đoán, ép dùng tab 8
 	// Bổ sung: Hiển thị khoảng trắng để dễ kiểm soát
 	"editor.renderWhitespace": "boundary",
-	"sonarlint.pathToCompileCommands": "${workspaceFolder}/build/compile_commands.json"
+	"sonarlint.pathToCompileCommands": "${workspaceFolder}/build/compile_commands.json",
+	"sonarlint.connectedMode.project": {
+		"connectionId": "alexanderslokov",
+		"projectKey": "AlexanderSlokov_Naughtian-Kallisto"
+	}
 }
