@@ -19,14 +19,18 @@ RUN apt-get update && apt-get install -y \
     libspdlog-dev \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# [Kallisto] Create data directory
-RUN mkdir -p /data/kallisto && chown -R vscode:vscode /data/kallisto
-
 USER vscode
 
-# [Kallisto] Install vcpkg
-# RUN git clone https://github.com/microsoft/vcpkg.git "$HOME/vcpkg" && cd "$HOME/vcpkg" && ./bootstrap-vcpkg.sh
-# RUN export VCPKG_ROOT="$HOME/vcpkg" && export PATH="$VCPKG_ROOT:$PATH"
+WORKDIR /home/vscode
 
-# [Kallisto] Install wrk
-# RUN git clone https://github.com/wg/wrk.git wrk && cd wrk && sudo make && sudo cp wrk /usr/local/bin
+# Install Rust Toolchain
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
+	&& echo "source \$HOME/.cargo/env" >> $HOME/.bashrc \
+	&& source $HOME/.cargo/env && cargo --version && rustc --version
+
+# Install vcpkg
+RUN git clone https://github.com/microsoft/vcpkg.git "$HOME/vcpkg" && cd "$HOME/vcpkg" && ./bootstrap-vcpkg.sh
+RUN export VCPKG_ROOT="$HOME/vcpkg" && export PATH="$VCPKG_ROOT:$PATH"
+
+# Install wrk
+RUN git clone https://github.com/wg/wrk.git wrk && cd wrk && sudo make && sudo cp wrk /usr/local/bin

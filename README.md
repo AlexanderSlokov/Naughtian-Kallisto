@@ -1,12 +1,20 @@
-# Naughtian Kallisto - An In-Memory Secrets Engine
+# Naughtian Kallisto - A High-Performance Operational Secret Engine
 
-*"Fast like Redis. API requests? Just like Vault.*
+<p align="center">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-blue.svg?style=for-the-badge&logo=c%2B%2B" alt="C++20">
+  <img src="https://img.shields.io/badge/Rust-FFI-orange.svg?style=for-the-badge&logo=rust" alt="Rust FFI">
+  <img src="https://img.shields.io/badge/License-AGPLv3-red.svg?style=for-the-badge" alt="License">
+</p>
 
-*Sounds like it uses RocksDB? Hell yes! And architecturally, it's the lovely daughter of Envoy Proxy.*
+Fast like Redis. API requests? Just like Vault.
 
-(...)
+Sounds like it uses RocksDB? Hell yes! And architecturally, it's the lovely daughter of Envoy Proxy!
 
-Kallisto is a high-performance secret management engine built with C++20. It provides a secure and efficient way to store and retrieve secrets with a focus on performance and scalability.
+<p align="center">
+  <img src="documents/kallisto_logo.webp" alt="Kallisto Logo" width="300">
+</p>
+
+Kallisto is a High-Performance Operational Secret Engine built with C++20. It provides a secure and efficient way to store and retrieve secrets with a focus on performance and scalability.
 
 # IMPORTANT NOTICES
 

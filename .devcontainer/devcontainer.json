@@ -7,19 +7,43 @@
     "vscode": {
       "extensions": [
         "ms-vscode.cpptools",
+		"ms-vscode.cpptools-themes",
+		"ms-vscode.cmake-tools",
         "ms-vscode.cpptools-extension-pack",
-        "twxs.cmake",
-        "ms-python.python",
-        "ms-vscode.test-adapter-converter",
-        "formulahendry.code-runner"
+		"ms-vscode.test-adapter-converter",
+		"ms-python.python",
+        "formulahendry.code-runner",
+		"vadimcn.vscode-lldb",
+		"serayuzgur.crates",
+ 	    "sonarsource.sonarlint-vscode",
+        "google.gemini-cli-vscode-ide-companion",
+		"google.geminicodeassist",
+        "llvm-vs-code-extensions.vscode-clangd",
+		"rust-lang.rust-analyzer",
+	    "tamasfe.even-better-toml"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash",
         "C_Cpp.default.compilerPath": "/usr/bin/g++",
-        "code-runner.runInTerminal": true
+        "code-runner.runInTerminal": true,
+        "editor.formatOnSave": true,
+        "rust-analyzer.check.command": "clippy",
+        "editor.defaultFormatter": "rust-lang.rust-analyzer"
       }
     }
   },
   "remoteUser": "vscode",
+  "containerEnv": {
+    "VCPKG_ROOT": "/usr/local/vcpkg",
+    "RUSTUP_HOME": "/home/vscode/.rustup",
+    "CARGO_HOME": "/home/vscode/.cargo",
+    "PATH": "/home/vscode/.cargo/bin:/usr/local/vcpkg:${containerEnv:PATH}"
+  },
+  "remoteEnv": {
+    "VCPKG_ROOT": "/usr/local/vcpkg",
+    "RUSTUP_HOME": "/home/vscode/.rustup",
+    "CARGO_HOME": "/home/vscode/.cargo",
+    "PATH": "/home/vscode/.cargo/bin:/usr/local/vcpkg:${containerEnv:PATH}"
+  },
   "postCreateCommand": "sudo chown -R vscode:vscode /workspaces && pip install gcovr --break-system-packages"
 }

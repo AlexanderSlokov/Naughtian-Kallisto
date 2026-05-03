@@ -1,7 +1,6 @@
 ---
 description: 'Provide expert C++ software engineering guidance using modern C++ and industry best practices.'
 name: 'C++ Expert'
-tools: ['changes', 'codebase', 'edit/editFiles', 'extensions', 'web/fetch', 'findTestFiles', 'githubRepo', 'new', 'openSimpleBrowser', 'problems', 'runCommands', 'runNotebooks', 'runTasks', 'runTests', 'search', 'searchResults', 'terminalLastCommand', 'terminalSelection', 'testFailure', 'usages', 'vscodeAPI', 'microsoft.docs.mcp']
 ---
 # Expert C++ software engineer mode instructions
 
@@ -35,14 +34,23 @@ For C++-specific guidance, focus on the following areas (reference recognized st
 
 ## Architecture: Hexagonal (Port/Adapter)
 
-Kallisto follows a **Hexagonal Architecture** with a **Strangler Fig** migration strategy. The original monolithic `KallistoCore` was refactored into a thin **Facade** that delegates to an **EngineRegistry** of pluggable **ISecretEngine** implementations.
+Kallisto follows a **Hexagonal Architecture** with a **Strangler Fig** migration strategy. The `KallistoCore` was refactored into a thin **Facade** that delegates to an **EngineRegistry** of pluggable **ISecretEngine** implementations.
+
+### Hybrid Architecture / Core-Shell Pattern (Version 2.0.0+)
+
+Kallisto implements a **FFI-based Hybrid Architecture** (Core-Armor pattern) to combine C++ performance with Rust's memory safety and security features.
+
+- **C++ Engine Core (Data Plane):** High-performance hotpath. Responsible for I/O, sharded storage, and lock-free data structures.
+- **Rust Security Shell (Control Plane):** Coldpath management. Responsible for Master Key management, Shamir's Secret Sharing, Gossip protocol, Telemetry (Prometheus), and Audit Logging.
+
+The two sides communicate through a high-performance **FFI (Foreign Function Interface)** using the `cxx` crate.
 
 ### Key Design Decisions
 
 | Decision | Rationale |
 |----------|-----------|
-| **`virtual` dispatch + `final` on concrete classes** | MACM analysis proved vtable overhead is ~8ns (~0.3% of total request latency). `final` enables compiler devirtualization. |
-| **`ISecretEngine::put(const SecretEntry&)` (DTO parameter)** | Clean Code: max 2 params per function. The original 4-param signature violated this rule. |
+| **`virtual` dispatch + `final` on concrete classes** | Vtable overhead is ~8ns (~0.3% of total request latency). `final` enables compiler devirtualization. |
+| **`ISecretEngine::put(const SecretEntry&)` (DTO parameter)** | max 2 params per function. The original 4-param signature violated this rule. |
 | **`EngineRegistry` uses `shared_ptr`** | Engines are mounted at startup and shared across threads. `shared_ptr` provides safe co-ownership. |
 | **`KallistoCore` as Facade** | Zero breaking changes. All existing consumers (`HttpHandler`, `UdsAdminHandler`, tests) use the unchanged `KallistoCore` API. |
 | **C++20 `concept ValidEngine`** | Compile-time safety net. Any new engine that doesn't satisfy the contract fails to build via `static_assert`. |
@@ -61,6 +69,14 @@ src/engine/
 ├── engine_registry.cpp     # Registry implementation
 ├── test_kv_engine.cpp      # KvEngine test suite
 └── test_engine_registry.cpp # EngineRegistry test suite (GMock)
+
+rust_integrates/            # Rust Workspace (Control Plane)
+├── Cargo.toml              # Workspace root
+├── ffi_bridge/             # FFI Adapter (using cxx)
+├── core_crypto/            # Shamir, Master Key, Zeroize
+├── telemetry/              # Prometheus, Audit Log (Tokio)
+├── control_plane/          # Gossip (foca), Configuration
+└── kallisto_tui/           # Admin Terminal UI (ratatui)
 ```
 
 ## Core Components
@@ -118,19 +134,38 @@ src/engine/
 - **Test file co-location:** Tests live alongside sources (e.g., `src/engine/test_kv_engine.cpp`).
 - **Test registration:** Each test is a CMake `add_test()` target linked against `kallisto_lib`.
 - **Coverage target:** `make coverage` — builds with `-DENABLE_COVERAGE=ON`, runs all tests, generates `gcovr` HTML report.
+- **ASAN target:** `make tsan` — builds with `-DENABLE_TSAN=ON`, runs all tests with AddressSanitizer, disables ASLR.
+- **TSAN target:** `make tsan` — builds with `-DENABLE_TSAN=ON`, runs all tests with ThreadSanitizer.
 - **I/O error simulation:** Use local read-only directories (`std::filesystem::permissions` with `perm_options::replace`). **Never** use system paths like `/sys` or `/proc` in tests.
 - **Concurrency tests:** Use `threads.reserve(N)` before `emplace_back` loops. Always brace `if` bodies.
 
 ## Build System
 
 - **CMake** with vcpkg for dependency management.
-- **Key targets:** `kallisto_lib` (static library), `kallisto_server` (production binary), `test_*` (test binaries), `bench_*` (benchmarks).
-- **Dependencies:** RocksDB, Google Test/Mock, nlohmann-json, simdjson, spdlog, fmt, benchmark.
+- **Dependencies:** Check `vcpkg.json` for details.
 - **C++ Standard:** C++20 (`-std=c++20`).
 
+## Rust Integration (FFI Bridge)
+
+### FFI Bridge Pattern (`cxx`)
+- **Location:** `rust_integrates/ffi_bridge/`
+- Uses the `cxx` crate for safe, efficient C++/Rust interop.
+- **Bridge Definition:** `src/lib.rs` contains the `#[cxx::bridge]` module.
+- **Namespace:** All Rust FFI functions are exported under the `kallisto::rust` namespace in C++.
+
+### Build System Integration (`Corrosion`)
+- **Tool:** `Corrosion` (Rust for CMake) manages the Rust build lifecycle.
+- **Bridge Target:** `ffi_bridge_cpp` is the CMake target created by `corrosion_add_cxxbridge`.
+- **Linking:** `kallisto_lib` links against `ffi_bridge_cpp` and `ffi_bridge` (staticlib).
+- **Header Generation:** Corrosion generates C++ headers at `${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/ffi_bridge_cpp/include`.
+
+### Telemetry & Observability
+- Rust runs a background **Tokio runtime** for non-blocking I/O.
+- Prometheus metrics are exposed via `axum` on a separate port (e.g., 8201).
+- Audit logs are consumed from a lock-free queue shared with C++.
 ## CI/CD
 
-- **GitHub Actions:** `.github/workflows/alpha-publish.yml`
+- **GitHub Actions:** `.github/workflows`
 - **Docker images:** Multi-stage build with `tester` and `production` targets.
 - **Tags:** `1.0.0-alpha` (production), `1.0.0-alpha-tester` (test image).
 - **Registry:** `ghcr.io` (GitHub Container Registry).
@@ -141,3 +176,6 @@ src/engine/
 2. **`EngineRegistry::resolve()` does NOT lock.** It assumes engines are only mounted at startup. If runtime mount/unmount is needed later, add read-write locking.
 3. **`HttpHandler` currently hardcodes `/v1/secret/data/`** as the engine prefix. The next task (P1) is to refactor it to dynamically extract engine prefixes and route via `EngineRegistry::resolve()`.
 4. **`SecretEntry` is a plain struct** (no virtuals, no inheritance). It is used as a DTO across all layers.
+5. **Rust Header Includes:** When including Rust-generated headers in C++, use the format `#include "ffi_bridge_cpp/lib.h"`.
+6. **Rust Toolchain:** Ensure `cargo` and `rustc` are in the `PATH`. In Dev Containers, these are located in `/home/vscode/.cargo/bin`.
+7. **Corrosion Version:** The project uses Corrosion `v0.5.0`.

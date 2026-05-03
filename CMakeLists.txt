@@ -1,8 +1,62 @@
 cmake_minimum_required(VERSION 3.20)
+
+# Instruct CMake to use the vcpkg toolchain file if it exists
+if(NOT CMAKE_TOOLCHAIN_FILE AND EXISTS "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "$ENV{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+elseif(NOT CMAKE_TOOLCHAIN_FILE AND EXISTS "/usr/local/vcpkg/scripts/buildsystems/vcpkg.cmake")
+    set(CMAKE_TOOLCHAIN_FILE "/usr/local/vcpkg/scripts/buildsystems/vcpkg.cmake" CACHE STRING "")
+endif()
 project(kallisto CXX)
+set(THREADS_PREFER_PTHREAD_FLAG ON)
+find_package(Threads REQUIRED)
 
 # For Clangd. Allow CMake introduces compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# For Corrosion - Rust FFI linking
+include(FetchContent)
+
+# Help Corrosion find Rust in some environments (like devcontainers)
+if(NOT Rust_COMPILER)
+    find_program(RUSTUP_EXE rustup PATHS $ENV{HOME}/.cargo/bin /usr/bin /usr/local/bin)
+    if(RUSTUP_EXE)
+        execute_process(COMMAND ${RUSTUP_EXE} which rustc OUTPUT_VARIABLE REAL_RUSTC OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(REAL_RUSTC)
+            set(Rust_COMPILER ${REAL_RUSTC} CACHE FILEPATH "Rust compiler hint")
+        endif()
+    endif()
+    if(NOT Rust_COMPILER)
+        find_program(RUST_C rustc PATHS $ENV{HOME}/.cargo/bin /usr/bin /usr/local/bin)
+        if(RUST_C)
+            set(Rust_COMPILER ${RUST_C} CACHE FILEPATH "Rust compiler hint")
+        endif()
+    endif()
+endif()
+if(NOT Rust_CARGO)
+    find_program(RUSTUP_EXE rustup PATHS $ENV{HOME}/.cargo/bin /usr/bin /usr/local/bin)
+    if(RUSTUP_EXE)
+        execute_process(COMMAND ${RUSTUP_EXE} which cargo OUTPUT_VARIABLE REAL_CARGO OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+        if(REAL_CARGO)
+            set(Rust_CARGO ${REAL_CARGO} CACHE FILEPATH "Cargo hint")
+        endif()
+    endif()
+    if(NOT Rust_CARGO)
+        find_program(RUST_CARGO cargo PATHS $ENV{HOME}/.cargo/bin /usr/bin /usr/local/bin)
+        if(RUST_CARGO)
+            set(Rust_CARGO ${RUST_CARGO} CACHE FILEPATH "Cargo hint")
+        endif()
+    endif()
+endif()
+
+FetchContent_Declare(
+        Corrosion
+        GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+        GIT_TAG v0.5.0
+)
+FetchContent_MakeAvailable(Corrosion)
+
+## Require CMake compile all Rust Workspace
+corrosion_import_crate(MANIFEST_PATH rust_integrates/ffi_bridge/Cargo.toml)
 
 # This project must use modern C++ 20 to fully leverage flagship features like Concepts, Coroutines, or Ranges.
 set(CMAKE_CXX_STANDARD 20)
@@ -70,8 +124,22 @@ add_library(kallisto_lib
     src/net/listener.cpp
 )
 
+## Link static package Rust in Kallisto C++ Core
+target_link_libraries(kallisto_lib PUBLIC ffi_bridge)
+if(COMMAND corrosion_add_cxxbridge)
+    corrosion_add_cxxbridge(ffi_bridge_cpp
+        CRATE ffi_bridge
+        FILES lib.rs
+    )
+    target_link_libraries(kallisto_lib PUBLIC ffi_bridge_cpp)
+    target_include_directories(kallisto_lib PUBLIC ${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/ffi_bridge_cpp/include)
+else()
+    # Fallback to manual include path if corrosion_add_cxxbridge is not available
+    target_include_directories(kallisto_lib PUBLIC ${CMAKE_BINARY_DIR}/cargo/build/x86_64-unknown-linux-gnu/cxxbridge)
+endif()
+
 # Link pthread for threading support
-target_link_libraries(kallisto_lib PRIVATE pthread)
+target_link_libraries(kallisto_lib PUBLIC Threads::Threads)
 
 if(ENABLE_COVERAGE)
     target_compile_options(kallisto_lib PUBLIC --coverage -O0 -g)
@@ -231,6 +299,11 @@ add_executable(kallisto_server src/kallisto_server.cpp)
 target_link_libraries(kallisto_server kallisto_server_lib)
 # Server tests link
 target_link_libraries(test_listener kallisto_server_lib)
+
+# Test Rust FFI
+add_executable(test_rust_ffi src/test_rust_ffi.cpp)
+target_link_libraries(test_rust_ffi PRIVATE kallisto_lib)
+add_test(NAME RustFFITest COMMAND test_rust_ffi)
 
 # ===========================================================================
 # Optional: Future Upgrades
