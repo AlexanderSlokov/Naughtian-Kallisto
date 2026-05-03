@@ -1,0 +1,11 @@
+[package]
+name = "kallisto_tui"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "kallisto-tui"
+path = "src/main.rs"
+
+[dependencies]
+ratatui = "0.30.0"

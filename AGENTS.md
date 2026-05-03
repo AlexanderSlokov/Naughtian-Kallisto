@@ -36,14 +36,14 @@ For C++-specific guidance, focus on the following areas (reference recognized st
 
 Kallisto follows a **Hexagonal Architecture** with a **Strangler Fig** migration strategy. The `KallistoCore` was refactored into a thin **Facade** that delegates to an **EngineRegistry** of pluggable **ISecretEngine** implementations.
 
-### Future 2.0.0: Hybrid Architecture / Core-Shell Pattern
+### Hybrid Architecture / Core-Shell Pattern (Version 2.0.0+)
 
-As version `2.0.0` is coming, we will integrate **Rust** into `Naughtian Kallisto`. This pattern is often called **FFI-based Hybrid Architecture** or **Core-Armor**.
+Kallisto implements a **FFI-based Hybrid Architecture** (Core-Armor pattern) to combine C++ performance with Rust's memory safety and security features.
 
-- C++ is the **Engine Core**, which is responsible for the core logic and performance.
-- Rust is the **Security Shell**, which is responsible for control logic, administration, security, and configuration (Shamir shard, Master Key, Key Rotation, Gossip, Metrics...).
+- **C++ Engine Core (Data Plane):** High-performance hotpath. Responsible for I/O, sharded storage, and lock-free data structures.
+- **Rust Security Shell (Control Plane):** Coldpath management. Responsible for Master Key management, Shamir's Secret Sharing, Gossip protocol, Telemetry (Prometheus), and Audit Logging.
 
-Two sides communicate each other through the FFI (Foreign Function Interface).
+The two sides communicate through a high-performance **FFI (Foreign Function Interface)** using the `cxx` crate.
 
 ### Key Design Decisions
 
@@ -69,6 +69,14 @@ src/engine/
 ├── engine_registry.cpp     # Registry implementation
 ├── test_kv_engine.cpp      # KvEngine test suite
 └── test_engine_registry.cpp # EngineRegistry test suite (GMock)
+
+rust_integrates/            # Rust Workspace (Control Plane)
+├── Cargo.toml              # Workspace root
+├── ffi_bridge/             # FFI Adapter (using cxx)
+├── core_crypto/            # Shamir, Master Key, Zeroize
+├── telemetry/              # Prometheus, Audit Log (Tokio)
+├── control_plane/          # Gossip (foca), Configuration
+└── kallisto_tui/           # Admin Terminal UI (ratatui)
 ```
 
 ## Core Components
@@ -137,10 +145,24 @@ src/engine/
 - **Dependencies:** Check `vcpkg.json` for details.
 - **C++ Standard:** C++20 (`-std=c++20`).
 
-### Future integration with Rust
+## Rust Integration (FFI Bridge)
 
+### FFI Bridge Pattern (`cxx`)
+- **Location:** `rust_integrates/ffi_bridge/`
+- Uses the `cxx` crate for safe, efficient C++/Rust interop.
+- **Bridge Definition:** `src/lib.rs` contains the `#[cxx::bridge]` module.
+- **Namespace:** All Rust FFI functions are exported under the `kallisto::rust` namespace in C++.
 
+### Build System Integration (`Corrosion`)
+- **Tool:** `Corrosion` (Rust for CMake) manages the Rust build lifecycle.
+- **Bridge Target:** `ffi_bridge_cpp` is the CMake target created by `corrosion_add_cxxbridge`.
+- **Linking:** `kallisto_lib` links against `ffi_bridge_cpp` and `ffi_bridge` (staticlib).
+- **Header Generation:** Corrosion generates C++ headers at `${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/ffi_bridge_cpp/include`.
 
+### Telemetry & Observability
+- Rust runs a background **Tokio runtime** for non-blocking I/O.
+- Prometheus metrics are exposed via `axum` on a separate port (e.g., 8201).
+- Audit logs are consumed from a lock-free queue shared with C++.
 ## CI/CD
 
 - **GitHub Actions:** `.github/workflows`
@@ -154,3 +176,6 @@ src/engine/
 2. **`EngineRegistry::resolve()` does NOT lock.** It assumes engines are only mounted at startup. If runtime mount/unmount is needed later, add read-write locking.
 3. **`HttpHandler` currently hardcodes `/v1/secret/data/`** as the engine prefix. The next task (P1) is to refactor it to dynamically extract engine prefixes and route via `EngineRegistry::resolve()`.
 4. **`SecretEntry` is a plain struct** (no virtuals, no inheritance). It is used as a DTO across all layers.
+5. **Rust Header Includes:** When including Rust-generated headers in C++, use the format `#include "ffi_bridge_cpp/lib.h"`.
+6. **Rust Toolchain:** Ensure `cargo` and `rustc` are in the `PATH`. In Dev Containers, these are located in `/home/vscode/.cargo/bin`.
+7. **Corrosion Version:** The project uses Corrosion `v0.5.0`.

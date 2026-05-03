@@ -4,6 +4,33 @@ project(kallisto CXX)
 # For Clangd. Allow CMake introduces compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# For Corrosion - Rust FFI linking
+include(FetchContent)
+
+# Help Corrosion find Rust in some environments (like devcontainers)
+if(NOT Rust_COMPILER)
+    find_program(RUST_C rustc PATHS $ENV{HOME}/.cargo/bin /usr/bin /usr/local/bin)
+    if(RUST_C)
+        set(Rust_COMPILER ${RUST_C} CACHE FILEPATH "Rust compiler hint")
+    endif()
+endif()
+if(NOT Rust_CARGO)
+    find_program(RUST_CARGO cargo PATHS $ENV{HOME}/.cargo/bin /usr/bin /usr/local/bin)
+    if(RUST_CARGO)
+        set(Rust_CARGO ${RUST_CARGO} CACHE FILEPATH "Cargo hint")
+    endif()
+endif()
+
+FetchContent_Declare(
+        Corrosion
+        GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+        GIT_TAG v0.5.0
+)
+FetchContent_MakeAvailable(Corrosion)
+
+## Require CMake compile all Rust Workspace
+corrosion_import_crate(MANIFEST_PATH rust_integrates/ffi_bridge/Cargo.toml)
+
 # This project must use modern C++ 20 to fully leverage flagship features like Concepts, Coroutines, or Ranges.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -69,6 +96,20 @@ add_library(kallisto_lib
     # Network infrastructure (Phase 2.2)
     src/net/listener.cpp
 )
+
+## Link static package Rust in Kallisto C++ Core
+target_link_libraries(kallisto_lib PUBLIC ffi_bridge)
+if(COMMAND corrosion_add_cxxbridge)
+    corrosion_add_cxxbridge(ffi_bridge_cpp
+        CRATE ffi_bridge
+        FILES lib.rs
+    )
+    target_link_libraries(kallisto_lib PUBLIC ffi_bridge_cpp)
+    target_include_directories(kallisto_lib PUBLIC ${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/ffi_bridge_cpp/include)
+else()
+    # Fallback to manual include path if corrosion_add_cxxbridge is not available
+    target_include_directories(kallisto_lib PUBLIC ${CMAKE_BINARY_DIR}/cargo/build/x86_64-unknown-linux-gnu/cxxbridge)
+endif()
 
 # Link pthread for threading support
 target_link_libraries(kallisto_lib PRIVATE pthread)
@@ -231,6 +272,11 @@ add_executable(kallisto_server src/kallisto_server.cpp)
 target_link_libraries(kallisto_server kallisto_server_lib)
 # Server tests link
 target_link_libraries(test_listener kallisto_server_lib)
+
+# Test Rust FFI
+add_executable(test_rust_ffi src/test_rust_ffi.cpp)
+target_link_libraries(test_rust_ffi PRIVATE kallisto_lib)
+add_test(NAME RustFFITest COMMAND test_rust_ffi)
 
 # ===========================================================================
 # Optional: Future Upgrades

@@ -1,14 +1,15 @@
 {
-    // Giới hạn 80 ký tự
-    "editor.rulers": [80],
-    "editor.wordWrap": "wordWrapColumn",
-    "editor.wordWrapColumn": 80,
-
-    // Thụt đầu dòng 8 ký tự kiểu Linux Kernel
-    "editor.tabSize": 4,
-    "editor.insertSpaces": false, // Linux Kernel dùng Tab thật, không dùng Space
-    "editor.detectIndentation": false, // Không để VS Code tự đoán, ép dùng tab 8
-
-    // Bổ sung: Hiển thị khoảng trắng để dễ kiểm soát
-    "editor.renderWhitespace": "boundary"
+	// Giới hạn 80 ký tự
+	"editor.rulers": [
+		80
+	],
+	"editor.wordWrap": "wordWrapColumn",
+	"editor.wordWrapColumn": 80,
+	// Thụt đầu dòng 8 ký tự kiểu Linux Kernel
+	"editor.tabSize": 4,
+	"editor.insertSpaces": false, // Linux Kernel dùng Tab thật, không dùng Space
+	"editor.detectIndentation": false, // Không để VS Code tự đoán, ép dùng tab 8
+	// Bổ sung: Hiển thị khoảng trắng để dễ kiểm soát
+	"editor.renderWhitespace": "boundary",
+	"sonarlint.pathToCompileCommands": "${workspaceFolder}/build/compile_commands.json"
 }
