@@ -99,6 +99,17 @@ add_library(kallisto_lib
 
 ## Link static package Rust in Kallisto C++ Core
 target_link_libraries(kallisto_lib PUBLIC ffi_bridge)
+if(COMMAND corrosion_add_cxxbridge)
+    corrosion_add_cxxbridge(ffi_bridge_cpp
+        CRATE ffi_bridge
+        FILES lib.rs
+    )
+    target_link_libraries(kallisto_lib PUBLIC ffi_bridge_cpp)
+    target_include_directories(kallisto_lib PUBLIC ${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/ffi_bridge_cpp/include)
+else()
+    # Fallback to manual include path if corrosion_add_cxxbridge is not available
+    target_include_directories(kallisto_lib PUBLIC ${CMAKE_BINARY_DIR}/cargo/build/x86_64-unknown-linux-gnu/cxxbridge)
+endif()
 
 # Link pthread for threading support
 target_link_libraries(kallisto_lib PRIVATE pthread)

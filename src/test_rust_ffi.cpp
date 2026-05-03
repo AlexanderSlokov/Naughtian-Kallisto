@@ -1,5 +1,5 @@
 #include <iostream>
-#include "rust_integrates/ffi_bridge/src/lib.rs.h"
+#include "ffi_bridge_cpp/lib.h"
 
 int main() {
     std::cout << "[C++] Calling Rust FFI..." << std::endl;
