@@ -4,6 +4,21 @@ project(kallisto CXX)
 # For Clangd. Allow CMake introduces compile_commands.json
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# For Corrosion - Rust FFI linking
+include(FetchContent)
+FetchContent_Declare(
+        Corrosion
+        GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+        GIT_TAG v0.6.1
+)
+FetchContent_MakeAvailable(Corrosion)
+
+## Require CMake compile all Rust Workspace
+#corrosion_import_crate(MANIFEST_PATH rust_integrates/ffi_bridge/Cargo.toml)
+#
+## Link static package Rust in Kallisto C++ Core
+#target_link_libraries(kallisto_core PUBLIC ffi_bridge)
+
 # This project must use modern C++ 20 to fully leverage flagship features like Concepts, Coroutines, or Ranges.
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
