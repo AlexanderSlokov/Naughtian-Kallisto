@@ -7,16 +7,28 @@
     "vscode": {
       "extensions": [
         "ms-vscode.cpptools",
+		"ms-vscode.cpptools-themes",
+		"ms-vscode.cmake-tools",
         "ms-vscode.cpptools-extension-pack",
-        "twxs.cmake",
-        "ms-python.python",
-        "ms-vscode.test-adapter-converter",
-        "formulahendry.code-runner"
+		"ms-vscode.test-adapter-converter",
+		"ms-python.python",
+        "formulahendry.code-runner",
+		"vadimcn.vscode-lldb",
+		"serayuzgur.crates",
+ 	    "sonarsource.sonarlint-vscode",
+        "google.gemini-cli-vscode-ide-companion",
+		"google.geminicodeassist",
+        "llvm-vs-code-extensions.vscode-clangd",
+		"rust-lang.rust-analyzer",
+	    "tamasfe.even-better-toml"
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash",
         "C_Cpp.default.compilerPath": "/usr/bin/g++",
-        "code-runner.runInTerminal": true
+        "code-runner.runInTerminal": true,
+        "editor.formatOnSave": true,
+        "rust-analyzer.check.command": "clippy",
+        "editor.defaultFormatter": "rust-lang.rust-analyzer"
       }
     }
   },
