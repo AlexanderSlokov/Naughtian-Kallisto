@@ -27,6 +27,13 @@ ENV VCPKG_ROOT=/usr/local/vcpkg
 RUN git clone https://github.com/microsoft/vcpkg.git "$VCPKG_ROOT" \
     && "$VCPKG_ROOT"/bootstrap-vcpkg.sh -disableMetrics
 
+# Install Rust toolchain for Hybrid Build (Securely copy from official image)
+COPY --from=rust:1.95-slim /usr/local/rustup /usr/local/rustup
+COPY --from=rust:1.95-slim /usr/local/cargo /usr/local/cargo
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:$PATH
+
 WORKDIR /app
 COPY . .
 
@@ -58,8 +65,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
     python3-pip \
     wrk \
-    && rm -rf /var/lib/apt/lists/* \
-    && pip3 install --only-binary :all: gcovr==8.6 --break-system-packages
+    && rm -rf /var/lib/apt/lists/*
 
 # Add non-root user for running tests securely
 RUN useradd -m -s /bin/bash kallisto \
