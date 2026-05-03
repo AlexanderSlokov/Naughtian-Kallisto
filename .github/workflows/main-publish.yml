@@ -5,7 +5,11 @@ on:
     branches: [ "main" ]
     # Build on semantic release tags like v1.0.0
     tags: [ 'v*.*.*' ]
-  # Khởi chạy thủ công từ giao diện Actions (Rất hữu ích để bạn chủ động Build)
+    paths-ignore:
+      - '**.md'
+      - 'documents/**'
+      - 'LICENSE'
+  # Khởi chạy thủ công từ giao diện Actions
   workflow_dispatch:
 
 env:
