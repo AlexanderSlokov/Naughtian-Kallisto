@@ -140,3 +140,80 @@ Không cần tải thêm IDE chuyên biệt cho Rust (như RustRover) gây nặn
 - Mở thư mục gốc `kallisto/` bằng **CLion**.
 - Cài plugin **Rust** chính thức của JetBrains.
 - CLion sẽ tự động nhận diện cả `CMakeLists.txt` (C++) và `Cargo.toml` (Rust). Bạn có thể dễ dàng dùng tính năng Go-To-Definition (`Ctrl+Click`) để nhảy xuyên thủng ranh giới FFI giữa hai ngôn ngữ một cách mượt mà.
+
+---
+
+## 5. Hướng Dẫn Triển Khai: Hàng Đợi Audit Log (C++ -> Rust)
+
+Để đẩy dữ liệu Audit Log từ luồng C++ (Hotpath) sang luồng Rust Tokio (Coldpath) một cách hiệu quả và **hoàn toàn không block (non-blocking)**, chúng ta áp dụng mô hình Message Passing qua Bounded Channel kết hợp FFI.
+
+### 5.1 Nguyên lý hoạt động (Cơ chế Push - Pull)
+
+1. **Lõi Kênh (Rust - Flume):** Khởi tạo một channel `flume::bounded` với sức chứa lớn (ví dụ: `262,144` phần tử, tiêu tốn khoảng vài MB RAM). Kênh này cung cấp một `Sender` (dùng để gửi log) và một `Receiver` (dùng để đọc log).
+2. **Mặt C++ (Hotpath - Push):** Khi có sự kiện cần log (ví dụ: User đọc/ghi Secret), C++ format log dưới dạng JSON string. Sau đó, C++ gọi hàm FFI sang Rust. Hàm Rust này bọc `Sender` và gọi `try_send(log)`. 
+   - `try_send` thi hành mất khoảng **~10-20 nanosecond**.
+   - Trả về ngay lập tức. Nếu hàng đợi đầy, C++ chỉ cần ghi nhận "Log Dropped" vào một biến đếm Metric nội bộ rồi tiếp tục phục vụ Request của Client, tuyệt đối không bị treo (block).
+3. **Mặt Rust (Coldpath - Pull):** Luồng Tokio chạy nền (background task) sử dụng `Receiver` và gọi `recv_async().await`. Luồng này sẽ hoàn toàn đi vào trạng thái ngủ (yield) không tốn % CPU nào cho đến khi C++ bắn dữ liệu vào queue. Nhận xong, Tokio từ từ parse JSON, format và ghi xuống đĩa hoặc gọi HTTP lên máy chủ SIEM.
+
+### 5.2 Phác thảo thiết kế Code
+
+**1. Cầu nối FFI (rust_integrates/ffi_bridge/src/lib.rs):**
+```rust
+#[cxx::bridge(namespace = "kallisto::rust::telemetry")]
+mod ffi {
+    extern "Rust" {
+        // Hàm này export sang C++
+        fn push_audit_log(payload: &CxxString) -> bool;
+    }
+}
+```
+
+**2. Implement trên Rust:**
+```rust
+use flume::{Sender, Receiver};
+use std::sync::OnceLock;
+
+// Biến toàn cục chứa Sender để C++ có thể truy cập qua FFI
+static AUDIT_TX: OnceLock<Sender<String>> = OnceLock::new();
+
+pub fn push_audit_log(payload: &cxx::CxxString) -> bool {
+    if let Some(tx) = AUDIT_TX.get() {
+        // try_send KHÔNG BAO GIỜ BLOCK. 
+        // Nếu queue đầy, nó trả về lỗi và hàm này trả về false.
+        tx.try_send(payload.to_string()).is_ok()
+    } else {
+        false // Hệ thống chưa khởi tạo xong
+    }
+}
+```
+
+**3. Interface mặt C++ (src/telemetry/audit_logger.hpp):**
+```cpp
+#pragma once
+#include <string>
+#include "ffi_bridge_cpp/lib.h" // Header do cxx/corrosion sinh ra
+
+namespace kallisto::telemetry {
+
+class AuditLogger {
+public:
+    // Hàm được gọi trên Hotpath của C++
+    static void logEvent(const std::string& action, const std::string& path) {
+        // 1. Format JSON nhanh (có thể dùng simdjson builder hoặc fmt)
+        std::string payload = fmt::format(R"({{"action":"{}","path":"{}"}})", action, path);
+        
+        // 2. Bắn sang Rust không chờ đợi
+        bool success = kallisto::rust::telemetry::push_audit_log(payload);
+        
+        if (!success) {
+            // Queue bị đầy (Disk bên Rust ghi không kịp)
+            // Tăng metric nội bộ "kallisto_audit_log_dropped", không block client.
+            atomic_dropped_counter_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+private:
+    static inline std::atomic<uint64_t> atomic_dropped_counter_{0};
+};
+
+} // namespace kallisto::telemetry
+```
