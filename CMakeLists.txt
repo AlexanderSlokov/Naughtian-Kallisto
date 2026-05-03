@@ -9,15 +9,16 @@ include(FetchContent)
 FetchContent_Declare(
         Corrosion
         GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-        GIT_TAG v0.6.1
+        GIT_TAG v0.5.0
 )
+set(Rust_COMPILER $ENV{HOME}/.cargo/bin/rustc)
 FetchContent_MakeAvailable(Corrosion)
 
 ## Require CMake compile all Rust Workspace
-#corrosion_import_crate(MANIFEST_PATH rust_integrates/ffi_bridge/Cargo.toml)
-#
+corrosion_import_crate(MANIFEST_PATH rust_integrates/ffi_bridge/Cargo.toml)
+
 ## Link static package Rust in Kallisto C++ Core
-#target_link_libraries(kallisto_core PUBLIC ffi_bridge)
+target_link_libraries(kallisto_lib PUBLIC ffi_bridge)
 
 # This project must use modern C++ 20 to fully leverage flagship features like Concepts, Coroutines, or Ranges.
 set(CMAKE_CXX_STANDARD 20)
@@ -246,6 +247,11 @@ add_executable(kallisto_server src/kallisto_server.cpp)
 target_link_libraries(kallisto_server kallisto_server_lib)
 # Server tests link
 target_link_libraries(test_listener kallisto_server_lib)
+
+# Test Rust FFI
+add_executable(test_rust_ffi src/test_rust_ffi.cpp)
+target_link_libraries(test_rust_ffi PRIVATE kallisto_lib)
+add_test(NAME RustFFITest COMMAND test_rust_ffi)
 
 # ===========================================================================
 # Optional: Future Upgrades
