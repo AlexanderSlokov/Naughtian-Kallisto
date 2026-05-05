@@ -311,7 +311,7 @@ make bench-server
 
 `DragonflyDB` is widely considered the absolute pinnacle of modern, multi-threaded in-memory datastores. But how does Kallisto stack up against it when both are forced to **persist data fairly**?
 
-To find out, we ran `DragonflyDB` restricted to the same CPU resources (2 cores for the server, 2 cores for the benchmark), and forced `DragonflyDB` to enable Append-Only File (AOF) with aggressive snapshots to simulate the same I/O persistence guarantee as Kallisto's RocksDB WAL.
+To find out, we ran DragonflyDB restricted to the same CPU resources (2 cores for the server, 2 cores for the benchmark), and forced to enable aggressive snapshots to simulate the same I/O persistence guarantee as Kallisto's RocksDB WAL.
 
 | Metric | DragonflyDB (1:10 mixed) | Kallisto (95/5 mixed) | Winner |
 |---|---|---|---|
@@ -358,7 +358,7 @@ services:
       --requests=100000
 ```
 
-**Conclusion:** Yes, `Kallisto` actually beats `DragonflyDB`. Thanks to `Kallisto`'s aggressive asynchronous Write-Behind flush batching and strict Hexagonal architecture, it completely absorbed the disk I/O cost while delivering **41% better tail latency (P99)** and **19% higher throughput** than an identically-constrained `DragonflyDB`.
+**Conclusion:** Yes, Kallisto actually beat DragonflyDB. The aggressive asynchronous Write-Behind flush batching and strict Hexagonal architecture, it completely absorbed the disk I/O cost while delivering **41% better tail latency (P99)** and **19% higher throughput** than an identically-constrained DragonflyDB.
 
 # Architecture Overview
 
