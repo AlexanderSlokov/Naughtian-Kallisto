@@ -19,42 +19,45 @@ Kallisto is a High-Performance Operational Secret Engine built with C++20. It pr
 # IMPORTANT NOTICES
 
 1. Be advised, `Naughtian Kallisto` from version `1.0.0` to `2.5.0` is not offically released as the production-ready application. We will not take any accountability for application security, compliance or stability if you use `Naughtian Kallisto` in your production environment, directly or indirectly, and causing damages for your own businesses. Use as your own consents.
+
 2. Start from version 2.0.0, `Naughtian Kallisto` will begin to use many Rust components through Foreign Function Interface (FFI). Breaking changes must happen and will affect application's stability. We strongly advice you to use `Naughtian Kallisto` start from 2.5.0 version (tagged `2.5.0-lts`) as this will be the offical release of production-ready version.
+
 3. `Naughtian Kallisto` is protected under `AGPLv3` license. Custom "Commercial" or "Enterprise" License can be discussed.
+
 4. DO NOT use `Naughtian Kallisto` as a drop-in replacement directly for your current OpenBao/Hashicorp Vault infrastructure! Kallisto itself, while developed with high attention to cryptomatic security and provides similar API interface/contracts of Vault/OpenBao, can not and should not be used to replace them as a upstream secret management platform. To justify, `Naughtian Kallisto` is still a C++ project with not enough "pair of eyes" to audit or eliminate all security weaknesses, it will not meet the safety and compliance of OpenBao/Vault, and it WAS NOT designed to be a "Vault killer" at all. `Naughtian Kallisto` should only be use to store non-lethal secrets (those are, secrets that you do not want everyone to steal or read, but you can effectively reduce "blast radious" by revoke mechanisms in case they are stealed. "Stripe sk" or any similar type of "sk" do not counted!) We will not hold any accountability or legal problems if you ignored this warning and act as your own consents. You are advised.
 
-# HOW TO USE
+# Build it by yourself
 
-Kallisto provides **two interfaces**: a **CLI (Command Line Interface)** for interactive local usage, and a **Server mode** with HTTP APIs for production deployment.
-
-## Building
-
-### Prerequisites
+## Prerequisites
 
 - **C++20 compiler** (GCC 13+ or Clang 16+)
 - **CMake** 3.20+
 - **vcpkg** (only for Server mode — provides RocksDB, simdjson)
 
-### Core Build (CLI only — no external dependencies)
+## Core Build (CLI only — no external dependencies)
 
 ```bash
 make build
 ```
 
-### Server Build (HTTP — requires vcpkg)
+## Server Build (HTTP — requires vcpkg)
 
-First time compiling, vcpkg will take a while to install dependencies (~10 min, and will use cache after first run)
+First time compiling, vcpkg will take a while to install dependencies (~10 min, and will use cache after first run):
 
 ```bash
 export VCPKG_ROOT=/usr/local/vcpkg
 make build-server
 ```
 
+# HOW TO USE
+
+Kallisto provides **two interfaces**: a **CLI (Command Line Interface)** for interactive local usage, and a **Server mode** with HTTP APIs for production deployment.
+
 ## Docker Support
 
 ### 1. Run the Production Server
 
-Pull the image and run the Kallisto server, remember to mount a volume for RocksDB persistence. For instance:
+Pull the image and run the Kallisto server, remember to mount a volume for data persistence. For instance:
 
 ```bash
 docker run -d \
@@ -78,7 +81,7 @@ docker run -it --rm ghcr.io/alexanderslokov/kallisto-tester:latest make bench
 If you contribute for `Naughtian Kallisto` source code and want to build the Docker image locally:
 
 ```bash
-docker build -t kallisto-server:latest .
+docker build -t kallisto-server:latest -f Dockerfile .
 # Or using Makefile: make docker-build
 ```
 
@@ -109,7 +112,7 @@ Then use the admin client to control persistence behavior securely over UDS:
 
 ## Server Mode
 
-The server uses an **Envoy-style SO_REUSEPORT** architecture with a thread-per-core model. Each worker thread binds its own listener socket; the kernel distributes connections, eliminating central bottlenecks.
+The server uses an **Envoy-style SO_REUSEPORT** architecture with a thread-per-core model. So it is the best when each worker thread binds its own listener socket. The kernel distributes connections so technically there is no central bottleneck at all.
 
 ### Starting the Server
 
@@ -146,7 +149,7 @@ Or with custom options:
 
 ## HTTP API (Vault KV v2 Compatible)
 
-Kallisto exposes a Vault-compatible HTTP API on port **8200** by default. All endpoints use the `/v1/secret/data/` prefix, matching HashiCorp Vault's KV v2 API.
+Kallisto exposes a Vault-compatible HTTP API on port **8200** and serving KV at the `/v1/secret/data/` prefix by default, matching HashiCorp Vault's KV v2 API.
 
 ### Store a Secret
 
@@ -156,7 +159,8 @@ curl -X POST http://localhost:8200/v1/secret/data/myapp/db-password \
   -d '{"data":{"value":"super-secret-123"}}'
 ```
 
-Response:
+The response body looks like this:
+
 ```json
 {"data":{"created":true}}
 ```
@@ -167,7 +171,8 @@ Response:
 curl http://localhost:8200/v1/secret/data/myapp/db-password
 ```
 
-Response:
+Response body:
+
 ```json
 {
   "data": {
@@ -197,9 +202,12 @@ curl http://localhost:8200/v1/secret/data/does-not-exist
 ```
 
 Response:
+
 ```json
 {"errors":["Secret not found"]}
 ```
+
+Response Status Code of Kallisto is presented below:
 
 | Status Code | Meaning |
 |-------------|---------|
@@ -210,9 +218,9 @@ Response:
 | `405` | Method not allowed |
 | `500` | Internal error |
 
-# Persistence — RocksDB
+# Persistence storage for KV engine
 
-Starting from beginning, Kallisto uses **RocksDB** as a crash-safe WAL.
+Kallisto uses **RocksDB** as a crash-safe WAL.
 
 ## Architecture Data Flow
 
@@ -230,28 +238,26 @@ graph LR
 
 ### Write Path (Write-Behind / Eventual Consistency)
 
-Every `PUT`/`DELETE` follows a **Write-Behind** strategy to maintain sub-10ms P99 latency:
+Every `PUT`/`DELETE` follows a **Write-Behind** strategy to maintain sub-10ms P99 latency, BUT, the operations are pushed into a **262,144-capacity** `LockFreeQueue`. If the queue is full, the engine will fail-fast with `EngineError::QueueFull` (HTTP 503 / 429), applying backpressure to protect its own system. 
 
-1. **Update CuckooTable & B-Tree index** immediately (in-memory, sub-µs).
-2. **Lock-Free Enqueue**: The operation is pushed into a 262,144-capacity `LockFreeQueue`. If the queue is full, the engine immediately fails-fast with `EngineError::QueueFull` (HTTP 503 / 429), effectively applying backpressure to protect the system.
-3. **Async Batched Flush**: A dedicated background worker pulls operations from the queue and flushes them to RocksDB in batches. A batch is flushed if it reaches **1024 operations** OR if **5ms** have elapsed since the last flush.
+That's mean, if you use `Kallisto` as a write-heavy system THEN you are deathly wrong. It MAY withstand the burst of writes far better than Vault, but not the sustained DDoS, nothing can. In this case, you should expect it to drop your `writes/update/delete` ops, and you should be fired because of your terrible architecture decision-making skill! Did you seriously think RocksDB can handle 100k writes/sec while running in Docker Container? Did your system DDoS your own Vault cluster?
 
-This architecture completely isolates disk I/O from the Epoll worker's hot path, enabling incredibly stable latency under massive concurrent load.
+A dedicated background worker pulls operations from the queue and flushes them to RocksDB in batches. A batch is flushed if it reaches **1024 operations** OR if **5ms** have elapsed since the last flush. (We know our software's limit, so are you. And again, don't use Kallisto as a write-heavy system!)
 
 ### Read Path (Cache-Miss Fallback)
 
-```
+```text
 client GET
   └─► CuckooTable lookup
         ├── HIT  → return (sub-µs, in-memory)
         └── MISS → RocksDB.Get() → populate CuckooTable → return
 ```
 
-The in-memory cache starts **empty** on startup (no OOM risk at scale). It warms up organically as traffic arrives.
+The in-memory cache starts **empty** on startup, it warms up organically as traffic arrives.
 
 ### API Contract (`tl::expected`)
 
-To support robust error handling without exceptions, all engine operations return `tl::expected<T, EngineError>`. This enforces explicit error handling (e.g., `QueueFull`, `StorageError`, `NotFound`, `CasMismatch`) at the HTTP routing layer, mapping internal state failures cleanly to HTTP status codes.
+To support robust error handling without exceptions, all engine operations must return `tl::expected<T, EngineError>`. This enforces explicit error handling (e.g., `QueueFull`, `StorageError`, `NotFound`, `CasMismatch`) at the HTTP routing layer, mapping internal state failures cleanly to HTTP status codes.
 
 ### Sync Modes
 
@@ -263,22 +269,6 @@ To support robust error handling without exceptions, all engine operations retur
 Set via: `make run-server` (default BATCH) or `MODE STRICT` in CLI.
 
 # Performance Benchmarks
-
-## Test Environment
-
-> ⚡ These numbers are from a **native Linux bare-metal** environment running Docker Engine on Ubuntu Desktop 24.04.
-
-| | Spec |
-|---|---|
-| **Host OS** | Ubuntu 24.04 Desktop (Bare-metal) |
-| **Container** | Ubuntu 24.04 LTS (Docker Engine) |
-| **CPU** | 12th Gen Intel(R) Core(TM) i7-12700 · 12 physical cores / 20 threads |
-| **RAM** | 32 GB |
-| **Disk** | Native NVMe |
-
-Native bare-metal avoids the virtualization tax of WSL2 on every syscall, network loopback, and disk write, revealing the true throughput potential of Kallisto.
-
----
 
 ## HTTP Server Benchmark
 
@@ -311,7 +301,7 @@ make bench-server
 
 ### Analysis
 
-**The Write-Behind Architecture**: By fully isolating the Epoll worker threads from disk I/O, the dreaded "158ms P99 Ghost" has been completely smashed. The P99 PUT latency is now a rock-solid **9.38 ms** at over 91k RPS, with the absolute worst-case Max Latency sitting comfortably at 16.42 ms.
+**The Write-Behind Architecture**: By fully isolating the Epoll worker threads from disk I/O, the P99 PUT latency is **9.38 ms** at over 91k RPS, with the absolute worst-case Max Latency sitting comfortably at 16.42 ms.
 
 **Variable Isolation**: GET throughput remains highly performant at **126k RPS** with an incredibly smooth **2.35ms P99**. This provides the perfect "armored" baseline for Kallisto. Because I/O latency variance has been practically eliminated, future architectural additions (like an Encrypt Barrier) can be benchmarked with perfect clarity—any latency spikes will definitively trace back to cryptographic computations, not disk I/O.
 
@@ -319,9 +309,9 @@ make bench-server
 
 ## Kallisto vs DragonflyDB (Apples-to-Apples)
 
-DragonflyDB is widely considered the absolute pinnacle of modern, multi-threaded in-memory datastores. But how does Kallisto stack up against it when both are forced to **persist data fairly**?
+`DragonflyDB` is widely considered the absolute pinnacle of modern, multi-threaded in-memory datastores. But how does Kallisto stack up against it when both are forced to **persist data fairly**?
 
-To find out, we ran DragonflyDB restricted to the same CPU resources (2 cores for the server, 2 cores for the benchmark), and forced Dragonfly to enable Append-Only File (AOF) with aggressive snapshots to simulate the same I/O persistence guarantee as Kallisto's RocksDB WAL.
+To find out, we ran `DragonflyDB` restricted to the same CPU resources (2 cores for the server, 2 cores for the benchmark), and forced `DragonflyDB` to enable Append-Only File (AOF) with aggressive snapshots to simulate the same I/O persistence guarantee as Kallisto's RocksDB WAL.
 
 | Metric | DragonflyDB (1:10 mixed) | Kallisto (95/5 mixed) | Winner |
 |---|---|---|---|
@@ -343,9 +333,6 @@ services:
     ulimits:
       memlock: -1
     restart: always
-    # BẮT BUỘC DRAGONFLY PHẢI BỌC THÉP I/O:
-    # Bật Append Only File (AOF) và ép fsync luôn tục 
-    # để giả lập RocksDB WAL của Kallisto
     command: >
       dragonfly
       --dir=/data
@@ -359,7 +346,6 @@ services:
     depends_on:
       - dragonfly
     cpus: 2.0
-    # ÉP CẠNH TRANH CÔNG BẰNG VỚI KALLISTO:
     command: >
       -s 127.0.0.1
       -p 6379
@@ -372,7 +358,7 @@ services:
       --requests=100000
 ```
 
-**Conclusion:** Yes, Kallisto actually beat DragonflyDB. Thanks to Kallisto's aggressive asynchronous Write-Behind flush batching and strict Hexagonal architecture, it completely absorbed the disk I/O cost while delivering **41% better tail latency (P99)** and **19% higher throughput** than an identically-constrained DragonflyDB.
+**Conclusion:** Yes, `Kallisto` actually beats `DragonflyDB`. Thanks to `Kallisto`'s aggressive asynchronous Write-Behind flush batching and strict Hexagonal architecture, it completely absorbed the disk I/O cost while delivering **41% better tail latency (P99)** and **19% higher throughput** than an identically-constrained `DragonflyDB`.
 
 # Architecture Overview
 
