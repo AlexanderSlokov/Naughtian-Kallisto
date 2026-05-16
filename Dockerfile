@@ -35,7 +35,13 @@ ENV RUSTUP_HOME=/usr/local/rustup \
     PATH=/usr/local/cargo/bin:$PATH
 
 WORKDIR /app
-COPY . .
+COPY CMakeLists.txt vcpkg.json Makefile ./
+COPY src/ src/
+COPY include/ include/
+COPY rust_integrates/ rust_integrates/
+COPY benchmarks/ benchmarks/
+COPY tests/ tests/
+COPY custom-triplets/ custom-triplets/
 
 # Configure and build all binaries using the custom triplet to avoid building debug
 RUN mkdir -p build && cd build \
@@ -88,7 +94,6 @@ CMD ["make", "test"]
 
 # ==============================================================================
 # Phase 3: Production Image
-# Using 'noble' (24.04) to match dev environment
 # ==============================================================================
 FROM ubuntu:24.04 AS production
 
