@@ -1,10 +1,25 @@
-# Kallisto Development Makefile - "The Professional & Legacy Edition"
+# Kallisto Makefile
 # Unified workflow for Terminal, IDE, and Docker
 
 BUILD_DIR = build
 TARGET = kallisto
 VCPKG_ROOT ?= /usr/local/vcpkg
 DB_PATH ?= /kallisto/data
+
+REGISTRY ?= docker.io/thanhzeus2016
+DEVCONTAINER_IMAGE ?= naughtain-kallisto-devcontainer
+DEVCONTAINER_TAG ?= 1.0.0
+CLOUD_BUILDER ?= cloud-thanhzeus2016-aleksandr-slokov-cloud-builder
+
+# Use Docker Hub Cloudbuild for faster build. 
+# Need a Docker Hub account and must init a Cloud Builder first.
+devcontainer_cloud_build:
+	docker buildx build . \
+		-f .devcontainer/Dockerfile \
+		--platform linux/amd64 \
+		--builder $(CLOUD_BUILDER) \
+		-t $(REGISTRY)/$(DEVCONTAINER_IMAGE):$(DEVCONTAINER_TAG) \
+		--push
 
 # Modern CMake Toolchain Integration
 CMAKE_FLAGS = -DCMAKE_TOOLCHAIN_FILE=$(VCPKG_ROOT)/scripts/buildsystems/vcpkg.cmake
@@ -15,7 +30,8 @@ CMAKE_FLAGS = -DCMAKE_TOOLCHAIN_FILE=$(VCPKG_ROOT)/scripts/buildsystems/vcpkg.cm
         benchmark-dos test-atomic benchmark-multithread \
         bench-ghz bench-server bench-http bench-grpc \
         docker-build docker-test docker-run coverage \
-        test-asan test-tsan
+        test-asan test-tsan \
+        devcontainer_cloud_build
 
 all: build
 

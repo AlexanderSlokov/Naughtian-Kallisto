@@ -28,7 +28,12 @@
         "code-runner.runInTerminal": true,
         "editor.formatOnSave": true,
         "rust-analyzer.check.command": "clippy",
-        "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        "[cpp]": {
+          "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+        },
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        }
       }
     }
   },
@@ -45,5 +50,5 @@
     "CARGO_HOME": "/home/vscode/.cargo",
     "PATH": "/home/vscode/.cargo/bin:/usr/local/vcpkg:${containerEnv:PATH}"
   },
-  "postCreateCommand": "sudo chown -R vscode:vscode /workspaces && pip install gcovr --break-system-packages"
+  "postCreateCommand": "sudo chown -R vscode:vscode /workspaces"
 }
