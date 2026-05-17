@@ -3,7 +3,9 @@ FROM mcr.microsoft.com/devcontainers/cpp:ubuntu-24.04
 # ===========================================================================
 # Stage 1: System packages + Python tools (as root)
 # ===========================================================================
-RUN apt-get update && apt-get install -y \
+RUN apt-get update && \
+    apt-get upgrade -y && \
+    apt-get install -y \
     build-essential \
     clang \
     cmake \
@@ -28,7 +30,8 @@ RUN pip install gcovr --break-system-packages
 # Stage 2: vcpkg + C++ dependencies (as root, shared location)
 # ===========================================================================
 # Install vcpkg into /usr/local/vcpkg so all users share the same root
-RUN git clone https://github.com/microsoft/vcpkg.git /usr/local/vcpkg \
+RUN rm -rf /usr/local/vcpkg \
+    && git clone https://github.com/microsoft/vcpkg.git /usr/local/vcpkg \
     && /usr/local/vcpkg/bootstrap-vcpkg.sh
 
 ENV VCPKG_ROOT=/usr/local/vcpkg
@@ -49,7 +52,7 @@ WORKDIR /home/vscode
 # Install Rust Toolchain
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
 	&& echo "source \$HOME/.cargo/env" >> $HOME/.bashrc \
-	&& source $HOME/.cargo/env && cargo --version && rustc --version
+	&& . $HOME/.cargo/env && cargo --version && rustc --version
 
 # Pre-fetch Rust dependencies using skeleton crate technique:
 # Copy only Cargo.toml/Cargo.lock files, create dummy lib.rs, then cargo fetch.
