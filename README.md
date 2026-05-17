@@ -24,7 +24,72 @@ Kallisto is a High-Performance Operational Secret Engine built with C++20. It pr
 
 3. `Naughtian Kallisto` is protected under `AGPLv3` license. Custom "Commercial" or "Enterprise" License can be discussed.
 
-4. DO NOT use `Naughtian Kallisto` as a drop-in replacement directly for your current OpenBao/Hashicorp Vault infrastructure! Kallisto itself, while developed with high attention to cryptomatic security and provides similar API interface/contracts of Vault/OpenBao, can not and should not be used to replace them as a upstream secret management platform. To justify, `Naughtian Kallisto` is still a C++ project with not enough "pair of eyes" to audit or eliminate all security weaknesses, it will not meet the safety and compliance of OpenBao/Vault, and it WAS NOT designed to be a "Vault killer" at all. `Naughtian Kallisto` should only be use to store non-lethal secrets (those are, secrets that you do not want everyone to steal or read, but you can effectively reduce "blast radious" by revoke mechanisms in case they are stealed. "Stripe sk" or any similar type of "sk" do not counted!) We will not hold any accountability or legal problems if you ignored this warning and act as your own consents. You are advised.
+4. DO NOT use `Naughtian Kallisto` as a drop-in replacement directly for your current `OpenBao`/`Hashicorp Vault` infrastructure! `Naughtian Kallisto` itself, while developed with high attention to cryptomatic security and provides similar API interface/contracts of `Vault`/`OpenBao`, can not and should not be used to replace them as a upstream secret management platform. To justify, `Naughtian Kallisto` is still a C++ project with not enough "pair of eyes" to audit or eliminate all security weaknesses, it will not meet the safety and compliance of OpenBao/Vault, and it WAS NOT designed to be a "Vault killer" at all. We will not hold any accountability or legal problems if you ignored this warning and act as your own consents. You are advised.
+
+# Use Cases — What Should (and Should NOT) Live in Kallisto
+
+Kallisto is designed for **operational secrets**: credentials that your services need at high frequency and low latency, but whose blast radius is limited and recoverable through revocation. If a secret's leak would trigger a compliance incident, a regulatory investigation, or irreversible financial damage — **it belongs in Vault/OpenBao, not here.**
+
+### ✅ Good Fit for Kallisto
+
+| Secret Type | Why it fits | Example |
+|---|---|---|
+| **Internal service-to-service tokens** | High read rate, short-lived, easily revoked | gRPC auth tokens between microservices |
+| **Database connection strings** (non-production) | Rotated frequently, scoped to dev/staging | `postgres://app:pass@staging-db:5432/myapp` |
+| **Feature flag encryption keys** | Read on every request, low sensitivity | Keys for encrypting A/B test configs |
+| **Session signing keys** | Read-heavy (~99/1 R/W), rotatable | JWT HMAC keys for internal dashboards |
+| **Cache authentication** | Sub-millisecond reads needed, revocable | Redis AUTH passwords for internal caches |
+| **CI/CD pipeline tokens** | Bursty reads during deployments, short TTL | Temporary deploy tokens for Kubernetes |
+| **Internal API keys** | High-throughput reads, easily regenerated | API keys for internal observability tools |
+| **TLS certificates for internal mTLS** | Read at connection setup, rotated by automation | Intermediate CAs for service mesh |
+| **Configuration encryption keys** | Read-dominant, app-scoped | Keys for encrypting config files at rest |
+
+### ❌ Do NOT Store in Kallisto
+
+| Secret Type | Why it doesn't fit | Where it belongs |
+|---|---|---|
+| **Root CA private keys** | Catastrophic if leaked, rarely accessed | HSM / Vault with HSM backend |
+| **Payment processor secret keys** (`Stripe sk_live_*`) | Direct financial damage, PCI-DSS scope | Vault with audit + compliance policies |
+| **Cloud provider root credentials** (AWS root, GCP SA) | Full account takeover, irrecoverable | Vault + MFA + break-glass procedure |
+| **Customer PII encryption master keys** | GDPR/CCPA scope, regulatory liability | Vault with FIPS 140-2 backend |
+| **SSH keys to production bastions** | Direct infrastructure access | Vault SSH secrets engine or signed certs |
+| **Signing keys for software releases** | Supply chain attack vector | Air-gapped HSM |
+
+### 🎯 The Decision Rule
+
+> **Ask yourself:** *If this secret leaks and I revoke it within 5 minutes, is the damage contained and recoverable?*
+>
+> - **Yes** → Kallisto is a great fit. You get 1M+ RPS reads and sub-millisecond p99 latency.
+> - **No** → Use Vault/OpenBao with full audit trails, compliance policies, and HSM integration.
+
+### 💡 Recommended Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     Your Infrastructure                         │
+│                                                                 │
+│   ┌──────────────────┐           ┌───────────────────┐          │
+│   │  Vault / OpenBao │           │     Kallisto      │          │
+│   │  (Root of Trust) │           │ (Operational KV)  │          │
+│   │                  │           │                   │          │
+│   │  • Root CAs      │──[rotate]──▶ • Service tokens │          │
+│   │  • Master keys   │           │  • DB passwords   │          │
+│   │  • Payment keys  │           │  • API keys       │          │
+│   │  • PII keys      │           │  • Session keys   │          │
+│   │                  │           │  • TLS certs      │          │
+│   │  ~500 RPS        │           │  ~1,000,000 RPS   │          │
+│   │  Full audit      │           │  Low latency      │          │
+│   └──────────────────┘           └───────────────────┘          │
+│         ▲                               ▲                       │
+│         │ Rare (admin, rotation)        │ Frequent (every req)  │
+│         │                               │                       │
+│   ┌─────┴───────────────────────────────┴─────┐                 │
+│   │            Your Microservices             │                 │
+│   └───────────────────────────────────────────┘                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+Vault manages the **root of trust** and rotates derived keys into Kallisto. Your services read from Kallisto at wire speed. If Kallisto is compromised, you revoke all derived keys from Vault and the blast radius is contained.
 
 # Build it by yourself
 
