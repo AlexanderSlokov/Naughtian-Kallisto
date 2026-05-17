@@ -57,14 +57,14 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
 # Pre-fetch Rust dependencies using skeleton crate technique:
 # Copy only Cargo.toml/Cargo.lock files, create dummy lib.rs, then cargo fetch.
 # This layer is cached as long as Cargo.toml/Cargo.lock don't change.
-COPY --chown=vscode:vscode rust_integrates/Cargo.toml      /tmp/rust-deps/Cargo.toml
-COPY --chown=vscode:vscode rust_integrates/Cargo.lock       /tmp/rust-deps/Cargo.lock
-COPY --chown=vscode:vscode rust_integrates/ffi_bridge/Cargo.toml     /tmp/rust-deps/ffi_bridge/Cargo.toml
-COPY --chown=vscode:vscode rust_integrates/core_crypto/Cargo.toml    /tmp/rust-deps/core_crypto/Cargo.toml
-COPY --chown=vscode:vscode rust_integrates/telemetry/Cargo.toml      /tmp/rust-deps/telemetry/Cargo.toml
-COPY --chown=vscode:vscode rust_integrates/control_plane/Cargo.toml  /tmp/rust-deps/control_plane/Cargo.toml
-COPY --chown=vscode:vscode rust_integrates/policy_engine/Cargo.toml  /tmp/rust-deps/policy_engine/Cargo.toml
-COPY --chown=vscode:vscode rust_integrates/kallisto_tui/Cargo.toml   /tmp/rust-deps/kallisto_tui/Cargo.toml
+COPY --chown=vscode:vscode --chmod=755 rust_integrates/Cargo.toml /tmp/rust-deps/Cargo.toml
+COPY --chown=vscode:vscode --chmod=755 rust_integrates/Cargo.lock       /tmp/rust-deps/Cargo.lock
+COPY --chown=vscode:vscode --chmod=755 rust_integrates/ffi_bridge/Cargo.toml     /tmp/rust-deps/ffi_bridge/Cargo.toml
+COPY --chown=vscode:vscode --chmod=755 rust_integrates/core_crypto/Cargo.toml    /tmp/rust-deps/core_crypto/Cargo.toml
+COPY --chown=vscode:vscode --chmod=755 rust_integrates/telemetry/Cargo.toml      /tmp/rust-deps/telemetry/Cargo.toml
+COPY --chown=vscode:vscode --chmod=755 rust_integrates/control_plane/Cargo.toml  /tmp/rust-deps/control_plane/Cargo.toml
+COPY --chown=vscode:vscode --chmod=755 rust_integrates/policy_engine/Cargo.toml  /tmp/rust-deps/policy_engine/Cargo.toml
+COPY --chown=vscode:vscode --chmod=755 rust_integrates/kallisto_tui/Cargo.toml   /tmp/rust-deps/kallisto_tui/Cargo.toml
 
 # Create dummy source files so cargo can resolve the workspace
 RUN bash -c 'source $HOME/.cargo/env \
