@@ -1,8 +1,6 @@
 {
   "name": "Kallisto C++ Dev Environment",
-  "build": {
-    "dockerfile": "Dockerfile"
-  },
+  "image": "docker.io/thanhzeus2016/naughtain-kallisto-devcontainer:1.0.0",
   "customizations": {
     "vscode": {
       "extensions": [
@@ -28,7 +26,12 @@
         "code-runner.runInTerminal": true,
         "editor.formatOnSave": true,
         "rust-analyzer.check.command": "clippy",
-        "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        "[cpp]": {
+          "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
+        },
+        "[rust]": {
+          "editor.defaultFormatter": "rust-lang.rust-analyzer"
+        }
       }
     }
   },
@@ -36,8 +39,7 @@
   "containerEnv": {
     "VCPKG_ROOT": "/usr/local/vcpkg",
     "RUSTUP_HOME": "/home/vscode/.rustup",
-    "CARGO_HOME": "/home/vscode/.cargo",
-    "PATH": "/home/vscode/.cargo/bin:/usr/local/vcpkg:${containerEnv:PATH}"
+    "CARGO_HOME": "/home/vscode/.cargo"
   },
   "remoteEnv": {
     "VCPKG_ROOT": "/usr/local/vcpkg",
@@ -45,5 +47,5 @@
     "CARGO_HOME": "/home/vscode/.cargo",
     "PATH": "/home/vscode/.cargo/bin:/usr/local/vcpkg:${containerEnv:PATH}"
   },
-  "postCreateCommand": "sudo chown -R vscode:vscode /workspaces && pip install gcovr --break-system-packages"
+  "postCreateCommand": "sudo chown -R vscode:vscode /workspaces"
 }
