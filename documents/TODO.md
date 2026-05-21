@@ -82,10 +82,17 @@
 
 ### 🔒 Security Backlog (Làm sau khi có Hexagonal + API chuẩn)
 
-- [ ] **Encryption-at-Rest**:
-  - Implement AES-256-GCM (consider Google's `lazySSL`) to encrypt values before RocksDB sync. Maintain only Master Key in RAM. Implement Key Rotation & Unseal lifecycle.
-- [ ] **Secure Memory Allocator**:
-  - Build custom allocator using `mlock()` (disable OS swap) and `explicit_bzero` (zero out RAM on free) mirroring Vault's security model.
+- [ ] **Vault Transit Integration (Root of Trust)** *(Updated 22/05/2026)*:
+  - Implement `vault_client.rs`: Xác thực với Vault (AppRole/Kubernetes auth), gọi `POST /v1/transit/decrypt/kallisto-kek` để unwrap KEK lúc startup.
+  - Implement `keyring.rs`: Giữ KEK in-memory với `zeroize` on drop và `secrecy` wrapper. Không bao giờ ghi KEK xuống đĩa.
+  - Implement `dek.rs`: Sinh DEK từ KEK, cấp cho C++ qua FFI để BoringSSL thực hiện AES-256-GCM.
+  - Key Rotation: Gọi Vault `POST /v1/transit/keys/kallisto-kek/rotate`, re-wrap KEK mới.
+  - ~~Shamir's Secret Sharing~~: **ĐÃ HỦY** — Ủy quyền cho Vault Transit. Lý do: thư viện Rust xuống cấp, không đủ audit capacity.
+  - ~~Secure Memory Allocator (mlock)~~: **ĐÃ HỦY** — KEK chỉ cần `zeroize` + `secrecy` trong Rust. Master Key không bao giờ rời Vault.
+- [ ] **Encryption-at-Rest (Encrypt Barrier)**:
+  - Implement AES-256-GCM via BoringSSL (C++ hotpath) to encrypt values before RocksDB sync.
+  - DEK do Rust `core_crypto` cấp qua FFI. KEK wrap/unwrap DEK. Master Key nằm trong Vault Transit.
+  - Key hierarchy: `Vault Master Key → KEK (in-memory) → DEK (per-engine) → AES-256-GCM → RocksDB`.
 - [ ] **Access Control List (ACL)**:
   - Token-based Auth & Path-based Policy RBAC leveraging the B-Tree hierarchical structure.
 - [ ] **Cơ chế xoay vòng secret và lease-renew secret theo policy**.

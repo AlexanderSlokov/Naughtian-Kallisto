@@ -89,7 +89,7 @@ Kallisto is designed for **operational secrets**: credentials that your services
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Vault manages the **root of trust** and rotates derived keys into Kallisto. Your services read from Kallisto at wire speed. If Kallisto is compromised, you revoke all derived keys from Vault and the blast radius is contained.
+Vault manages the **root of trust** via its **Transit Engine** (envelope encryption). Vault holds the Master Key and wraps/unwraps Kallisto's KEK (Key Encryption Key) at startup. Kallisto uses the KEK to encrypt/decrypt DEKs locally, which BoringSSL uses for AES-256-GCM encryption at rest. Your services read from Kallisto at wire speed. If Kallisto is compromised, you revoke all derived keys from Vault and the blast radius is contained.
 
 # Build it by yourself
 
