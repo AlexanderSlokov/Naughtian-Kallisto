@@ -40,8 +40,9 @@ Kallisto follows a **Hexagonal Architecture** with a **Strangler Fig** migration
 
 Kallisto implements a **FFI-based Hybrid Architecture** (Core-Armor pattern) to combine C++ performance with Rust's memory safety and security features.
 
-- **C++ Engine Core (Data Plane):** High-performance hotpath. Responsible for I/O, sharded storage, and lock-free data structures.
-- **Rust Security Shell (Control Plane):** Coldpath management. Responsible for Master Key management, Shamir's Secret Sharing, Gossip protocol, Telemetry (Prometheus), and Audit Logging.
+- **C++ Engine Core (Data Plane):** High-performance hotpath. Responsible for I/O, sharded storage, lock-free data structures, and AES-256-GCM encryption via BoringSSL using DEKs.
+- **Rust Security Shell (Control Plane):** Coldpath management. Responsible for KEK keyring management, Vault Transit client (envelope encryption), Gossip protocol, Telemetry (Prometheus), and Audit Logging.
+- **Vault Transit Engine (Root of Trust):** External dependency. Holds the Master Key (never leaves Vault). Wraps/unwraps Kallisto's KEK via `/v1/transit/decrypt`. Kallisto authenticates at startup, receives KEK, and operates independently thereafter.
 
 The two sides communicate through a high-performance **FFI (Foreign Function Interface)** using the `cxx` crate.
 
@@ -54,6 +55,7 @@ The two sides communicate through a high-performance **FFI (Foreign Function Int
 | **`EngineRegistry` uses `shared_ptr`** | Engines are mounted at startup and shared across threads. `shared_ptr` provides safe co-ownership. |
 | **`KallistoCore` as Facade** | Zero breaking changes. All existing consumers (`HttpHandler`, `UdsAdminHandler`, tests) use the unchanged `KallistoCore` API. |
 | **C++20 `concept ValidEngine`** | Compile-time safety net. Any new engine that doesn't satisfy the contract fails to build via `static_assert`. |
+| **Vault Transit as Root of Trust** | Eliminates self-implemented Shamir/mlock/master key code. Vault handles key hierarchy; Kallisto only holds a KEK in-memory (zeroize on drop). Industry-standard envelope encryption pattern (same as AWS KMS / GCP KMS). |
 
 ## Directory Structure (Engine Layer)
 
@@ -73,7 +75,7 @@ src/engine/
 rust_integrates/            # Rust Workspace (Control Plane)
 ├── Cargo.toml              # Workspace root
 ├── ffi_bridge/             # FFI Adapter (using cxx)
-├── core_crypto/            # Shamir, Master Key, Zeroize
+├── core_crypto/            # KEK Keyring, Vault Transit Client, DEK management
 ├── telemetry/              # Prometheus, Audit Log (Tokio)
 ├── control_plane/          # Gossip (foca), Configuration
 └── kallisto_tui/           # Admin Terminal UI (ratatui)
@@ -149,20 +151,157 @@ rust_integrates/            # Rust Workspace (Control Plane)
 
 ### FFI Bridge Pattern (`cxx`)
 - **Location:** `rust_integrates/ffi_bridge/`
-- Uses the `cxx` crate for safe, efficient C++/Rust interop.
+- Uses the `cxx` crate for safe, efficient C++/Rust interop. `cxx` auto-generates C++ headers, supports direct conversion of advanced types (`String`, `Vec`, `Result`) without memory leaks.
 - **Bridge Definition:** `src/lib.rs` contains the `#[cxx::bridge]` module.
 - **Namespace:** All Rust FFI functions are exported under the `kallisto::rust` namespace in C++.
+
+### Rust Crate Selection & Rationale
+
+| Crate | Category | Purpose | Status |
+|---|---|---|---|
+| **`cxx`** | FFI Bridge | Auto-generated safe C++/Rust bindings | Approved |
+| **`zeroize`** | Core Crypto | Auto-zeroes RAM on drop (anti Cold Boot Attack) | Approved |
+| **`secrecy`** | Core Crypto | `SecretString` wrapper, disables `Debug` trait | Approved |
+| **`reqwest`** | Core Crypto / Telemetry | Vault Transit API client, SIEM log push | Approved |
+| **`tokio`** | Telemetry | Async runtime for non-blocking I/O | Approved |
+| **`axum`** | Telemetry | Prometheus HTTP server on port 8201 | Approved |
+| **`prometheus`** | Telemetry | Metrics exporter | Approved |
+| **`serde_json`** | Telemetry | Fast JSON parse for audit logs | Approved |
+| **`tracing-appender`** | Telemetry | Non-blocking file log writer | Approved |
+| **`flume`** | Telemetry | Bounded channel for C++→Rust audit log queue (262,144 cap) | Approved |
+| **`foca`** | Control Plane | SWIM-based gossip protocol for cluster discovery | Approved |
+| **`hcl-rs`** | Control Plane | Parse `kallisto.hcl` config files | Approved |
+| **`ratatui`** | TUI Client | Terminal dashboard UI | Approved |
+
+### Cargo Workspace Structure
+
+```text
+rust_integrates/
+├── Cargo.toml             # [workspace] root
+│
+├── ffi_bridge/            # ANTI-CORRUPTION LAYER (Adapter)
+│   ├── Cargo.toml         # Type: staticlib (cxx-build)
+│   ├── build.rs           # cxx auto-generates C++ headers
+│   └── src/
+│       └── lib.rs         # ONLY place for C++ <-> Rust FFI bridge
+│
+├── core_crypto/           # KEY MANAGEMENT & ENVELOPE ENCRYPTION
+│   ├── Cargo.toml
+│   └── src/
+│       ├── keyring.rs     # KEK in-memory (zeroize on drop, secrecy)
+│       ├── vault_client.rs# Vault Transit API: unwrap KEK, rotate key
+│       └── dek.rs         # Generate DEK, provide to C++ via FFI
+│
+├── telemetry/             # OBSERVABILITY (Async)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── metrics.rs     # Prometheus HTTP Server (background thread, port 8201)
+│       └── audit_log.rs   # Consume lock-free queue from C++ → File/SIEM
+│
+├── control_plane/         # CLUSTER MANAGEMENT
+│   ├── Cargo.toml
+│   └── src/
+│       ├── gossip.rs      # Discover Kallisto nodes (foca/SWIM)
+│       ├── config.rs      # Parse kallisto.hcl
+│       └── admin_uds.rs   # Listen UDS for Admin commands (Mode, Flush)
+│
+├── policy_engine/         # ACCESS CONTROL (ACL)
+│   ├── Cargo.toml
+│   └── src/
+│       ├── rbac.rs        # Policy path parsing, roles
+│       └── lease_mgr.rs   # Worker to track and revoke expired secrets
+│
+└── kallisto_tui/          # ADMIN CLIENT (standalone binary)
+    ├── Cargo.toml
+    └── src/
+        ├── main.rs        # Entrypoint
+        ├── ui/            # Terminal dashboard (ratatui)
+        └── client.rs      # Call API / UDS Admin
+```
+
+### Storage Adapter (Future Replacements)
+Thanks to Hexagonal Architecture (Storage Engine is a plug-in), if RocksDB becomes problematic, an FFI adapter to Rust storage engines is possible:
+- **Candidates:** `sled` (Bw-Tree, pure Rust), `redb`, `persy`, or `rust-rocksdb`.
 
 ### Build System Integration (`Corrosion`)
 - **Tool:** `Corrosion` (Rust for CMake) manages the Rust build lifecycle.
 - **Bridge Target:** `ffi_bridge_cpp` is the CMake target created by `corrosion_add_cxxbridge`.
 - **Linking:** `kallisto_lib` links against `ffi_bridge_cpp` and `ffi_bridge` (staticlib).
 - **Header Generation:** Corrosion generates C++ headers at `${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/ffi_bridge_cpp/include`.
+- **CMake snippet:**
+```cmake
+include(FetchContent)
+FetchContent_Declare(
+    Corrosion
+    GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
+    GIT_TAG v0.5.0
+)
+FetchContent_MakeAvailable(Corrosion)
+corrosion_import_crate(MANIFEST_PATH rust_integrates/ffi_bridge/Cargo.toml)
+target_link_libraries(kallisto_core PUBLIC ffi_bridge)
+```
+- When running `make build-server`, CMake automatically invokes Cargo to compile the Rust workspace into a `.a` static library, then links it with C++ object files into a single binary.
 
 ### Telemetry & Observability
 - Rust runs a background **Tokio runtime** for non-blocking I/O.
 - Prometheus metrics are exposed via `axum` on a separate port (e.g., 8201).
 - Audit logs are consumed from a lock-free queue shared with C++.
+
+### Audit Log FFI Pattern (C++ → Rust)
+
+Non-blocking message passing via bounded channel + FFI:
+
+1. **Rust channel:** `flume::bounded(262_144)` (~few MB RAM). Provides `Sender` + `Receiver`.
+2. **C++ hotpath (Push):** Formats JSON log → calls FFI → `try_send(log)` (~10-20ns). If queue full, increments `atomic_dropped_counter_` and returns. **Never blocks.**
+3. **Rust coldpath (Pull):** Tokio task calls `recv_async().await`. Sleeps at 0% CPU until data arrives. Writes to disk via `tracing-appender` or pushes to SIEM via `reqwest`.
+
+**FFI Bridge (Rust):**
+```rust
+#[cxx::bridge(namespace = "kallisto::rust::telemetry")]
+mod ffi {
+    extern "Rust" {
+        fn push_audit_log(payload: &CxxString) -> bool;
+    }
+}
+
+use flume::Sender;
+use std::sync::OnceLock;
+
+static AUDIT_TX: OnceLock<Sender<String>> = OnceLock::new();
+
+pub fn push_audit_log(payload: &cxx::CxxString) -> bool {
+    if let Some(tx) = AUDIT_TX.get() {
+        tx.try_send(payload.to_string()).is_ok()
+    } else {
+        false
+    }
+}
+```
+
+**C++ Interface:**
+```cpp
+#pragma once
+#include <string>
+#include "ffi_bridge_cpp/lib.h"
+
+namespace kallisto::telemetry {
+
+class AuditLogger {
+public:
+    static void logEvent(const std::string& action, const std::string& path) {
+        std::string payload = fmt::format(R"({{"action":"{}","path":"{}"}})", action, path);
+        bool success = kallisto::rust::telemetry::push_audit_log(payload);
+        if (!success) {
+            atomic_dropped_counter_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+private:
+    static inline std::atomic<uint64_t> atomic_dropped_counter_{0};
+};
+
+} // namespace kallisto::telemetry
+```
+
 ## CI/CD
 
 - **GitHub Actions:** `.github/workflows`
