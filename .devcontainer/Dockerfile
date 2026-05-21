@@ -43,6 +43,17 @@ RUN cd /tmp/vcpkg-manifest \
     && /usr/local/vcpkg/vcpkg install --triplet x64-linux \
     && rm -rf /tmp/vcpkg-manifest
 
+# Fix vcpkg permissions: grant group 'vcpkg' (which includes user vscode)
+# write access to mutable directories so CMake toolchain can run without root.
+RUN chgrp -R vcpkg /usr/local/vcpkg/buildtrees \
+                    /usr/local/vcpkg/packages \
+                    /usr/local/vcpkg/downloads \
+    && chmod -R g+w  /usr/local/vcpkg/buildtrees \
+                     /usr/local/vcpkg/packages \
+                     /usr/local/vcpkg/downloads \
+    && chgrp vcpkg   /usr/local/vcpkg \
+    && chmod g+w     /usr/local/vcpkg
+
 # ===========================================================================
 # Stage 3: Rust toolchain + cargo dependency pre-fetch (as vscode)
 # ===========================================================================
