@@ -27,13 +27,10 @@ RUN apt-get update && \
 RUN pip install gcovr --break-system-packages
 
 # ===========================================================================
-# Stage 2: vcpkg + C++ dependencies (as root, shared location)
+# Stage 2: Pre-install vcpkg C++ dependencies (reuse vcpkg from base image)
 # ===========================================================================
-# Install vcpkg into /usr/local/vcpkg so all users share the same root
-RUN rm -rf /usr/local/vcpkg \
-    && git clone https://github.com/microsoft/vcpkg.git /usr/local/vcpkg \
-    && /usr/local/vcpkg/bootstrap-vcpkg.sh
-
+# Base image already provides vcpkg at /usr/local/vcpkg with correct
+# permissions for group 'vcpkg' (user vscode is a member).
 ENV VCPKG_ROOT=/usr/local/vcpkg
 ENV PATH="${VCPKG_ROOT}:${PATH}"
 
@@ -42,17 +39,6 @@ COPY vcpkg.json /tmp/vcpkg-manifest/vcpkg.json
 RUN cd /tmp/vcpkg-manifest \
     && /usr/local/vcpkg/vcpkg install --triplet x64-linux \
     && rm -rf /tmp/vcpkg-manifest
-
-# Fix vcpkg permissions: grant group 'vcpkg' (which includes user vscode)
-# write access to mutable directories so CMake toolchain can run without root.
-RUN chgrp -R vcpkg /usr/local/vcpkg/buildtrees \
-                    /usr/local/vcpkg/packages \
-                    /usr/local/vcpkg/downloads \
-    && chmod -R g+w  /usr/local/vcpkg/buildtrees \
-                     /usr/local/vcpkg/packages \
-                     /usr/local/vcpkg/downloads \
-    && chgrp vcpkg   /usr/local/vcpkg \
-    && chmod g+w     /usr/local/vcpkg
 
 # ===========================================================================
 # Stage 3: Rust toolchain + cargo dependency pre-fetch (as vscode)
