@@ -21,6 +21,12 @@ devcontainer_cloud_build:
 		-t $(REGISTRY)/$(DEVCONTAINER_IMAGE):$(DEVCONTAINER_TAG) \
 		--push
 
+devcontainer_local_build:
+	docker build . \
+		-f .devcontainer/Dockerfile \
+		--platform linux/amd64 \
+		-t $(REGISTRY)/$(DEVCONTAINER_IMAGE):$(DEVCONTAINER_TAG)
+
 # Modern CMake Toolchain Integration
 CMAKE_FLAGS = -DCMAKE_TOOLCHAIN_FILE=$(VCPKG_ROOT)/scripts/buildsystems/vcpkg.cmake
 
