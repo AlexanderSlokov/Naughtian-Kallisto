@@ -58,13 +58,17 @@ help:
 # ===========================================================================
 # Build System (Generator-agnostic)
 # ===========================================================================
+CMAKE ?= /usr/local/bin/cmake
+
 build:
 	@cmake -B $(BUILD_DIR) -S .
 	@cmake --build $(BUILD_DIR) -j $(shell nproc)
 
+# Use for default Clion installed with snap:
+# make build-server CMAKE=/snap/clion/455/bin/cmake/linux/x64/bin/cmake
 build-server:
-	@cmake -B $(BUILD_DIR) -S . $(CMAKE_FLAGS)
-	@cmake --build $(BUILD_DIR) -j $(shell nproc)
+	$(CMAKE) -B $(BUILD_DIR) -S . $(CMAKE_FLAGS)
+	$(CMAKE) --build $(BUILD_DIR) -j $(shell nproc)
 
 run: build
 	@./$(BUILD_DIR)/$(TARGET)

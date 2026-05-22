@@ -24,7 +24,9 @@ Kallisto is a High-Performance Operational Secret Engine built with C++20. It pr
 
 3. `Naughtian Kallisto` is protected under `AGPLv3` license. Custom "Commercial" or "Enterprise" License can be discussed.
 
-4. DO NOT use `Naughtian Kallisto` as a drop-in replacement directly for your current `OpenBao`/`Hashicorp Vault` infrastructure! `Naughtian Kallisto` itself, while developed with high attention to cryptomatic security and provides similar API interface/contracts of `Vault`/`OpenBao`, can not and should not be used to replace them as a upstream secret management platform. To justify, `Naughtian Kallisto` is still a C++ project with not enough "pair of eyes" to audit or eliminate all security weaknesses, it will not meet the safety and compliance of OpenBao/Vault, and it WAS NOT designed to be a "Vault killer" at all. We will not hold any accountability or legal problems if you ignored this warning and act as your own consents. You are advised.
+4. DO NOT use `Naughtian Kallisto` as a drop-in replacement directly for your current `OpenBao`/`Hashicorp Vault` infrastructure! `Naughtian Kallisto` itself, while developed with high attention to security and provides similar API interface/contracts of `Vault`/`OpenBao`, can not and should not be used to replace them as an upstream secret management platform. 
+
+5. To justify, `Naughtian Kallisto` is still a C++ project with not enough "pair of eyes" to audit or eliminate all security weaknesses. It will not meet the safety and compliance of OpenBao/Vault, and it WAS NOT designed to be a "Vault killer" at all. We will not hold any accountability or legal problems if you ignored this warning and act as your own consents. You are advised.
 
 # Use Cases — What Should (and Should NOT) Live in Kallisto
 
@@ -32,28 +34,28 @@ Kallisto is designed for **operational secrets**: credentials that your services
 
 ### ✅ Good Fit for Kallisto
 
-| Secret Type | Why it fits | Example |
-|---|---|---|
-| **Internal service-to-service tokens** | High read rate, short-lived, easily revoked | gRPC auth tokens between microservices |
-| **Database connection strings** (non-production) | Rotated frequently, scoped to dev/staging | `postgres://app:pass@staging-db:5432/myapp` |
-| **Feature flag encryption keys** | Read on every request, low sensitivity | Keys for encrypting A/B test configs |
-| **Session signing keys** | Read-heavy (~99/1 R/W), rotatable | JWT HMAC keys for internal dashboards |
-| **Cache authentication** | Sub-millisecond reads needed, revocable | Redis AUTH passwords for internal caches |
-| **CI/CD pipeline tokens** | Bursty reads during deployments, short TTL | Temporary deploy tokens for Kubernetes |
-| **Internal API keys** | High-throughput reads, easily regenerated | API keys for internal observability tools |
-| **TLS certificates for internal mTLS** | Read at connection setup, rotated by automation | Intermediate CAs for service mesh |
-| **Configuration encryption keys** | Read-dominant, app-scoped | Keys for encrypting config files at rest |
+| Secret Type                                      | Why it fits                                     | Example                                     |
+|--------------------------------------------------|-------------------------------------------------|---------------------------------------------|
+| **Internal service-to-service tokens**           | High read rate, short-lived, easily revoked     | gRPC auth tokens between microservices      |
+| **Database connection strings** (non-production) | Rotated frequently, scoped to dev/staging       | `postgres://app:pass@staging-db:5432/myapp` |
+| **Feature flag encryption keys**                 | Read on every request, low sensitivity          | Keys for encrypting A/B test configs        |
+| **Session signing keys**                         | Read-heavy (~99/1 R/W), rotatable               | JWT HMAC keys for internal dashboards       |
+| **Cache authentication**                         | Sub-millisecond reads needed, revocable         | Redis AUTH passwords for internal caches    |
+| **CI/CD pipeline tokens**                        | Bursty reads during deployments, short TTL      | Temporary deploy tokens for Kubernetes      |
+| **Internal API keys**                            | High-throughput reads, easily regenerated       | API keys for internal observability tools   |
+| **TLS certificates for internal mTLS**           | Read at connection setup, rotated by automation | Intermediate CAs for service mesh           |
+| **Configuration encryption keys**                | Read-dominant, app-scoped                       | Keys for encrypting config files at rest    |
 
 ### ❌ Do NOT Store in Kallisto
 
-| Secret Type | Why it doesn't fit | Where it belongs |
-|---|---|---|
-| **Root CA private keys** | Catastrophic if leaked, rarely accessed | HSM / Vault with HSM backend |
-| **Payment processor secret keys** (`Stripe sk_live_*`) | Direct financial damage, PCI-DSS scope | Vault with audit + compliance policies |
-| **Cloud provider root credentials** (AWS root, GCP SA) | Full account takeover, irrecoverable | Vault + MFA + break-glass procedure |
-| **Customer PII encryption master keys** | GDPR/CCPA scope, regulatory liability | Vault with FIPS 140-2 backend |
-| **SSH keys to production bastions** | Direct infrastructure access | Vault SSH secrets engine or signed certs |
-| **Signing keys for software releases** | Supply chain attack vector | Air-gapped HSM |
+| Secret Type                                            | Why it doesn't fit                      | Where it belongs                         |
+|--------------------------------------------------------|-----------------------------------------|------------------------------------------|
+| **Root CA private keys**                               | Catastrophic if leaked, rarely accessed | HSM / Vault with HSM backend             |
+| **Payment processor secret keys** (`Stripe sk_live_*`) | Direct financial damage, PCI-DSS scope  | Vault with audit + compliance policies   |
+| **Cloud provider root credentials** (AWS root, GCP SA) | Full account takeover, irrecoverable    | Vault + MFA + break-glass procedure      |
+| **Customer PII encryption master keys**                | GDPR/CCPA scope, regulatory liability   | Vault with FIPS 140-2 backend            |
+| **SSH keys to production bastions**                    | Direct infrastructure access            | Vault SSH secrets engine or signed certs |
+| **Signing keys for software releases**                 | Supply chain attack vector              | Air-gapped HSM                           |
 
 ### 🎯 The Decision Rule
 
@@ -97,7 +99,7 @@ Vault manages the **root of trust** via its **Transit Engine** (envelope encrypt
 
 - **C++20 compiler** (GCC 13+ or Clang 16+)
 - **CMake** 3.20+
-- **vcpkg** (only for Server mode — provides RocksDB, simdjson)
+- **vcpkg** (only for Server mode — provides `RocksDB`, `simdjson`)
 
 ## Core Build (CLI only — no external dependencies)
 
@@ -166,12 +168,12 @@ Then use the admin client to control persistence behavior securely over UDS:
 
 ### Available Commands
 
-| Command | Description | Example |
-|---------|-------------|---------|
-| `SAVE` | Force flush Cuckoo/batch to RocksDB | `./build/kallisto SAVE` |
-| `MODE BATCH` | Switch to asynchronous batch persistence | `./build/kallisto MODE BATCH` |
-| `MODE IMMEDIATE`| Switch to synchronous strict persistence | `./build/kallisto MODE IMMEDIATE` |
-| `--help` | Show all commands | `./build/kallisto --help` |
+| Command          | Description                              | Example                           |
+|------------------|------------------------------------------|-----------------------------------|
+| `SAVE`           | Force flush Cuckoo/batch to RocksDB      | `./build/kallisto SAVE`           |
+| `MODE BATCH`     | Switch to asynchronous batch persistence | `./build/kallisto MODE BATCH`     |
+| `MODE IMMEDIATE` | Switch to synchronous strict persistence | `./build/kallisto MODE IMMEDIATE` |
+| `--help`         | Show all commands                        | `./build/kallisto --help`         |
 
 > 🔒 **Security Note**: The UDS listener binds to `/var/run/kallisto/kallisto.sock` and restricts access via `0600` (Owner-only R/W). Only the user (or root) executing the server process can issue admin commands.
 
@@ -193,12 +195,12 @@ Or with custom options:
 
 ### Server CLI Options
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--http-port=PORT` | `8200` | HTTP API port (Vault-compatible) |
-| `--workers=N` | CPU cores | Number of worker threads |
-| `--db-path=PATH` | `/kallisto/data` | RocksDB data directory |
-| `--help`, `-h` | — | Show help |
+| Option             | Default          | Description                      |
+|--------------------|------------------|----------------------------------|
+| `--http-port=PORT` | `8200`           | HTTP API port (Vault-compatible) |
+| `--workers=N`      | CPU cores        | Number of worker threads         |
+| `--db-path=PATH`   | `/kallisto/data` | RocksDB data directory           |
+| `--help`, `-h`     | —                | Show help                        |
 
 ### Expected Startup Output
 
@@ -274,14 +276,14 @@ Response:
 
 Response Status Code of Kallisto is presented below:
 
-| Status Code | Meaning |
-|-------------|---------|
-| `200` | Success |
-| `204` | Deleted successfully (no body) |
-| `400` | Bad request (chunked encoding, Expect header) |
-| `404` | Secret not found / invalid route |
-| `405` | Method not allowed |
-| `500` | Internal error |
+| Status Code | Meaning                                       |
+|-------------|-----------------------------------------------|
+| `200`       | Success                                       |
+| `204`       | Deleted successfully (no body)                |
+| `400`       | Bad request (chunked encoding, Expect header) |
+| `404`       | Secret not found / invalid route              |
+| `405`       | Method not allowed                            |
+| `500`       | Internal error                                |
 
 # Persistence storage for KV engine
 
@@ -343,17 +345,17 @@ make bench-server
 
 ### Results (as of 02/05/2026, with Lock-free Queue + Async RocksDB Flush)
 
-| Workload | **Kallisto (c=200, 2 workers/2 threads)** |
-|---|---|
-| **GET** (read) | **126,469 RPS** |
-| **SET / PUT** (write) | **91,879 RPS** |
-| **MIXED** (95%R / 5%W) | **103,823 RPS** |
-| GET p99 latency | **2.35 ms** |
-| PUT p99 latency | **9.38 ms** |
-| PUT max latency | **16.42 ms** |
-| Persistence | ✅ RocksDB WAL (Eventual Consistency) |
-| Protocol | HTTP/1.1 + JSON |
-| Errors | **0** (under load) |
+| Workload               | **Kallisto (c=200, 2 workers/2 threads)** |
+|------------------------|-------------------------------------------|
+| **GET** (read)         | **126,469 RPS**                           |
+| **SET / PUT** (write)  | **91,879 RPS**                            |
+| **MIXED** (95%R / 5%W) | **103,823 RPS**                           |
+| GET p99 latency        | **2.35 ms**                               |
+| PUT p99 latency        | **9.38 ms**                               |
+| PUT max latency        | **16.42 ms**                              |
+| Persistence            | ✅ RocksDB WAL (Eventual Consistency)      |
+| Protocol               | HTTP/1.1 + JSON                           |
+| Errors                 | **0** (under load)                        |
 
 ### Analysis
 
@@ -369,24 +371,24 @@ make bench-server
 
 ### The Handicap Disclosure
 
-| Factor | Kallisto | DragonflyDB | Who carries more? |
-|---|---|---|---|
-| **Protocol** | HTTP/1.1 + JSON (~300 bytes/resp) | Redis RESP binary (~40 bytes/resp) | **Kallisto** (7.5x heavier) |
-| **Parse cost** | simdjson ~700 ns/request | RESP inline ~50 ns/request | **Kallisto** (14x slower) |
-| **Persistence** | RocksDB WAL, flush every **5ms** | RDB snapshot every **60 seconds** | **Kallisto** (12,000x more I/O) |
-| **Max data loss window** | 5 ms | 60,000 ms (1 minute) | **Kallisto** guarantees 12,000x stricter durability |
-| **AOF / WAL** | ✅ Yes (RocksDB WAL) | ❌ No (DragonflyDB removed AOF) | **Kallisto** does more work |
-| **Benchmark tool** | `wrk` (HTTP overhead) | `memtier_benchmark` (native Redis) | **Kallisto** (heavier tooling) |
+| Factor                   | Kallisto                          | DragonflyDB                        | Who carries more?                                   |
+|--------------------------|-----------------------------------|------------------------------------|-----------------------------------------------------|
+| **Protocol**             | HTTP/1.1 + JSON (~300 bytes/resp) | Redis RESP binary (~40 bytes/resp) | **Kallisto** (7.5x heavier)                         |
+| **Parse cost**           | simdjson ~700 ns/request          | RESP inline ~50 ns/request         | **Kallisto** (14x slower)                           |
+| **Persistence**          | RocksDB WAL, flush every **5ms**  | RDB snapshot every **60 seconds**  | **Kallisto** (12,000x more I/O)                     |
+| **Max data loss window** | 5 ms                              | 60,000 ms (1 minute)               | **Kallisto** guarantees 12,000x stricter durability |
+| **AOF / WAL**            | ✅ Yes (RocksDB WAL)               | ❌ No (DragonflyDB removed AOF)     | **Kallisto** does more work                         |
+| **Benchmark tool**       | `wrk` (HTTP overhead)             | `memtier_benchmark` (native Redis) | **Kallisto** (heavier tooling)                      |
 
 > **In plain English:** Kallisto parses a heavier protocol, writes to disk 12,000x more frequently, and guarantees 12,000x stricter durability — yet still needs to beat DragonflyDB on latency and throughput. DragonflyDB is essentially running as a pure in-memory store with a snapshot dumped once a minute.
 
 ### Results
 
-| Metric | DragonflyDB (1:10 mixed) | Kallisto (95/5 mixed) | Winner |
-|---|---|---|---|
-| **Total Throughput** | 87,060 RPS | **103,823 RPS** | **Kallisto** (+19%) |
-| **Avg Latency** | 2.30 ms | **1.90 ms** | **Kallisto** (-17%) |
-| **p99 Latency** | 4.73 ms | **2.76 ms** | **Kallisto** (-41%) |
+| Metric               | DragonflyDB (1:10 mixed) | Kallisto (95/5 mixed) | Winner              |
+|----------------------|--------------------------|-----------------------|---------------------|
+| **Total Throughput** | 87,060 RPS               | **103,823 RPS**       | **Kallisto** (+19%) |
+| **Avg Latency**      | 2.30 ms                  | **1.90 ms**           | **Kallisto** (-17%) |
+| **p99 Latency**      | 4.73 ms                  | **2.76 ms**           | **Kallisto** (-41%) |
 
 ### Methodology & Transparency
 
