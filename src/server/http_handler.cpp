@@ -1,4 +1,5 @@
 #include "kallisto/server/http_handler.hpp"
+#include "kallisto/server/sys_handler.hpp"
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -17,7 +18,8 @@ namespace server {
 HttpHandler::HttpHandler(event::Dispatcher& dispatcher,
                          std::shared_ptr<KallistoCore> core)
     : dispatcher_(dispatcher)
-    , core_(std::move(core)) {
+    , core_(std::move(core))
+    , sys_handler_(std::make_unique<SysHandler>()) {
 }
 
 HttpHandler::~HttpHandler() {
@@ -259,6 +261,16 @@ HttpHandler::HttpRequest HttpHandler::parseRequest(const std::string& buffer) {
 void HttpHandler::handleRequest(Connection& conn, const HttpRequest& req) {
     conn.keep_alive = req.keep_alive;
     
+    // Route /v1/sys/ routes
+    if (req.path.rfind("/v1/sys/", 0) == 0) {
+        if (sys_handler_) {
+            sys_handler_->handleRequest(*this, conn, req);
+        } else {
+            sendError(conn, 500, "System handler not initialized");
+        }
+        return;
+    }
+
     // Route: /v1/secret/data/:path
     const std::string prefix = "/v1/secret/data/";
     

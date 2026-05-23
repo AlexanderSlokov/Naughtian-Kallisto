@@ -27,7 +27,10 @@ namespace server {
  * 
  * Each Worker has its own HttpHandler — no shared state.
  */
+class SysHandler;
+
 class HttpHandler {
+    friend class SysHandler;
 public:
     HttpHandler(event::Dispatcher& dispatcher,
                 std::shared_ptr<KallistoCore> core);
@@ -92,6 +95,7 @@ private:
     event::Dispatcher& dispatcher_;
     std::shared_ptr<KallistoCore> core_;
     std::unordered_map<int, std::unique_ptr<Connection>> connections_;
+    std::unique_ptr<SysHandler> sys_handler_;
 };
 
 } // namespace server

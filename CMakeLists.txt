@@ -114,13 +114,14 @@ add_library(kallisto_lib
     include/kallisto/engine/lock_free_queue.hpp
     src/engine/kv_engine.cpp
     src/engine/engine_registry.cpp
-    # Threading infrastructure (Phase 1.1)
+    src/engine/ffi_cxx_boundary.cpp
+    # Threading infrastructure
     src/event/dispatcher_impl.cpp
     src/event/worker_impl.cpp
     src/thread_local/thread_local_impl.cpp
-    # Sharded storage (Phase 1.2)
+    # Sharded storage
     src/sharded_cuckoo_table.cpp
-    # Network infrastructure (Phase 2.2)
+    # Network infrastructure
     src/net/listener.cpp
 )
 
@@ -222,10 +223,10 @@ add_executable(test_engine_registry src/engine/test_engine_registry.cpp)
 target_link_libraries(test_engine_registry PRIVATE kallisto_lib GTest::gtest GTest::gtest_main GTest::gmock pthread)
 add_test(NAME EngineRegistryTest COMMAND test_engine_registry)
 
-# Kallisto UDS Admin tests
-add_executable(test_uds_admin src/server/test_uds_admin_handler.cpp)
-target_link_libraries(test_uds_admin PRIVATE kallisto_server_lib kallisto_lib GTest::gtest GTest::gtest_main pthread)
-add_test(NAME UdsAdminTest COMMAND test_uds_admin)
+# Kallisto SysHandler mock tests
+add_executable(test_sys_handler src/server/test_sys_handler.cpp)
+target_link_libraries(test_sys_handler PRIVATE kallisto_server_lib kallisto_lib GTest::gtest GTest::gtest_main pthread)
+add_test(NAME SysHandlerTest COMMAND test_sys_handler)
 
 add_executable(test_btree_rcu src/test_btree_index.cpp)
 target_link_libraries(test_btree_rcu PRIVATE kallisto_lib GTest::gtest GTest::gtest_main pthread)
@@ -276,7 +277,7 @@ find_package(simdjson CONFIG)
 add_library(kallisto_server_lib
     src/net/listener.cpp
     src/server/http_handler.cpp
-    src/server/uds_admin_handler.cpp
+    src/server/sys_handler.cpp
 )
 target_link_libraries(kallisto_server_lib PUBLIC kallisto_lib)
 
