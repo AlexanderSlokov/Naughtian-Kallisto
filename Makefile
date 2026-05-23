@@ -53,7 +53,8 @@ endif
         bench-server bench-http \
         docker-build docker-test docker-run coverage \
         test-asan test-tsan \
-        devcontainer_cloud_build devcontainer_local_build
+        devcontainer_cloud_build devcontainer_local_build \
+        docs-serve docs-build
 
 all: build
 
@@ -220,3 +221,14 @@ clean:
 
 logs:
 	@tail -f kallisto.server.log 2>/dev/null || echo "No logs found."
+
+# ===========================================================================
+# Documentation
+# ===========================================================================
+# Go to http://localhost:1313/ for preview.
+
+docs-serve:
+	hugo server -s docs
+
+docs-build:
+	hugo -s docs
