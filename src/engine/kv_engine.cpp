@@ -382,6 +382,70 @@ tl::expected<void, EngineError> KvEngine::destroy_version(std::string_view path,
     return {};
 }
 
+tl::expected<void, EngineError> KvEngine::undelete(std::string_view path, uint32_t version) {
+    std::string mkey = buildMetaKey(path);
+    auto raw_meta = readRawOptimistic(rocksdb_persistence_.get(), storage_.get(), mkey);
+    if (!raw_meta) { 
+	    return tl::unexpected(EngineError::NotFound);
+	}
+    
+    auto meta = deserializeMetadata(*raw_meta);
+    if (!meta) { 
+	    return tl::unexpected(EngineError::StorageError);
+	}
+    
+    bool found = false;
+    for (auto& vs : meta->versions) {
+        if (vs.version_id == version) {
+            if (vs.destroyed) {
+                return tl::unexpected(EngineError::Destroyed);
+            }
+            vs.deletion_time_ms = 0;
+            found = true;
+            break;
+        }
+    }
+    if (!found) { 
+	    return tl::unexpected(EngineError::InvalidVersion);
+	}
+    
+    auto res = enqueueOrExecute(AsyncOp::Type::PUT, mkey, serializeMetadata(*meta));
+    if (!res) {
+        return tl::unexpected(res.error());
+    }
+    cacheRaw(storage_.get(), mkey, serializeMetadata(*meta));
+    
+    return {};
+}
+
+tl::expected<std::vector<std::string>, EngineError> KvEngine::list_keys(std::string_view path_prefix) {
+    std::vector<std::string> keys;
+    std::string meta_prefix = "m:" + std::string(path_prefix);
+    if (!path_prefix.empty()) {
+        meta_prefix += "/";
+    }
+    
+    // Scan all metadata keys from RocksDB and filter by prefix
+    rocksdb_persistence_->iterateAll([&](const SecretEntry& entry) {
+        const auto& stored_key = entry.path;
+        if (stored_key.compare(0, meta_prefix.size(), meta_prefix) != 0) {
+            return;
+        }
+        auto remainder = stored_key.substr(meta_prefix.size());
+        auto slash_pos = remainder.find('/');
+        if (slash_pos != std::string::npos) {
+            std::string dir_key = remainder.substr(0, slash_pos) + "/";
+            if (keys.empty() || keys.back() != dir_key) {
+                keys.push_back(dir_key);
+            }
+        } else if (!remainder.empty()) {
+            keys.push_back(remainder);
+        }
+    });
+    
+    return keys;
+}
+
 void KvEngine::changeSyncMode(SyncMode mode) {
     sync_mode_.store(mode, std::memory_order_relaxed);
     if (rocksdb_persistence_) {

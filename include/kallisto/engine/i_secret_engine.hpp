@@ -76,7 +76,11 @@ public:
     
     virtual tl::expected<void, EngineError> soft_delete(std::string_view path, uint32_t version) = 0;
     
+    virtual tl::expected<void, EngineError> undelete(std::string_view path, uint32_t version) = 0;
+    
     virtual tl::expected<void, EngineError> destroy_version(std::string_view path, uint32_t version) = 0;
+    
+    virtual tl::expected<std::vector<std::string>, EngineError> list_keys(std::string_view path_prefix) = 0;
 
     /** @return Engine type identifier (e.g., "kv", "transit") */
     virtual std::string engineType() const = 0;
