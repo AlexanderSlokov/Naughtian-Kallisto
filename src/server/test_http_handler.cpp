@@ -539,7 +539,7 @@ TEST_F(HttpHandlerTest, SysHealthReturnsVaultMock) {
         buildRequest("GET", "/v1/sys/health"));
     
     EXPECT_THAT(res, testing::HasSubstr("200 OK"));
-    EXPECT_THAT(res, testing::HasSubstr("\"initialized\":true"));
+    EXPECT_THAT(res, testing::HasSubstr("\"initialized\": true"));
     close(srv); close(cli);
 }
 
