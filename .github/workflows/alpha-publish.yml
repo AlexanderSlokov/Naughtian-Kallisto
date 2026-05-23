@@ -7,7 +7,7 @@ on:
     tags: [ 'v*.*.*-alpha' ]
     paths-ignore:
       - '**.md'
-      - 'documents/**'
+      - '../../docs/**'
       - 'LICENSE'
   # Khởi chạy thủ công từ giao diện Actions
   workflow_dispatch:

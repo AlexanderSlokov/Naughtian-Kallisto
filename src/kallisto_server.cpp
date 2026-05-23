@@ -9,7 +9,7 @@
 
 #include "kallisto/event/worker.hpp"
 #include "kallisto/server/http_handler.hpp"
-#include "kallisto/server/uds_admin_handler.hpp"
+#include "ffi_bridge_cpp/lib.h"
 #include "kallisto/kallisto_core.hpp"
 #include "kallisto/logger.hpp"
 
@@ -44,7 +44,6 @@ struct ServerConfig {
     uint16_t http_port = 8200;
     size_t num_workers = 4;
     std::string db_path = "/kallisto/data";
-    std::string socket_path = "/var/run/kallisto/kallisto.sock";
 
     static ServerConfig parseFromArgs(int argc, char** argv) {
         ServerConfig config;
@@ -63,8 +62,6 @@ struct ServerConfig {
                 config.num_workers = std::stoul(arg.substr(10));
             } else if (arg.find("--db-path=") == 0) {
                 config.db_path = arg.substr(10);
-            } else if (arg.find("--socket-path=") == 0) {
-                config.socket_path = arg.substr(14);
             }
         }
         return config;
@@ -85,7 +82,6 @@ struct ServerConfig {
                   << "  --http-port=PORT   HTTP port (default: 8200)\n"
                   << "  --workers=N        Number of worker threads (default: CPU cores)\n"
                   << "  --db-path=PATH     RocksDB data directory (default: /kallisto/data)\n"
-                  << "  --socket-path=PATH Admin UDS socket path (default: /var/run/kallisto/kallisto.sock)\n"
                   << std::endl;
     }
 
@@ -95,7 +91,6 @@ struct ServerConfig {
         info("  HTTP port:    " + std::to_string(http_port));
         info("  Workers:      " + std::to_string(num_workers));
         info("  DB Path:      " + db_path);
-        info("  Socket Path:  " + socket_path);
         info("========================================");
     }
 };
@@ -111,15 +106,14 @@ public:
         info("[SERVER] KallistoCore created and initialized with DB path: " + config_.db_path);
         
         worker_pool_ = createWorkerPool(config_.num_workers);
-        uds_admin_ = std::make_unique<server::UdsAdminHandler>(core_, config_.socket_path);
     }
 
     void start() {
         // Start workers and bind to HTTP endpoints
         worker_pool_->start([this]() { bindHttpListeners(); });
         
-        // Start Admin UDS interface
-        uds_admin_->start();
+        // Start Rust Admin Server on port 8202 using stateless Handle Pattern
+        admin_server_ = kallisto::rust::start_admin_server(core_.get(), 8202);
         
         info("[SERVER] Kallisto is READY. Accepting connections.");
         info("[SERVER] Press Ctrl+C to shutdown.");
@@ -137,7 +131,12 @@ public:
         
         http_handlers_.clear(); // Allow handlers to destruct gracefully
         worker_pool_->stop();   // Joins threads
-        uds_admin_->stop();     // Stops accept loops
+        
+        // Stop Rust Admin Server first (LIFO order: Shut down last)
+        if (admin_server_) {
+            kallisto::rust::stop_admin_server(admin_server_);
+            admin_server_ = nullptr;
+        }
 
         // Important: Guarantee atomic durability on crash/shutdown
         core_->forceFlush();
@@ -165,7 +164,7 @@ private:
     ServerConfig config_;
     std::shared_ptr<KallistoCore> core_;
     event::WorkerPoolPtr worker_pool_;
-    std::unique_ptr<server::UdsAdminHandler> uds_admin_;
+    rust::AdminServer* admin_server_ = nullptr;
     std::vector<std::shared_ptr<server::HttpHandler>> http_handlers_;
 };
 

@@ -24,7 +24,9 @@ concept ValidEngine = requires(T e,
     { e.read_metadata(path) } -> std::same_as<tl::expected<kallisto::engine::KeyMetadata, kallisto::engine::EngineError>>;
     { e.put_version(path, payload, cas) } -> std::same_as<tl::expected<void, kallisto::engine::EngineError>>;
     { e.soft_delete(path, version) } -> std::same_as<tl::expected<void, kallisto::engine::EngineError>>;
+    { e.undelete(path, version) } -> std::same_as<tl::expected<void, kallisto::engine::EngineError>>;
     { e.destroy_version(path, version) } -> std::same_as<tl::expected<void, kallisto::engine::EngineError>>;
+    { e.list_keys(path) } -> std::same_as<tl::expected<std::vector<std::string>, kallisto::engine::EngineError>>;
     { e.engineType() } -> std::convertible_to<std::string>;
 };
 

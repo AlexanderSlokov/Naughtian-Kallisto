@@ -32,7 +32,9 @@ public:
     tl::expected<KeyMetadata, EngineError> read_metadata(std::string_view path) override;
     tl::expected<void, EngineError> put_version(std::string_view path, const SecretPayload& payload, std::optional<uint32_t> cas = std::nullopt) override;
     tl::expected<void, EngineError> soft_delete(std::string_view path, uint32_t version) override;
+    tl::expected<void, EngineError> undelete(std::string_view path, uint32_t version) override;
     tl::expected<void, EngineError> destroy_version(std::string_view path, uint32_t version) override;
+    tl::expected<std::vector<std::string>, EngineError> list_keys(std::string_view path_prefix) override;
     std::string engineType() const override { return "kv"; }
 
     void changeSyncMode(SyncMode mode) override;

@@ -27,21 +27,42 @@ RUN apt-get update && \
 RUN pip install gcovr --break-system-packages
 
 # ===========================================================================
-# Stage 2: vcpkg + C++ dependencies (as root, shared location)
+# Stage 2: Pre-install vcpkg C++ dependencies (reuse vcpkg from base image)
 # ===========================================================================
-# Install vcpkg into /usr/local/vcpkg so all users share the same root
-RUN rm -rf /usr/local/vcpkg \
-    && git clone https://github.com/microsoft/vcpkg.git /usr/local/vcpkg \
-    && /usr/local/vcpkg/bootstrap-vcpkg.sh
-
+# Base image provides vcpkg at /usr/local/vcpkg. User vscode is in group
+# 'vcpkg', but `vcpkg install` runs as root here (for Docker layer caching).
+# We use a shared binary cache so vscode can reuse pre-built packages at
+# runtime without recompiling from source.
 ENV VCPKG_ROOT=/usr/local/vcpkg
 ENV PATH="${VCPKG_ROOT}:${PATH}"
+
+# Shared binary cache: both root (docker build) and vscode (runtime) use
+# the same location. Without this, root caches to /root/.cache/ and vscode
+# can't find the pre-built packages → full recompile at first cmake run.
+ENV VCPKG_DEFAULT_BINARY_CACHE=/usr/local/vcpkg/archives
+RUN mkdir -p /usr/local/vcpkg/archives \
+    && chown root:vcpkg /usr/local/vcpkg/archives \
+    && chmod 2775 /usr/local/vcpkg/archives
 
 # Pre-install vcpkg dependencies (COPY only manifest files for caching)
 COPY vcpkg.json /tmp/vcpkg-manifest/vcpkg.json
 RUN cd /tmp/vcpkg-manifest \
     && /usr/local/vcpkg/vcpkg install --triplet x64-linux \
     && rm -rf /tmp/vcpkg-manifest
+
+# Fix vcpkg permissions for runtime use by vscode (group vcpkg):
+# - buildtrees/: vcpkg writes compiler detection results here
+# - packages/:   vcpkg stages package files here before installing
+# - downloads/:  vcpkg may download new source tarballs here
+# Root's umask (022) created these dirs without group-write. Fix that.
+RUN chmod -R g+w /usr/local/vcpkg/buildtrees \
+                  /usr/local/vcpkg/packages \
+                  /usr/local/vcpkg/downloads 2>/dev/null; \
+    find /usr/local/vcpkg/buildtrees \
+         /usr/local/vcpkg/packages \
+         /usr/local/vcpkg/downloads \
+         -type d -exec chmod g+ws {} + 2>/dev/null; \
+    exit 0
 
 # ===========================================================================
 # Stage 3: Rust toolchain + cargo dependency pre-fetch (as vscode)
@@ -53,6 +74,11 @@ WORKDIR /home/vscode
 RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y \
 	&& echo "source \$HOME/.cargo/env" >> $HOME/.bashrc \
 	&& . $HOME/.cargo/env && cargo --version && rustc --version
+
+# Make Rust toolchain visible to ALL users (including cmake running without
+# an interactive shell). Corrosion's FindRust.cmake checks PATH — this
+# ensures rustc is found whether or not .bashrc was sourced.
+ENV PATH="/home/vscode/.cargo/bin:${PATH}"
 
 # Pre-fetch Rust dependencies using skeleton crate technique:
 # Copy only Cargo.toml/Cargo.lock files, create dummy lib.rs, then cargo fetch.

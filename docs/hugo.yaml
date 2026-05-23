@@ -1,0 +1,92 @@
+# Configuration for Kallisto Technical Documentation (Hextra Theme)
+baseURL: "/"
+title: "Kallisto Docs"
+languageCode: "vi-vn"
+defaultContentLanguage: "vi"
+
+enableRobotsTXT: true
+enableGitInfo: false
+hasCJKLanguage: true
+
+# Use Hextra theme
+theme: "hextra"
+
+markup:
+  highlight:
+    noClasses: false
+    codeFences: true
+    guessSyntax: true
+    lineNos: true
+    style: github-dark
+  goldmark:
+    renderer:
+      unsafe: true # Allows HTML elements like alerts/tags in markdown
+
+menu:
+  main:
+    - name: "Tài liệu"
+      identifier: docs
+      pageRef: /docs
+      weight: 1
+    - name: "Lộ trình & TODO"
+      identifier: roadmap
+      pageRef: /docs/roadmap-todo
+      weight: 2
+    - name: "Kiến trúc (Whitepaper)"
+      identifier: whitepaper
+      pageRef: /docs/architecture-whitepaper
+      weight: 3
+    - name: "GitHub"
+      weight: 10
+      url: "https://github.com/AlexanderSlokov/Naughtian-Kallisto"
+      params:
+        icon: github
+
+params:
+  description: "Tài liệu kỹ thuật và thiết kế hệ thống Kallisto - High-Performance Hybrid Secret Engine"
+  author:
+    name: "Alexander Slokov / Naughtian Labs"
+    email: "stella@naughtianlabs.io"
+
+  navbar:
+    displayTitle: true
+    displayLogo: true
+    logo:
+      # If you have a logo, you can set it here
+      path: kallisto_logo.webp
+    width: wide
+
+  theme:
+    default: dark
+    displayToggle: true
+
+  footer:
+    enable: true
+    displayCopyright: true
+    displayPoweredBy: false
+    width: normal
+
+  # Search settings
+  search:
+    enable: true
+    type: flexsearch
+    flexsearch:
+      index: content
+      tokenize: forward
+
+  toc:
+    enable: true
+    float: true
+
+  highlight:
+    copy:
+      enable: true
+      display: hover
+
+  page:
+    width: wide
+    contextMenu:
+      enable: false
+
+  imageZoom:
+    enable: true
