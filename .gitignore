@@ -37,5 +37,5 @@ ghz-web
 /.idea
 /coverage_report
 /.cache
-documents/examples/*
-!documents/examples/.gitkeep
+docs/examples/*
+!docs/examples/.gitkeep
