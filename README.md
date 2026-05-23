@@ -112,7 +112,7 @@ make build
 First time compiling, vcpkg will take a while to install dependencies (~10 min, and will use cache after first run):
 
 ```bash
-export VCPKG_ROOT=/usr/local/vcpkg
+# vcpkg is auto-detected: CLion snap → env var → /usr/local/vcpkg
 make build-server
 ```
 
@@ -130,6 +130,7 @@ Pull the image and run the Kallisto server, remember to mount a volume for data 
 docker run -d \
   --name kallisto \
   -p 8200:8200 \
+  -p 8202:8202 \
   -v my-kallisto-data:/kallisto/data \
   ghcr.io/alexanderslokov/kallisto:latest
 ```
@@ -152,30 +153,28 @@ docker build -t kallisto-server:latest -f Dockerfile .
 # Or using Makefile: make docker-build
 ```
 
-## Admin CLI (Unix Domain Socket)
+## Admin API (Port 8202 — Rust Control Plane)
 
-Start the production server first:
-
-```bash
-make run-server
-```
-
-Then use the admin client to control persistence behavior securely over UDS:
+Kallisto uses a **Two-Port Core-Armor** architecture:
+- **Port 8200** — C++ Data Plane (high-performance KV read/write)
+- **Port 8202** — Rust Admin Server (sync mode, flush, telemetry)
 
 ```bash
-./build/kallisto <COMMAND>
+# Switch to BATCH mode
+curl -X POST http://localhost:8202/admin/mode/batch
+
+# Switch to IMMEDIATE mode
+curl -X POST http://localhost:8202/admin/mode/immediate
+
+# Force flush to RocksDB
+curl -X POST http://localhost:8202/admin/flush
 ```
 
-### Available Commands
-
-| Command          | Description                              | Example                           |
-|------------------|------------------------------------------|-----------------------------------|
-| `SAVE`           | Force flush Cuckoo/batch to RocksDB      | `./build/kallisto SAVE`           |
-| `MODE BATCH`     | Switch to asynchronous batch persistence | `./build/kallisto MODE BATCH`     |
-| `MODE IMMEDIATE` | Switch to synchronous strict persistence | `./build/kallisto MODE IMMEDIATE` |
-| `--help`         | Show all commands                        | `./build/kallisto --help`         |
-
-> 🔒 **Security Note**: The UDS listener binds to `/var/run/kallisto/kallisto.sock` and restricts access via `0600` (Owner-only R/W). Only the user (or root) executing the server process can issue admin commands.
+| Endpoint                            | Method | Description                              |
+|-------------------------------------|--------|------------------------------------------|
+| `/admin/mode/batch`                 | POST   | Switch to async batch persistence        |
+| `/admin/mode/immediate`             | POST   | Switch to synchronous strict persistence |
+| `/admin/flush`                      | POST   | Force flush cache to RocksDB             |
 
 ## Server Mode
 
@@ -195,12 +194,14 @@ Or with custom options:
 
 ### Server CLI Options
 
-| Option             | Default          | Description                      |
-|--------------------|------------------|----------------------------------|
-| `--http-port=PORT` | `8200`           | HTTP API port (Vault-compatible) |
-| `--workers=N`      | CPU cores        | Number of worker threads         |
-| `--db-path=PATH`   | `/kallisto/data` | RocksDB data directory           |
-| `--help`, `-h`     | —                | Show help                        |
+| Option             | Default          | Description                              |
+|--------------------|------------------|------------------------------------------|
+| `--http-port=PORT` | `8200`           | Data Plane port (Vault KV-v2 compatible) |
+| `--workers=N`      | CPU cores        | Number of worker threads                 |
+| `--db-path=PATH`   | `/kallisto/data` | RocksDB data directory                   |
+| `--help`, `-h`     | —                | Show help                                |
+
+> Admin API runs automatically on port **8202** (Rust/Tokio).
 
 ### Expected Startup Output
 
@@ -214,76 +215,99 @@ Or with custom options:
 [SERVER] Press Ctrl+C to shutdown.
 ```
 
-## HTTP API (Vault KV v2 Compatible)
+## HTTP API (Vault KV-v2 Compatible)
 
-Kallisto exposes a Vault-compatible HTTP API on port **8200** and serving KV at the `/v1/secret/data/` prefix by default, matching HashiCorp Vault's KV v2 API.
+Kallisto exposes a Vault-compatible HTTP API on port **8200** with dynamic mount-based routing at `/v1/:mount/:action/:path`.
 
 ### Store a Secret
 
 ```bash
 curl -X POST http://localhost:8200/v1/secret/data/myapp/db-password \
   -H "Content-Type: application/json" \
-  -d '{"data":{"value":"super-secret-123"}}'
+  -d '{"data":{"username":"admin","password":"super-secret-123"}}'
 ```
 
-The response body looks like this:
+Response — version metadata:
 
 ```json
-{"data":{"created":true}}
+{"data":{"created_time":"2026-05-23T10:00:00.000Z","deletion_time":"","destroyed":false,"version":1}}
 ```
 
 ### Retrieve a Secret
 
 ```bash
 curl http://localhost:8200/v1/secret/data/myapp/db-password
+# Read specific version:
+curl http://localhost:8200/v1/secret/data/myapp/db-password?version=1
 ```
 
-Response body:
+Response — Vault envelope `data.data` + `data.metadata`:
 
 ```json
 {
   "data": {
-    "data": {
-      "value": "super-secret-123"
+    "data": {"username":"admin","password":"super-secret-123"},
+    "metadata": {
+      "created_time": "2026-05-23T10:00:00.000Z",
+      "deletion_time": "",
+      "destroyed": false,
+      "version": 1
     }
-  },
-  "metadata": {
-    "created_time": 1771065876
   }
 }
 ```
 
-### Delete a Secret
+### Delete a Secret (Soft-Delete)
 
 ```bash
+# Soft-delete latest version
 curl -X DELETE http://localhost:8200/v1/secret/data/myapp/db-password
+
+# Soft-delete specific versions
+curl -X POST http://localhost:8200/v1/secret/delete/myapp/db-password \
+  -d '{"versions":[1,2]}'
 ```
 
 Response: `204 No Content`
 
-### Error Handling
+### Undelete (Restore)
 
 ```bash
-# Requesting a non-existent secret
-curl http://localhost:8200/v1/secret/data/does-not-exist
+curl -X POST http://localhost:8200/v1/secret/undelete/myapp/db-password \
+  -d '{"versions":[1]}'
 ```
 
-Response:
+### Destroy (Permanent)
 
-```json
-{"errors":["Secret not found"]}
+```bash
+curl -X PUT http://localhost:8200/v1/secret/destroy/myapp/db-password \
+  -d '{"versions":[1]}'
 ```
 
-Response Status Code of Kallisto is presented below:
+### Read Metadata
 
-| Status Code | Meaning                                       |
-|-------------|-----------------------------------------------|
-| `200`       | Success                                       |
-| `204`       | Deleted successfully (no body)                |
-| `400`       | Bad request (chunked encoding, Expect header) |
-| `404`       | Secret not found / invalid route              |
-| `405`       | Method not allowed                            |
-| `500`       | Internal error                                |
+```bash
+curl http://localhost:8200/v1/secret/metadata/myapp/db-password
+```
+
+### Check-and-Set (CAS)
+
+```bash
+curl -X POST http://localhost:8200/v1/secret/data/myapp/db-password \
+  -d '{"options":{"cas":1},"data":{"password":"new-password"}}'
+```
+
+### Error Handling
+
+| Status Code | Meaning                                         |
+|-------------|-----------------------------------------------  |
+| `200`       | Success (JSON body)                              |
+| `204`       | Success — no body (delete/undelete/destroy)      |
+| `400`       | Bad request (CAS mismatch, missing body/versions)|
+| `404`       | Secret not found / mount not found               |
+| `405`       | Method not allowed for this endpoint             |
+| `500`       | Internal storage error                           |
+| `503`       | Queue full (write backpressure)                  |
 
 # Persistence storage for KV engine
 
@@ -490,4 +514,4 @@ services:
 ```
 
 Each worker is independent — zero network lock contention, zero context switching. The kernel's `SO_REUSEPORT` distributes incoming connections evenly. Protocol-agnostic network handlers simply delegate all actions to the thread-safe `KallistoCore`.
-The inner layers (B-Tree, CuckooTable, RocksDB) are strictly encapsulated. Hit data is instantly fetched from the concurrent `ShardedCuckooTable` (64 shards lock-free lookup), while persisting writes crash-safely to `RocksDBStorage` (WAL). Administrative commands (like changing persistence modes or forcing flushes) are routed entirely out-of-band via an OS-level Unix Domain Socket.
+The inner layers (B-Tree, CuckooTable, RocksDB) are strictly encapsulated. Hit data is instantly fetched from the concurrent `ShardedCuckooTable` (64 shards lock-free lookup), while persisting writes crash-safely to `RocksDBStorage` (WAL). Administrative commands (sync mode, flush) are served via the **Rust Admin Server** on port **8202** (Tokio + Axum), communicating with the C++ core through a high-performance FFI bridge (`cxx`).

@@ -12,7 +12,7 @@ request = function()
     counter = counter + 1
     local id = counter % 1000
     local path = "/v1/secret/data/bench/s" .. id
-    local body = '{"data":{"value":"seed-value-' .. id .. '"}}'
+    local body = '{"data":{"key":"seed-value-' .. id .. '","index":' .. id .. '}}'
     return wrk.format("POST", path, nil, body)
 end
 
