@@ -3,6 +3,7 @@ pub mod ffi {
     unsafe extern "C++" {
         include!("kallisto/engine/ffi_cxx_boundary.hpp");
         
+        #[namespace = "kallisto"]
         type KallistoCore;
 
         unsafe fn force_flush_engine(core: *mut KallistoCore) -> bool;

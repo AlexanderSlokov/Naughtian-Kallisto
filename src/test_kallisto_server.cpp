@@ -76,13 +76,7 @@ TEST(KallistoServerTest, LifecycleSanityCheck) {
     }
 }
 
-TEST(KallistoServerTest, ParseSocketPathArg) {
-    // Problem Description: Test parsing of socket-path parameter
-    int argc = 2;
-    char* argv[] = { (char*)"kallisto_server", (char*)"--socket-path=/custom.sock" };
-    ServerConfig config = ServerConfig::parseFromArgs(argc, argv);
-    EXPECT_EQ(config.socket_path, "/custom.sock");
-}
+
 
 TEST(KallistoServerTest, ConfigOutputPrinting) {
     // Problem Description: Test help output and banner printing to ensure no crashes
@@ -100,12 +94,10 @@ TEST(KallistoServerTest, FullLifecycleAndSignals) {
     ServerConfig config;
     config.http_port = 13500;
     config.db_path = "/tmp/kallisto_test_lifecycle_db";
-    config.socket_path = "/tmp/kallisto_test_lifecycle.sock";
     config.num_workers = 2;
     
     // Ensure clean state
     std::filesystem::remove_all(config.db_path);
-    std::filesystem::remove(config.socket_path);
 
     KallistoServerApp app(config);
     

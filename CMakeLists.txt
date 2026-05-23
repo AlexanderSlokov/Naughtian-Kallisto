@@ -114,7 +114,6 @@ add_library(kallisto_lib
     include/kallisto/engine/lock_free_queue.hpp
     src/engine/kv_engine.cpp
     src/engine/engine_registry.cpp
-    src/engine/ffi_cxx_boundary.cpp
     # Threading infrastructure
     src/event/dispatcher_impl.cpp
     src/event/worker_impl.cpp
@@ -125,19 +124,30 @@ add_library(kallisto_lib
     src/net/listener.cpp
 )
 
-## Link static package Rust in Kallisto C++ Core
-target_link_libraries(kallisto_lib PUBLIC ffi_bridge)
+## Rust FFI Bridge (Corrosion + cxx)
+## Architecture: Adapter Extraction Pattern
+##   kallisto_lib     — Pure C++ core, zero FFI/Rust knowledge
+##   ffi_adapter      — OBJECT lib with ffi_cxx_boundary.cpp (always linked, never stripped)
+##   ffi_bridge_cpp   — cxx-generated C++ glue (calls both C++ and Rust symbols)
+##   ffi_bridge       — Rust staticlib (Rust implementations)
+##
+## OBJECT library guarantees ffi_adapter's symbols are always present in the final
+## binary, breaking the circular dependency without linker hacks.
 if(COMMAND corrosion_add_cxxbridge)
     corrosion_add_cxxbridge(ffi_bridge_cpp
         CRATE ffi_bridge
         FILES lib.rs
     )
-    target_link_libraries(kallisto_lib PUBLIC ffi_bridge_cpp)
+    # Expose cxx-generated headers to kallisto_lib consumers (needed by kallisto_server.cpp)
     target_include_directories(kallisto_lib PUBLIC ${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/ffi_bridge_cpp/include)
 else()
-    # Fallback to manual include path if corrosion_add_cxxbridge is not available
     target_include_directories(kallisto_lib PUBLIC ${CMAKE_BINARY_DIR}/cargo/build/x86_64-unknown-linux-gnu/cxxbridge)
 endif()
+
+## FFI Adapter: thin boundary layer (OBJECT library — always linked, never stripped)
+add_library(ffi_adapter OBJECT src/engine/ffi_cxx_boundary.cpp)
+target_link_libraries(ffi_adapter PUBLIC kallisto_lib)
+target_include_directories(ffi_adapter PRIVATE ${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/ffi_bridge_cpp/include)
 
 # Link pthread for threading support
 target_link_libraries(kallisto_lib PUBLIC Threads::Threads)
@@ -225,7 +235,7 @@ add_test(NAME EngineRegistryTest COMMAND test_engine_registry)
 
 # Kallisto SysHandler mock tests
 add_executable(test_sys_handler src/server/test_sys_handler.cpp)
-target_link_libraries(test_sys_handler PRIVATE kallisto_server_lib kallisto_lib GTest::gtest GTest::gtest_main pthread)
+target_link_libraries(test_sys_handler PRIVATE kallisto_server_lib kallisto_lib GTest::gtest GTest::gtest_main GTest::gmock pthread)
 add_test(NAME SysHandlerTest COMMAND test_sys_handler)
 
 add_executable(test_btree_rcu src/test_btree_index.cpp)
@@ -241,12 +251,11 @@ target_link_libraries(test_siphash PRIVATE kallisto_lib GTest::gtest GTest::gtes
 add_test(NAME SipHashTest COMMAND test_siphash)
 
 add_executable(test_http_handler src/server/test_http_handler.cpp)
-target_link_libraries(test_http_handler PRIVATE kallisto_server_lib kallisto_lib GTest::gtest GTest::gtest_main GTest::gmock pthread)
+target_link_libraries(test_http_handler PRIVATE ffi_adapter kallisto_server_lib kallisto_lib GTest::gtest GTest::gtest_main GTest::gmock pthread)
 add_test(NAME HttpHandlerTest COMMAND test_http_handler)
 
 add_executable(test_kallisto_server src/test_kallisto_server.cpp)
-# Note: we link against kallisto_server_lib so the HttpHandler/UdsAdmin implementations are met
-target_link_libraries(test_kallisto_server PRIVATE kallisto_server_lib kallisto_lib GTest::gtest GTest::gtest_main pthread)
+target_link_libraries(test_kallisto_server PRIVATE ffi_adapter kallisto_server_lib kallisto_lib GTest::gtest GTest::gtest_main pthread)
 add_test(NAME KallistoServerTest COMMAND test_kallisto_server)
 
 # ===========================================================================
@@ -273,13 +282,13 @@ target_link_libraries(repro_crash kallisto_lib)
 # ===========================================================================
 find_package(simdjson CONFIG)
 
-# Server library
+# Server library (links FFI adapter + Rust bridge to break circular dependency)
 add_library(kallisto_server_lib
     src/net/listener.cpp
     src/server/http_handler.cpp
     src/server/sys_handler.cpp
 )
-target_link_libraries(kallisto_server_lib PUBLIC kallisto_lib)
+target_link_libraries(kallisto_server_lib PUBLIC kallisto_lib ffi_bridge_cpp ffi_bridge)
 
 if(ENABLE_COVERAGE)
     target_compile_options(kallisto_server_lib PUBLIC --coverage -O0 -g)
@@ -297,13 +306,13 @@ endif()
 
 # Server executable
 add_executable(kallisto_server src/kallisto_server.cpp)
-target_link_libraries(kallisto_server kallisto_server_lib)
+target_link_libraries(kallisto_server ffi_adapter kallisto_server_lib)
 # Server tests link
 target_link_libraries(test_listener kallisto_server_lib)
 
-# Test Rust FFI
+# Test Rust FFI (needs ffi_bridge_cpp for headers + ffi_bridge for Rust symbols)
 add_executable(test_rust_ffi src/test_rust_ffi.cpp)
-target_link_libraries(test_rust_ffi PRIVATE kallisto_lib)
+target_link_libraries(test_rust_ffi PRIVATE ffi_adapter kallisto_lib ffi_bridge_cpp ffi_bridge)
 add_test(NAME RustFFITest COMMAND test_rust_ffi)
 
 # ===========================================================================
