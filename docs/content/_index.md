@@ -31,31 +31,31 @@ layout: hextra-home
   {{< hextra/feature-card
     title="Data runtime engine by C++"
     subtitle="Lock-free, scale-per-cores, armored 2ms response latency."
-    style="--card-accent-color: #2563eb;"
+    style="--card-accent-color: #B91C1C;"
   >}}
   {{< hextra/feature-card
     title="Control runtime server by Rust"
     subtitle="Rust control plane server with async configuration on-the-fly."
-    style="--card-accent-color: #7c3aed;"
+    style="--card-accent-color: #9F1239;"
   >}}
   {{< hextra/feature-card
     title="A Universal Data Plane for Roots of Trust"
     subtitle="Envelope Encryption KEK and upstream controlled by HashiCorp Vault/OpenBao/Infisical, ..."
-    style="--card-accent-color: #059669;"
+    style="--card-accent-color: #7E22CE;"
   >}}
   {{< hextra/feature-card
     title="Hot-cache High Performance"
     subtitle="Sharded Cuckoo Table lock-free data structure to enhance read/write performance up to 91,000+ RPS per core with microsecond latency."
-    style="--card-accent-color: #d97706;"
+    style="--card-accent-color: #C2410C;"
   >}}
   {{< hextra/feature-card
     title="Standardized AES-256-GCM Encryption"
     subtitle="Secrets are encrypted using AES-256-GCM with hardware acceleration (AES-NI) for maximum security and performance."
-    style="--card-accent-color: #dc2626;"
+    style="--card-accent-color: #881337;"
   >}}
   {{< hextra/feature-card
     title="Gossip & Clustering Protocol"
     subtitle="Automatic node discovery, masterless cluster using Rust `foca` library."
-    style="--card-accent-color: #0891b2;"
+    style="--card-accent-color: #0F766E;"
   >}}
 {{< /hextra/feature-grid >}}
