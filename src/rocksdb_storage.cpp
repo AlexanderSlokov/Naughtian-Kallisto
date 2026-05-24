@@ -1,3 +1,4 @@
+// #[PerformanceCriticalPath]
 #include "kallisto/rocksdb_storage.hpp"
 #include "kallisto/logger.hpp"
 

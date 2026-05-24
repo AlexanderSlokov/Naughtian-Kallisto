@@ -1,3 +1,4 @@
+// #[PerformanceCriticalPath]
 #include "kallisto/engine/kv_engine.hpp"
 #include "kallisto/rocksdb_storage.hpp"
 #include <chrono>

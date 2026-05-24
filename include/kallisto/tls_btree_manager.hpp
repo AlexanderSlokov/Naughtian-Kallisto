@@ -1,3 +1,4 @@
+// #[PerformanceCriticalPath]
 #pragma once
 
 #include "kallisto/btree_index.hpp"
