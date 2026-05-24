@@ -12,7 +12,7 @@ weight: 40
 ## Mục Lục
 
 1. [Phán Quyết](#1-phán-quyết)
-2. [Chi Phí Vtable: Toán Học Không Nói Dối](#2-chi-phí-vtable)
+2. [Chi Phí Vtable: Toán Học Không Nói Dối](#-2-Chi-Phí-Vtable-:-Toán-Học-Không-Nói-Dối)
 3. [FFI Overhead: Cái Giá Thực Sự Của Rust](#3-ffi-overhead)
 4. [Benchmark Forensics: Giải Phẫu Số Liệu](#4-benchmark-forensics)
 5. [Hexagonal vs Monolith: Kiến Trúc Có Đáng Không?](#5-hexagonal-vs-monolith)
@@ -24,19 +24,19 @@ weight: 40
 
 ---
 
-# 1. Phán Quyết
+## 1. Phán Quyết
 
 > **Phán quyết: Bạn KHÔNG bị ngáo đá. Nhưng bạn đang đi trên lưỡi dao — và đang giữ thăng bằng khá tốt.**
 
 Kallisto đang thực hiện một canh bạc kiến trúc có tính toán: đánh đổi raw throughput lấy **tail latency dominance** và **security-by-construction**. Bài phân tích này sẽ chứng minh bằng toán học rằng:
 
-| Quyết định | Verdict | Lý do |
-|---|---|---|
-| Hexagonal + vtable | ✅ **Đúng** | Chi phí vtable ≈ 0.3% tổng latency. `final` cho phép devirtualization. |
-| Rust FFI (Control Plane) | ✅ **Đúng** | FFI chỉ trên coldpath. Hotpath 100% C++. Chi phí ≈ 0 trên data plane. |
-| 25% Read perf loss | ⚠️ **Xác nhận — Abstraction Tax** | Đo trên cùng devcontainer: pre-hex 160k → post-hex 126k GET. Nguồn gốc: DTO copies + layer depth. |
-| Write cap 212k | ✅ **Chấp nhận được** | Giới hạn của RocksDB WAL, không phải kiến trúc. Domain là read-heavy. |
-| Beat DragonflyDB p99 | ✅ **Thật, có điều kiện** | Thắng nhờ write-behind + in-memory cache. |
+| Quyết định               | Verdict                           | Lý do                                                                                             |
+|--------------------------|-----------------------------------|---------------------------------------------------------------------------------------------------|
+| Hexagonal + vtable       | ✅ **Đúng**                        | Chi phí vtable ≈ 0.3% tổng latency. `final` cho phép devirtualization.                            |
+| Rust FFI (Control Plane) | ✅ **Đúng**                        | FFI chỉ trên coldpath. Hotpath 100% C++. Chi phí ≈ 0 trên data plane.                             |
+| 25% Read perf loss       | ⚠️ **Xác nhận — Abstraction Tax** | Đo trên cùng devcontainer: pre-hex 160k → post-hex 126k GET. Nguồn gốc: DTO copies + layer depth. |
+| Write cap 212k           | ✅ **Chấp nhận được**              | Giới hạn của RocksDB WAL, không phải kiến trúc. Domain là read-heavy.                             |
+| Beat DragonflyDB p99     | ✅ **Thật, có điều kiện**          | Thắng nhờ write-behind + in-memory cache.                                                         |
 
 ---
 
@@ -146,13 +146,13 @@ Một `cxx` FFI call bao gồm:
 
 ### 3.3 So Sánh: FFI vs Alternatives
 
-| Phương pháp | Overhead per call | Ghi chú |
-|---|---|---|
-| `cxx` FFI (Kallisto) | 5–35 ns | Type-safe, no UB |
-| `extern "C"` raw | 2–10 ns | Manual, dễ UB |
-| gRPC localhost | 50,000–100,000 ns | Network stack overhead |
-| Shared memory | 100–500 ns | Sync primitives |
-| Pure C++ (no Rust) | 0 ns | Mất memory safety guarantees |
+| Phương pháp          | Overhead per call | Ghi chú                      |
+|----------------------|-------------------|------------------------------|
+| `cxx` FFI (Kallisto) | 5–35 ns           | Type-safe, no UB             |
+| `extern "C"` raw     | 2–10 ns           | Manual, dễ UB                |
+| gRPC localhost       | 50,000–100,000 ns | Network stack overhead       |
+| Shared memory        | 100–500 ns        | Sync primitives              |
+| Pure C++ (no Rust)   | 0 ns              | Mất memory safety guarantees |
 
 > **Kết luận §3:** FFI overhead trên hotpath là **≈ 1.8%** (chỉ khi audit logging bật). Trên data plane thuần (GET/PUT không audit), overhead từ Rust là **chính xác 0 ns** — vì Rust không tham gia.
 
@@ -167,11 +167,11 @@ Một `cxx` FFI call bao gồm:
 
 Đo trên **cùng một devcontainer** (Ubuntu bare-metal, 4 cores, 2 workers/2 threads):
 
-| Metric | Pre-Hexagonal (monolith) | Post-Hexagonal (hiện tại) | Δ Performance |
-|---|---|---|---|
-| **GET RPS** | ~160,000 | 126,469 | **−21% (≈ −25%)** |
-| **PUT RPS** | ~120,000 | 91,879 | **−23% (≈ −25%)** |
-| **MIXED 95/5** | ~135,000 (ước tính) | 103,823 | **−23% (≈ −25%)** |
+| Metric         | Pre-Hexagonal (monolith) | Post-Hexagonal (hiện tại) | Δ Performance     |
+|----------------|--------------------------|---------------------------|-------------------|
+| **GET RPS**    | ~160,000                 | 126,469                   | **−21% (≈ −25%)** |
+| **PUT RPS**    | ~120,000                 | 91,879                    | **−23% (≈ −25%)** |
+| **MIXED 95/5** | ~135,000 (ước tính)      | 103,823                   | **−23% (≈ −25%)** |
 
 ### 4.2 Xác Nhận Con Số 25%
 
@@ -304,15 +304,15 @@ Nghi phạm #5: LockFreeQueue infrastructure (even for reads)
 ### 5.1 Ma trận Lợi và Hại
 
 
-| Tiêu chí | Monolith | Hexagonal (Kallisto) |
-| :--- | :--- | :--- |
-| **Hiệu năng** | 100% nguyên bản | ~75% (phí trừu tượng động ~25%) |
-| **Khả năng mở rộng** | Cực kỳ khó | Dễ dàng,Plug-in engines qua `ISecretEngine` |
-| **Khả năng test** | Integration-only | Unit test độc lập từng engine với GMock |
-| **Thêm engine mới** | Major refactor | `mount("transit", new TransitEngine)` |
-| **Thay đổi bộ nhớ đệm** | Viết lại từ đầu | Swap adapter, giữ nguyên interface |
-| **Rust Integration** | FFI calls kiểu Mỳ Ý | lớp anti-corruption sạch sẽ |
-| **Team Scaling** | Nghẽn cổ chai kiến thức tại 1 người | Dev team độc lập theo từng engine |
+| Tiêu chí                | Monolith                            | Hexagonal (Kallisto)                        |
+|:------------------------|:------------------------------------|:--------------------------------------------|
+| **Hiệu năng**           | 100% nguyên bản                     | ~75% (phí trừu tượng động ~25%)             |
+| **Khả năng mở rộng**    | Cực kỳ khó                          | Dễ dàng,Plug-in engines qua `ISecretEngine` |
+| **Khả năng test**       | Integration-only                    | Unit test độc lập từng engine với GMock     |
+| **Thêm engine mới**     | Major refactor                      | `mount("transit", new TransitEngine)`       |
+| **Thay đổi bộ nhớ đệm** | Viết lại từ đầu                     | Swap adapter, giữ nguyên interface          |
+| **Rust Integration**    | FFI calls kiểu Mỳ Ý                 | lớp anti-corruption sạch sẽ                 |
+| **Team Scaling**        | Nghẽn cổ chai kiến thức tại 1 người | Dev team độc lập theo từng engine           |
 
 
 ### 5.2 Giá trị thực của Hexagonal
@@ -363,15 +363,15 @@ Risk reduction = immeasurable (nhưng rất lớn)
 
 Hãy trung thực đánh giá tính công bằng của benchmark:
 
-| Yếu tố | Kallisto | DragonflyDB | Công bằng không? |
-|---|---|---|---|
-| Protocol | HTTP/1.1 + JSON | Redis RESP | ⚠️ RESP nhẹ hơn |
-| Benchmark tool | wrk (HTTP) | memtier (Redis) | ⚠️ Khác tool |
-| Connections | 200 | 100 (×2 threads) | ≈ Tương đương |
-| Data size | Variable JSON | 256 bytes fixed | ⚠️ Khác payload |
-| Persistence | RocksDB WAL async | Snapshot mỗi phút | ⚠️ Khác durability model |
-| Read/Write ratio | 95/5 | 10:1 (≈91/9) | ⚠️ Kallisto ít write hơn |
-| CPU | 2 cores | 2 cores | ✅ Fair |
+| Yếu tố           | Kallisto          | DragonflyDB       | Công bằng không?         |
+|------------------|-------------------|-------------------|--------------------------|
+| Protocol         | HTTP/1.1 + JSON   | Redis RESP        | ⚠️ RESP nhẹ hơn          |
+| Benchmark tool   | wrk (HTTP)        | memtier (Redis)   | ⚠️ Khác tool             |
+| Connections      | 200               | 100 (×2 threads)  | ≈ Tương đương            |
+| Data size        | Variable JSON     | 256 bytes fixed   | ⚠️ Khác payload          |
+| Persistence      | RocksDB WAL async | Snapshot mỗi phút | ⚠️ Khác durability model |
+| Read/Write ratio | 95/5              | 10:1 (≈91/9)      | ⚠️ Kallisto ít write hơn |
+| CPU              | 2 cores           | 2 cores           | ✅ Fair                   |
 
 ### 6.2 Normalization Analysis
 
@@ -499,14 +499,14 @@ Required_write_RPS > 212,000
 
 ### 7.4 So Sánh Với Đối Thủ
 
-| System | Max Write RPS (persisted) | Protocol |
-|---|---|---|
-| HashiCorp Vault | ~500–2,000 | HTTP |
-| OpenBao | ~500–2,000 | HTTP |
-| Kallisto (IMMEDIATE) | ~212,000 | HTTP |
-| Kallisto (BATCH) | ~632,000 | HTTP |
-| Redis (AOF fsync=always) | ~30,000–80,000 | RESP |
-| DragonflyDB (snapshot/min) | ~200,000+ | RESP |
+| System                     | Max Write RPS (persisted) | Protocol |
+|----------------------------|---------------------------|----------|
+| HashiCorp Vault            | ~500–2,000                | HTTP     |
+| OpenBao                    | ~500–2,000                | HTTP     |
+| Kallisto (IMMEDIATE)       | ~212,000                  | HTTP     |
+| Kallisto (BATCH)           | ~632,000                  | HTTP     |
+| Redis (AOF fsync=always)   | ~30,000–80,000            | RESP     |
+| DragonflyDB (snapshot/min) | ~200,000+                 | RESP     |
 
 
 Kallisto vs Vault trên hiệu năng ghi:
@@ -550,16 +550,16 @@ class KvEngine final : public ISecretEngine { /* ... */ };
 ### 8.2 So Sánh Chi Phí
 
 
-| Tiêu chí | TEMPLATE/CRTP | VIRTUAL + final |
-|-----------|:-----------:|:-----------:|
-| Dispatch cost 	| 0 ns (inline) 		| 0–8 ns (devirt possible)|
-| Compile time | LONGER (template inst) | SHORTER |
-| Binary size | LARGER (code bloat) | SMALLER |
-| EngineRegistry possible? | ❌ Không (type-erased) | ✅ Có |
-| Runtime engine swap? | ❌ Không | ✅ Có |
-| GMock testable? | ❌ Rất khó | ✅ Dễ dàng |
-| Error messages: | 🤮 Template vomit | ✅ Clear |
-| Code readability: | ⚠️ Complex | ✅ Straightforward |
+| Tiêu chí                 |     TEMPLATE/CRTP      |     VIRTUAL + final      |
+|--------------------------|:----------------------:|:------------------------:|
+| Dispatch cost 	          |    0 ns (inline) 		    | 0–8 ns (devirt possible) |
+| Compile time             | LONGER (template inst) |         SHORTER          |
+| Binary size              |  LARGER (code bloat)   |         SMALLER          |
+| EngineRegistry possible? | ❌ Không (type-erased)  |           ✅ Có           |
+| Runtime engine swap?     |        ❌ Không         |           ✅ Có           |
+| GMock testable?          |       ❌ Rất khó        |        ✅ Dễ dàng         |
+| Error messages:          |   🤮 Template vomit    |         ✅ Clear          |
+| Code readability:        |       ⚠️ Complex       |    ✅ Straightforward     |
 
 
 ### 8.3 The EngineRegistry Problem
@@ -689,13 +689,13 @@ Con đường Kallisto (Core-Armor Pattern):
 
 ### 9.4 Quản lý rủi ro
 
-| Rủi ro | Xác suất | Ảnh hưởng | Giải pháp |
-|---|---|---|---|
-| Tăng độ phức tạp FFI | Trung bình | Trung bình | Ranh giới `ffi_bridge` nghiêm ngặt |
-| Thời gian biên dịch Rust chậm | Cao | Thấp | Sử dụng Cargo workspace caching |
-| Lỗi tương tác (bộ nhớ) | Thấp | Cao | `cxx` prevents UB by design |
-| Tuyển dụng lập trình viên (C++ & Rust) | Cao | Cao | Chấp nhận: sản phẩm niche cần nhân tài niche |
-| Tăng phí trừu tượng | Trung bình | Trung bình | Profile thường xuyên, tối ưu hóa DTOs nóng |
+| Rủi ro                                 | Xác suất   | Ảnh hưởng  | Giải pháp                                    |
+|----------------------------------------|------------|------------|----------------------------------------------|
+| Tăng độ phức tạp FFI                   | Trung bình | Trung bình | Ranh giới `ffi_bridge` nghiêm ngặt           |
+| Thời gian biên dịch Rust chậm          | Cao        | Thấp       | Sử dụng Cargo workspace caching              |
+| Lỗi tương tác (bộ nhớ)                 | Thấp       | Cao        | `cxx` prevents UB by design                  |
+| Tuyển dụng lập trình viên (C++ & Rust) | Cao        | Cao        | Chấp nhận: sản phẩm niche cần nhân tài niche |
+| Tăng phí trừu tượng                    | Trung bình | Trung bình | Profile thường xuyên, tối ưu hóa DTOs nóng   |
 
 > **Kết luận §9:** Tích hợp Rust của Kallisto tuân theo **Core-Armor pattern**, không phải là "Rewrite in Rust" anti-pattern. C++ giữ quyền kiểm soát tuyệt đối trên data plane. Rust chỉ đảm nhiệm những gì C++ không nên làm: quản lý Master Key (mlock, zeroize), Shamir's Secret Sharing, và audit logging — nơi memory safety là **yêu cầu bắt buộc**, không phải nice-to-have.
 
@@ -705,7 +705,7 @@ Con đường Kallisto (Core-Armor Pattern):
 
 ### 10.1 Phán Quyết Tổng Thể
 
-```markdown
+```
 ╔══════════════════════════════════════════════════════════════════╗
 ║                                                                  ║
 ║   Bạn đang thực hiện một chiến lược kiến trúc có kỷ luật,        ║
@@ -717,18 +717,18 @@ Con đường Kallisto (Core-Armor Pattern):
 
 ### 10.2 Tổng Kết Bằng Số
 
-| Metric | Con số | Verdict |
-|---|---|---|
-| Vtable overhead | 0.42% of latency | ✅ Negligible |
-| FFI overhead (hotpath) | 0% (coldpath only) | ✅ Zero impact |
-| FFI overhead (with audit) | 1.8% | ✅ Acceptable |
-| Abstraction tax (hexagonal) | ~25% throughput (confirmed) | ⚠️ Conscious trade-off |
-| Write ceiling vs domain need | 50,476x headroom | ✅ Massive overkill |
-| Kallisto vs Vault writes | 141x faster | ✅ Dominant |
-| Kallisto vs Dragonfly p99 | 41% better | ✅ Real win |
-| Template vs virtual gain | 0.42% (+4,531 RPS) | ❌ Not worth the cost |
-| Durability vs DragonflyDB | 12,000x better | ✅ Business differentiator |
-| Dev velocity (hexagonal) | 3.7x faster feature add | ✅ Strategic advantage |
+| Metric                       | Con số                      | Verdict                   |
+|------------------------------|-----------------------------|---------------------------|
+| Vtable overhead              | 0.42% of latency            | ✅ Negligible              |
+| FFI overhead (hotpath)       | 0% (coldpath only)          | ✅ Zero impact             |
+| FFI overhead (with audit)    | 1.8%                        | ✅ Acceptable              |
+| Abstraction tax (hexagonal)  | ~25% throughput (confirmed) | ⚠️ Conscious trade-off    |
+| Write ceiling vs domain need | 50,476x headroom            | ✅ Massive overkill        |
+| Kallisto vs Vault writes     | 141x faster                 | ✅ Dominant                |
+| Kallisto vs Dragonfly p99    | 41% better                  | ✅ Real win                |
+| Template vs virtual gain     | 0.42% (+4,531 RPS)          | ❌ Not worth the cost      |
+| Durability vs DragonflyDB    | 12,000x better              | ✅ Business differentiator |
+| Dev velocity (hexagonal)     | 3.7x faster feature add     | ✅ Strategic advantage     |
 
 ### 10.3 Khuyến Nghị Tối Ưu Hóa
 
