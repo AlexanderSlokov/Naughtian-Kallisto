@@ -32,6 +32,7 @@
 *.app
 *.log
 /build
+/target
 /vcpkg_installed
 ghz-web
 /.idea
