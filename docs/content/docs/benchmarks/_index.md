@@ -1,7 +1,7 @@
 ---
 title: "Benchmarks & Performance Reports"
 linkTitle: "Benchmarks"
-weight: 30
+weight: 10
 ---
 
 # 🚀 Performance Reports (Benchmarks)

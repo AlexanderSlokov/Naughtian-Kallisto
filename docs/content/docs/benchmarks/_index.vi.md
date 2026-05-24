@@ -1,7 +1,7 @@
 ---
 title: "Benchmarks & Báo cáo hiệu năng"
 linkTitle: "Benchmarks"
-weight: 30
+weight: 10
 ---
 
 # 🚀 Báo cáo hiệu năng (Benchmarks)
