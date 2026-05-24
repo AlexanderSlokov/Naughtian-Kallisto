@@ -1,14 +1,11 @@
 ---
-title: "Lộ trình phát triển & TODO"
+title: "Kallisto Project Roadmap & History"
 weight: 10
 ---
 
-# Kallisto Project TODO & History
-
-## 🚀 ROADMAP & PENDING TASKS
+## Roadmap & Pending Tasks
 
 ### P1 — Chuẩn hóa Vault/OpenBao API
-> *Engine đã có rồi thì phải nói cùng ngôn ngữ với Vault. Đây là bước để client tools (CLI, Terraform) tương thích.*
 
 - [ ] **Vault KV v2 API Compliance**:
   - Chuẩn hóa response JSON format theo OpenBao/Vault spec:

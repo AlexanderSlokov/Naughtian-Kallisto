@@ -1,0 +1,132 @@
+/* ==========================================================================
+   Kallisto Docs — Crimson Deity Theme
+   
+   Brand palette derived from the Kallisto logo (crimson/scarlet).
+   Lore: Kallisto is a blasphemous fallen deity — dark, powerful, forbidden.
+   Contrast: Vault = gold (order, light) vs Kallisto = crimson (chaos, power).
+   ========================================================================== */
+
+/* --- Design Tokens --- */
+:root {
+  /* Primary Crimson palette */
+  --k-crimson:        #B91C1C;
+  --k-crimson-light:  #DC2626;
+  --k-crimson-dark:   #991B1B;
+  --k-crimson-muted:  #7F1D1D;
+  --k-rose-text:      #FECACA;
+
+  /* Card surface */
+  --k-card-bg:        #161b22;
+  --k-card-border:    rgba(255, 255, 255, 0.08);
+  --k-card-border-hover: rgba(255, 255, 255, 0.16);
+
+  /* Deity palette — for card accent stripes */
+  --k-blood:          #B91C1C;  /* core crimson */
+  --k-dark-rose:      #9F1239;  /* deep rose */
+  --k-occult:         #7E22CE;  /* cosmic purple */
+  --k-ember:          #C2410C;  /* ritual fire */
+  --k-ritual:         #881337;  /* dark blood */
+  --k-eye:            #0F766E;  /* the deity's eye — otherworldly teal */
+}
+
+/* ==========================================================================
+   Feature Grid
+   ========================================================================== */
+
+.hextra-feature-grid {
+  gap: 16px !important;
+}
+
+/* ==========================================================================
+   Feature Card — HashiCorp Developer-style, Crimson accent
+   ========================================================================== */
+
+.hextra-feature-card {
+  border-radius: 8px !important;
+  border: 1px solid var(--k-card-border) !important;
+  background: var(--k-card-bg) !important;
+  padding: 0 !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+/* Remove Hextra's default glass gradient overlay */
+.hextra-feature-card::before {
+  display: none !important;
+}
+
+/* Hover state */
+.hextra-feature-card:hover {
+  border-color: var(--k-card-border-hover) !important;
+  box-shadow: 0 2px 16px rgba(185, 28, 28, 0.12);
+}
+
+/* Left accent stripe */
+.hextra-feature-card::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 8px 0 0 8px;
+  background: var(--card-accent-color, var(--k-crimson));
+}
+
+/* --- Inner content --- */
+.hextra-feature-card > div {
+  padding: 20px 24px !important;
+}
+
+/* Title */
+.hextra-feature-card h3 {
+  font-size: 0.9375rem !important;   /* 15px */
+  font-weight: 700 !important;
+  line-height: 1.4 !important;
+  margin-bottom: 8px !important;
+  color: #e6edf3 !important;
+  letter-spacing: -0.01em;
+}
+
+/* Subtitle / description */
+.hextra-feature-card p {
+  font-size: 0.8125rem !important;   /* 13px */
+  line-height: 1.5 !important;
+  color: #8b949e !important;
+  margin: 0 !important;
+}
+
+/* ==========================================================================
+   Auto-assigned accent colors (fallback when no inline --card-accent-color)
+   Cycles through the deity palette.
+   ========================================================================== */
+
+.hextra-feature-card:nth-child(6n+1) { --card-accent-color: var(--k-blood); }
+.hextra-feature-card:nth-child(6n+2) { --card-accent-color: var(--k-dark-rose); }
+.hextra-feature-card:nth-child(6n+3) { --card-accent-color: var(--k-occult); }
+.hextra-feature-card:nth-child(6n+4) { --card-accent-color: var(--k-ember); }
+.hextra-feature-card:nth-child(6n+5) { --card-accent-color: var(--k-ritual); }
+.hextra-feature-card:nth-child(6n+6) { --card-accent-color: var(--k-eye); }
+
+/* ==========================================================================
+   Light mode adjustments
+   ========================================================================== */
+
+html:not(.dark) .hextra-feature-card {
+  background: #fef2f2 !important;
+  border-color: rgba(185, 28, 28, 0.12) !important;
+}
+
+html:not(.dark) .hextra-feature-card:hover {
+  border-color: rgba(185, 28, 28, 0.25) !important;
+  box-shadow: 0 2px 12px rgba(185, 28, 28, 0.08);
+}
+
+html:not(.dark) .hextra-feature-card h3 {
+  color: #1f2328 !important;
+}
+
+html:not(.dark) .hextra-feature-card p {
+  color: #656d76 !important;
+}

@@ -1,9 +1,7 @@
 ---
-title: "Hiệu năng vượt trội"
+title: "Serving High-Rate-Access KV Secrets"
 weight: 1
 ---
-
-# Hiệu năng vượt trội (Performance) ⚡
 
 Kallisto sử dụng cơ chế **Write-Behind (Ghi đệm hoãn lại)** để ngắt kết nối trực tiếp giữa luồng xử lý chính của HTTP Epoll Worker và luồng ghi ổ đĩa chậm của RocksDB.
 

@@ -1,8 +1,17 @@
 # Configuration for Kallisto Technical Documentation (Hextra Theme)
 baseURL: "/"
 title: "Kallisto Docs"
-languageCode: "vi-vn"
-defaultContentLanguage: "vi"
+defaultContentLanguage: "en"
+
+languages:
+  en:
+    languageName: English
+    languageCode: en-us
+    weight: 1
+  vi:
+    languageName: Tiếng Việt
+    languageCode: vi-vn
+    weight: 2
 
 enableRobotsTXT: true
 enableGitInfo: false
@@ -24,15 +33,15 @@ markup:
 
 menu:
   main:
-    - name: "Tài liệu"
+    - name: "Docs"
       identifier: docs
       pageRef: /docs
       weight: 1
-    - name: "Lộ trình & TODO"
+    - name: "Roadmap & TODO"
       identifier: roadmap
       pageRef: /docs/roadmap-todo
       weight: 2
-    - name: "Kiến trúc (Whitepaper)"
+    - name: "Whitepaper"
       identifier: whitepaper
       pageRef: /docs/architecture-whitepaper
       weight: 3
@@ -43,10 +52,10 @@ menu:
         icon: github
 
 params:
-  description: "Tài liệu kỹ thuật và thiết kế hệ thống Kallisto - High-Performance Hybrid Secret Engine"
+  description: "Technical documentation and system design of Naughtian Kallisto - High-Performance Hybrid Secret Engine"
   author:
     name: "Alexander Slokov / Naughtian Labs"
-    email: "stella@naughtianlabs.io"
+    email: "aleksandr@naughtianlabs.io"
 
   navbar:
     displayTitle: true

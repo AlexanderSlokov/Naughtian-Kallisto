@@ -6,15 +6,13 @@
   <img src="https://img.shields.io/badge/License-AGPLv3-red.svg?style=for-the-badge" alt="License">
 </p>
 
-Fast like Redis. API requests? Just like Vault.
-
-Sounds like it uses RocksDB? Hell yes! And architecturally, it's the lovely daughter of Envoy Proxy!
+*Fast like Redis. API requests? Just like Vault. Sounds like it uses RocksDB? Hell yes! And architecturally, it's the lovely daughter of Envoy Proxy.*
 
 <p align="center">
   <img src="docs/kallisto_logo.webp" alt="Kallisto Logo" width="300">
 </p>
 
-Kallisto is a High-Performance Operational Secret Engine built with C++20. It provides a secure and efficient way to store and retrieve secrets with a focus on performance and scalability.
+Kallisto is a High-Performance Operational Secret Engine built with C++20 and Rust FFI. It provides a secure and efficient way to store and retrieve operational secrets with a focus on performance and scalability.
 
 # IMPORTANT NOTICES
 
