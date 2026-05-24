@@ -1,0 +1,99 @@
+/* ==========================================================================
+   Overrides Hextra's default feature-card styling to achieve the compact,
+   dark-bordered card design.
+   ========================================================================== */
+
+/* --- Grid: 3 columns on desktop by default --- */
+.hextra-feature-grid {
+  gap: 16px !important;
+}
+
+/* --- Feature Card --- */
+.hextra-feature-card {
+  border-radius: 8px !important;
+  border: 1px solid rgba(255, 255, 255, 0.08) !important;
+  background: #161b22 !important;
+  padding: 0 !important;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  position: relative;
+  overflow: hidden;
+}
+
+.hextra-feature-card::before {
+  /* Remove Hextra's default glass gradient overlay */
+  display: none !important;
+}
+
+.hextra-feature-card:hover {
+  border-color: rgba(255, 255, 255, 0.16) !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* Left accent stripe */
+.hextra-feature-card::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 8px 0 0 8px;
+  background: var(--card-accent-color, #2563eb);
+}
+
+/* --- Inner content --- */
+.hextra-feature-card > div {
+  padding: 20px 24px !important;
+}
+
+/* Title */
+.hextra-feature-card h3 {
+  font-size: 0.9375rem !important;  /* 15px */
+  font-weight: 700 !important;
+  line-height: 1.4 !important;
+  margin-bottom: 8px !important;
+  color: #e6edf3 !important;
+  letter-spacing: -0.01em;
+}
+
+/* Subtitle / description */
+.hextra-feature-card p {
+  font-size: 0.8125rem !important;  /* 13px */
+  line-height: 1.5 !important;
+  color: #8b949e !important;
+  margin: 0 !important;
+}
+
+/* ==========================================================================
+   Per-card accent colors (via inline style CSS variables)
+   Usage in markdown:
+     style="--card-accent-color: #7c3aed;"
+   ========================================================================== */
+
+/* Fallback accent colors when no CSS variable is set —
+   We use nth-child to give each card a different color automatically */
+.hextra-feature-card:nth-child(6n+1) { --card-accent-color: #2563eb; }  /* blue */
+.hextra-feature-card:nth-child(6n+2) { --card-accent-color: #7c3aed; }  /* purple */
+.hextra-feature-card:nth-child(6n+3) { --card-accent-color: #059669; }  /* emerald */
+.hextra-feature-card:nth-child(6n+4) { --card-accent-color: #d97706; }  /* amber */
+.hextra-feature-card:nth-child(6n+5) { --card-accent-color: #dc2626; }  /* red */
+.hextra-feature-card:nth-child(6n+6) { --card-accent-color: #0891b2; }  /* cyan */
+
+/* --- Light mode adjustments --- */
+html:not(.dark) .hextra-feature-card {
+  background: #f6f8fa !important;
+  border-color: rgba(0, 0, 0, 0.1) !important;
+}
+
+html:not(.dark) .hextra-feature-card:hover {
+  border-color: rgba(0, 0, 0, 0.2) !important;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+}
+
+html:not(.dark) .hextra-feature-card h3 {
+  color: #1f2328 !important;
+}
+
+html:not(.dark) .hextra-feature-card p {
+  color: #656d76 !important;
+}

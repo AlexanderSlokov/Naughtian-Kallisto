@@ -1,16 +1,21 @@
 ---
-title: "Tại sao nên dùng Kallisto?"
+title: "Why use Naughtian Kallisto?"
 weight: 2
 ---
 
-# Tại sao chọn Naughtian Kallisto? 🎯
+### Use Cases
 
-Kallisto sinh ra để giải quyết bài toán hiệu năng lưu trữ và bảo mật dữ liệu ở cấp độ doanh nghiệp lớn. Dưới đây là các lý do cốt lõi:
-
-*   **Hiệu năng Hot-cache cực đỉnh**: Khả năng phản hồi truy vấn dưới 1 microsecond thông qua Sharded Cuckoo Table.
-*   **Bảo mật Memory-safe**: Lớp bảo vệ chống Cold Boot Attack của Rust xóa sạch dữ liệu KEK khỏi RAM ngay sau khi giải phóng (`zeroize` on drop).
-*   **Chiến lược Strangler Fig**: Chuyển đổi mềm mại hệ thống cũ sang kiến trúc lục giác (Hexagonal Architecture) mà không làm gián đoạn API của ứng dụng khách.
-
-Xem các ưu điểm chi tiết:
-*   [Hiệu năng vượt trội (Performance)](performance/)
-*   [Bảo mật tuyệt đối (Security)](security/)
+{{< hextra/feature-grid >}}
+  {{< hextra/feature-card
+    title="Serving high-rate-access KV secrets"
+    subtitle="Serves KV secrets with high-performance and low-latency. Policies are managed arbitrarily by Secret Control Planes."
+    link="serving-high-rate-access-kv-secrets/"
+    style="--card-accent-color: #2563eb;"
+  >}}
+  {{< hextra/feature-card
+    title="Distributing mTLS certificates and keys"
+    subtitle="Distributes mTLS certificates and keys for micro-services. Policies are managed arbitrarily by Secret Control Planes."
+    link="distributing-mtls-certificates-and-keys/"
+    style="--card-accent-color: #7c3aed;"
+  >}}
+{{< /hextra/feature-grid >}}
