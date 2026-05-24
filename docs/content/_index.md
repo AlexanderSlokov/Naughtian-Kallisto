@@ -1,11 +1,11 @@
 ---
-title: "Kallisto - High Performance Hybrid Secret Engine"
+title: "Naughtian Kallisto - High Performance Hybrid Secret Engine"
 layout: hextra-home
 ---
 
 {{< hextra/hero-badge >}}
   <div class="hx:w-2 hx:h-2 hx:rounded-full hx:bg-primary-400"></div>
-  <span>OSS Project</span>
+  <span>Learn more about Naughtian Kallisto's Features</span>
   {{< icon name="arrow-circle-right" attributes="height=14" >}}
 {{< /hextra/hero-badge >}}
 
@@ -17,12 +17,12 @@ layout: hextra-home
 
 <div class="hx:mb-12">
 {{< hextra/hero-subtitle >}}
-  Hệ thống quản lý thông tin mật Hybrid kết hợp hiệu năng vượt trội của C++<br class="hx:sm:block hx:hidden" />và lớp vỏ bảo mật an toàn bộ nhớ của Rust.
+  Securely store and distribute operational secrets for critical secret management systems using CLI, TUI or HTTP API.
 {{< /hextra/hero-subtitle >}}
 </div>
 
 <div class="hx:mb-6">
-{{< hextra/hero-button text="Bắt Đầu" link="docs" >}}
+{{< hextra/hero-button text="Getting Started" link="docs" >}}
 </div>
 
 <div class="hx:mt-12"></div>
@@ -39,13 +39,18 @@ layout: hextra-home
     style="background: radial-gradient(ellipse at 50% 80%,rgba(221,210,59,0.15),hsla(0,0%,100%,0));"
   >}}
   {{< hextra/feature-card
-    title="Data Plane for Roots of Trust"
+    title="A Universal Data Plane for Roots of Trust"
     subtitle="Envelope Encryption KEK and upstream controlled by HashiCorp Vault/OpenBao/Infisical, ..."
     style="background: radial-gradient(ellipse at 50% 80%,rgba(142,53,74,0.15),hsla(0,0%,100%,0));"
   >}}
   {{< hextra/feature-card
     title="Hot-cache High Performance"
     subtitle="Sharded Cuckoo Table lock-free data structure to enhance read/write performance up to 91,000+ RPS per core with microsecond latency."
+    style="background: radial-gradient(ellipse at 50% 80%,rgba(142,142,74,0.15),hsla(0,0%,100%,0));"
+  >}}
+  {{< hextra/feature-card
+    title="Standardized Encryption with Hardware Acceleration"
+    subtitle="Secrets are encrypted using AES-256-GCM with hardware acceleration (AES-NI) for maximum security and performance."
     style="background: radial-gradient(ellipse at 50% 80%,rgba(142,142,74,0.15),hsla(0,0%,100%,0));"
   >}}
   {{< hextra/feature-card

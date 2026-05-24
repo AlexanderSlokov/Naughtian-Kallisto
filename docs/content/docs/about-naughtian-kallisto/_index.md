@@ -3,9 +3,9 @@ title: "Giới thiệu Kallisto"
 weight: 5
 ---
 
-# Giới thiệu về Naughtian Kallisto 🛡️
+# Giới thiệu về Naughtian Kallisto
 
-Chương này mô tả chi tiết nguồn gốc, lý do thiết kế và nguyên lý hoạt động của Kallisto - hệ thống Hybrid Secret Engine hiệu năng cao.
+Chương này mô tả chi tiết nguồn gốc, lý do thiết kế và nguyên lý hoạt động của Naughtian Kallisto - hệ thống quản lý bí mật vận hành hiệu năng cao.
 
 Chọn một chủ đề dưới đây hoặc xem trực tiếp ở menu bên trái:
 

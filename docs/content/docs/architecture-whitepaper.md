@@ -11,46 +11,47 @@ This project incorporates the use of open-source software under the Apache Licen
 
 The contributions of third parties are acknowledged, and this project builds upon the foundational work provided by `hashicorp/vault`, `redis` and `envoyproxy/envoy`, with specific adaptations and extensions made to suit the research objectives. The reporter and the supervising faculty do not assume liability for any direct or indirect damages arising from the use of this project or its contents.
 
+---
+
 # I. INTRODUCTION
+
 ## 1.1. Context
 
-Managing secrets (API keys, passwords, tokens, etc.) is one of the most critical requirements of a security system. However, encrypting and storing secrets securely does not mean that the system can serve at high throughput. A classic example is when a Kubernetes cluster restarts, thousands of containers in hundreds of pods will be scheduled, spin-up, crash-loop-back-off and request secrets at the same time. Each container needs to be served secrets to start, hence making the secret management system frozen due to flooding.
+Managing secrets (API keys, passwords, tokens, etc.) is one of the most critical requirements of a security system. However, encrypting and storing secrets securely does not mean that the system can serve at high throughput. A classic example is when a Kubernetes cluster restarts, thousands of containers in hundreds of pods will be scheduled, spin-up, crash-loop-back-off and request secrets at the same time. Each container needs to be served secrets to start, making the secret management system frozen due to request flooding.
 
-What about using `Redis` and `Hashicorp Vault`? Redis is fast, and Vault is an Encrypt-as-a-service. But they have their own issues:
+`Redis` is fast, and `Hashicorp Vault` is compliance and secure. But they have their own issues:
 
-Redis can serve a large number of requests but it is not secure enough. In fact, Redis is not designed for caching secrets, it is a high performance key-value store but "flat" (which is, does not understand what is a "secret path", It just sees "/prod/db/secret" as a string.) If we try to use Redis to store secrets at path "/prod/db/secret" just like Vault does, we will have to validate the path before reading it, and Redis has to scan through everything to find the correct one. 
+Redis is not designed for caching secrets, it is a high performance key-value store but "flat" (which is, does not understand what is a "secret mount", "secret path", "secret version", etc.) Redis does not know how to validate the path before reading it, so it has to scan through everything to find the correct one. 
 
-Hashicorp Vault, on the other hand, can not withstand the load of thousands of containers requesting secrets at the same time. HashiCorp also warns that if you need High Throughput then don't throw everything into one Vault cluster, but use Performance Standby or scale horizontally, which is obviously too expensive.
+`Hashicorp Vault`, on the other hand, can not withstand thousands of requests for secrets at the same time. HashiCorp also warns that if you need High Throughput then don't throw everything into one Vault cluster, but use Performance Standby or scale horizontally, which is obviously too expensive.
+
+Why do traditional hash tables (Chain, Linear Probing) fear DoS Hash Flooding attacks? Because they are vulnerable to hash collisions, a hacker with knowledge about them can create a large number of keys to cause hash collisions. Why does the CPU consume time processing collisions? Because when there is a collision, the CPU must execute expensive resolution mechanisms: Chaining (Traverse linked list). If using a linked list, the CPU must compare the new key with each old key in the list to check for duplicates. With N colliding elements, inserting N elements will take O(N^2) total CPU time.
+
+Open Addressing (Find empty position): CPU must perform "probes" (linear or square probing) to find the next empty slot. In a flooding attack, almost every CPU slot is occupied, leading to thousands of useless comparison calculations for each request.
 
 ## 1.2. Problem Statement
 
-What does a service look like, to reach the performance speed of Redis but still keep the strict control and security of Vault? 
-
-Why do traditional hash tables (Chain, Linear Probing) fear DoS Hash Flooding attacks? Because they are vulnerable to hash collisions, a hacker with knowledge about them can create a large number of keys to cause hash collisions. Why does the CPU consume time processing collisions? Because when there is a collision, the CPU must execute expensive resolution mechanisms: Chaining (Traverse linked list). 
-
-If using a linked list, the CPU must compare the new key with each old key in the list to check for duplicates. With N colliding elements, inserting N elements will take O(N^2) total CPU time. 
-
-Open Addressing (Find empty position): CPU must perform "probes" (linear or square probing) to find the next empty slot. In a flooding attack, almost every CPU slot is occupied, leading to thousands of useless comparison calculations for each request. 
+What does a service look like, to reach the performance speed of Redis (or reasonably close to Redis) but still keep the strict control and security behaviors of Vault?
 
 ## 1.3. Proposed Solution
 
-So, I suggest the following solution:
+The reporter suggest the following solution:
 
 **SipHash**: To make the hash function unpredictable, prevent hackers from creating collisions.
 
-**Cuckoo Hashing**: To reach O(1) worst-case for Read, prevent the Thundering Herd problem.
+**Cuckoo Hashing**: To guarantee O(1) worst-case for Read/Write, withstand a the Thundering Herd problem.
 
-**B-Tree**: To act as a "gate", remove invalid path requests with O(log N) requests before they reach the hash table.
+**B-Tree**: To validate secret path requests and serve as index before they reach the hash table.
 
 **Hybrid technical architecture**: Combine the hierarchical management of Path Validation with the speed of Cache on RAM.
 
-This code base is named "Kallisto" as a codename for documentation and recognition. 
+This project is named "Naughtian Kallisto" as a codename for documentation and recognition. 
 
 ## 1.4. Objectives
 
-1. Build a Prototype (Kallisto) to prove the feasibility of the architecture above.
+1. Build a Prototype (Naughtian Kallisto) to prove the feasibility of the architecture above.
 
-2. Perform Benchmark to compare the performance between the Safe (Strict Sync) and High Performance (Batch Mode).
+2. Perform Benchmark to compare the performance between the Safe (Strict) and High Performance (Batch) modes.
 
 ---
 
@@ -59,6 +60,7 @@ This code base is named "Kallisto" as a codename for documentation and recogniti
 Based on the "Data Structures & Algorithms Final Project" rubric (Dr. Huynh Xuan Phung), this project falls under **Suggested Integrated Project #1: High-Speed Database Index**.
 
 ### 2.1. Core Research Topics Covered
+
 This project integrates 3 major concepts from the Research Pool (Days 1–11):
 
 1.  **D7: Cuckoo Hashing & O(1) Worst-case**: Implementation of the primary storage engine using `kallisto::CuckooTable` to guarantee constant-time lookups.
@@ -123,19 +125,11 @@ homes.
 
 ### 4.2.2. The Insertion Process: "Kicking Out" Strategy 
 
-It works just like the cuckoo bird's behavior (cuckoo bird's younglings kicks the host’s children out of the nest): 
-
-We have a key “x”, we try to place it in a slot on the first table. If that slot is empty, insertion is complete. 
-
-If that slot is already occupied by key “y”, key “x” "kicks out" key “y” and takes its place. 
-
-The displaced key “y” must now move to the second table using hash function h_2(y). 
-
-If y's new spot is also occupied, it evicts the incumbent key, triggering a chain reaction of displacements until a key lands in an empty slot (or a cycle is detected, triggering a rehash). 
+It works just like the cuckoo bird's behavior (cuckoo bird's younglings kicks the host’s children out of the nest): We have a key `x`, we try to place it in a slot on the first table. If that slot is empty, insertion is complete. If that slot is already occupied by key `y`, key `x` "kicks out" key `y` and takes its place. The displaced key `y` must now move to the second table using hash function `h_2(y)`. If `y`'s new spot is also occupied, it evicts the incumbent key, triggering a chain reaction of displacements until a key lands in an empty slot (or a cycle is detected, triggering a rehash). 
 
 ### 4.2.3. The Guarantee: O(1) Worst-Case Lookup 
 
-Regardless of how full the table is or how complex the insertion chain was, to find a key, the algorithm only needs to check at most two locations: T_1[h_1(x)] and T_2[h_2(x)]. Since the number of checks is constant (always 2 placed slots we calculated), the search time complexity is guaranteed to be O(1) in the worst case, eliminating the performance degradation seen in Chaining or Linear Probing.
+Regardless of how full the table is or how complex the insertion chain was, to find a key, the algorithm only needs to check at most two locations: `T_1[h_1(x)]` and `T_2[h_2(x)]`. Since the number of checks is constant (always 2 placed slots we calculated), the search time complexity is guaranteed to be **O(1)** in the worst case, eliminating the performance degradation seen in Chaining or Linear Probing.
 
 ## 4.3. B-Trees & Disk-Optimized Storage
 
