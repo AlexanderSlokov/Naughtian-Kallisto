@@ -3,9 +3,7 @@ title: "Xác thực Kiến trúc & Bảo mật"
 weight: 40
 ---
 
-# Architecture Validation: Kallisto's Hybrid C++/Rust Strategy
-
-**Tác giả phân tích:** Claude Opus 4 (Thinking)  
+**Tác giả phân tích:** Claude Opus 4.6 (Thinking)  
 **Ngày:** 17/05/2026  
 **Phạm vi:** Đánh giá chiến lược kiến trúc Hexagonal + Rust FFI + Virtual Dispatch
 
@@ -13,7 +11,7 @@ weight: 40
 
 ## Mục Lục
 
-1. [Executive Summary — Phán Quyết](#1-executive-summary)
+1. [Phán Quyết](#1-phán-quyết)
 2. [Chi Phí Vtable: Toán Học Không Nói Dối](#2-chi-phí-vtable)
 3. [FFI Overhead: Cái Giá Thực Sự Của Rust](#3-ffi-overhead)
 4. [Benchmark Forensics: Giải Phẫu Số Liệu](#4-benchmark-forensics)
@@ -26,7 +24,7 @@ weight: 40
 
 ---
 
-## 1. Executive Summary
+# 1. Phán Quyết
 
 > **Phán quyết: Bạn KHÔNG bị ngáo đá. Nhưng bạn đang đi trên lưỡi dao — và đang giữ thăng bằng khá tốt.**
 
@@ -129,21 +127,21 @@ Câu hỏi sống còn: **Rust FFI có nằm trên hotpath không?**
 Một `cxx` FFI call bao gồm:
 
 ```
-T_ffi = T_abi_transition + T_string_convert + T_function_body
+# T_ffi = T_abi_transition + T_string_convert + T_function_body
 
   T_abi_transition  ≈ 2–5 ns    (register save/restore, stack alignment)
   T_string_convert  ≈ 10–30 ns  (CxxString → Rust String, nếu cần copy)
   T_function_body   ≈ varies    (phụ thuộc logic Rust)
 
-Cho push_audit_log():
+# Cho push_audit_log():
   T_ffi_audit ≈ 5 + 15 + 15 ≈ 35 ns  (try_send vào flume bounded channel)
 
-Cho một GET request (nếu audit logging bật):
+# Cho một GET request (nếu audit logging bật):
   T_total_with_audit = T_total + T_ffi_audit
 					 = 1908 + 35
 					 = 1943 ns
 
-  Overhead = 35 / 1908 ≈ 1.8%
+# Overhead = 35 / 1908 ≈ 1.8%
 ```
 
 ### 3.3 So Sánh: FFI vs Alternatives
@@ -163,7 +161,7 @@ Cho một GET request (nếu audit logging bật):
 ## 4. Benchmark Forensics: Giải Phẫu Số Liệu (Đính Chính)
 
 > [!IMPORTANT]
-> **Đính chính quan trọng:** Benchmark 1,076,393 RPS (12-core bare metal) là source code **TRƯỚC KHI** đại tu sang Hexagonal + Async LockFreeQueue. Benchmark 126,469 RPS (README) là source code **SAU KHI** đại tu, chạy trên devcontainer 4-core. Đây là hai codebases khác nhau, KHÔNG phải cùng code, và trên hai phần cứng khác nhau.
+> **Đính chính quan trọng:** Benchmark 1,076,393 RPS trên 6 core (máy tính đó có 12-core vật lý) là source code **TRƯỚC KHI** đại tu sang Hexagonal + Async LockFreeQueue. Benchmark 126,469 RPS (trong file README) là source code **SAU KHI** đại tu, chạy trên một devcontainer được mount toàn bộ tài nguyên của cái laptop AMD có 4 cores. Đây là hai codebases khác nhau, KHÔNG phải cùng code, và trên hai phần cứng khác nhau.
 
 ### 4.1 Apple-to-Apple: Cùng DevContainer, Khác Codebase
 
@@ -201,13 +199,13 @@ MIXED (ước tính pre-hex ≈ 0.95 × 160k + 0.05 × 120k = 158k):
 			  LockFreeQueue overhead trong mixed workload
 ```
 
-> **Kết luận trung gian:** Performance loss là **~25% đồng đều** trên cả READ và WRITE khi đo riêng, và có thể lên **~34%** trên mixed workload do write path phải đi qua thêm LockFreeQueue + async worker.
+> **Kết luận trung gian:** Performance loss là **~25% đồng đều** trên cả READ và WRITE khi đo riêng, và có thể lên **~34%** trên mixed workload do write path phải đi qua thêm `LockFreeQueue` + `async worker`.
 
 ### 4.3 Benchmark 12-Core: Tham Chiếu Chéo
 
 Benchmark 12-core bare metal (6 workers, **pre-hexagonal code**) cho ra 1,076,393 GET RPS.
 
-```markdown
+```
 Scaling từ 4-core devcontainer lên 12-core bare metal (pre-hex code):
 Observed: 160,000 (4-core) → 1,076,393 (12-core, 6 workers)
 Ratio = 1,076,393 / 160,000 = 6.73x
@@ -236,7 +234,7 @@ T_hexagonal_get (post-hex, per request):
   Cần tìm T_hex sao cho: Throughput = 63,000 RPS/worker
   T_hex = (80,000 / 63,000) × 1900 = 2413 ns
 
-  Delta = 2413 - 1900 = 513 ns thêm per request
+  Delta = 2413 - 1900 = 513 ns thêm trên mỗi request
 ```
 
 Phân rã 513 ns overhead thêm:
@@ -297,60 +295,65 @@ Nghi phạm #5: LockFreeQueue infrastructure (even for reads)
   Vtable dispatch: ~8 ns / 513 ns = 1.6% of overhead = 0.3% of total
 ```
 
-> **Kết luận §4 (Đính chính):** Performance loss **25% đã được xác nhận** bằng apple-to-apple benchmark trên cùng devcontainer. Thủ phạm chính là **DTO/string copies (39%)** và **V2 API complexity (20%)**, KHÔNG phải vtable (1.6% of overhead). Con số 25% là **cái giá thực** của hexagonal architecture + V2 domain model. Câu hỏi đúng không phải "có mất 25% không" mà là "25% đó có đáng không" — xem §5.
+> **Kết luận §4:** Sụt giảm hiệu năng **25% đã được xác nhận** bằng apple-to-apple benchmark trên cùng một devcontainer 4 cores (cùng một cái laptop HP Pavilion 15). Thủ phạm chính là **DTO/string copies (39%)** và **V2 API complexity (20%)**, KHÔNG phải vtable (1.6% of overhead). Con số 25% là **cái giá thực** của hexagonal architecture + V2 domain model. Câu hỏi đúng không phải "có mất 25% không" mà là "25% đó có đáng không" — xem §5.
 
 ---
 
-## 5. Hexagonal vs Monolith: Kiến Trúc Có Đáng Không?
+## 5. Hexagonal vs Monolith: Kiến Trúc Có Đáng Để Đánh Đổi Không?
 
-### 5.1 Cost-Benefit Matrix
+### 5.1 Ma trận Lợi và Hại
 
-```bash
-					MONOLITH              HEXAGONAL (Kallisto)
-					════════              ════════════════════
-Performance:        100% baseline         ~75% (abstraction tax ~25%)
-Extensibility:      Spaghetti coupling    Plug-in engines via ISecretEngine
-Testability:        Integration-only      Unit test từng engine với GMock
-Engine Addition:    Major refactor        mount("transit", new TransitEngine)
-Storage Swap:       Rewrite everywhere    Swap adapter, keep interface
-Rust Integration:   Spaghetti FFI calls   Clean anti-corruption layer
-Team Scaling:       1 person bottleneck   Parallel dev per engine
-```
 
-### 5.2 Quantified Value of Hexagonal
+| Tiêu chí | Monolith | Hexagonal (Kallisto) |
+| :--- | :--- | :--- |
+| **Hiệu năng** | 100% nguyên bản | ~75% (phí trừu tượng động ~25%) |
+| **Khả năng mở rộng** | Cực kỳ khó | Dễ dàng,Plug-in engines qua `ISecretEngine` |
+| **Khả năng test** | Integration-only | Unit test độc lập từng engine với GMock |
+| **Thêm engine mới** | Major refactor | `mount("transit", new TransitEngine)` |
+| **Thay đổi bộ nhớ đệm** | Viết lại từ đầu | Swap adapter, giữ nguyên interface |
+| **Rust Integration** | FFI calls kiểu Mỳ Ý | lớp anti-corruption sạch sẽ |
+| **Team Scaling** | Nghẽn cổ chai kiến thức tại 1 người | Dev team độc lập theo từng engine |
+
+
+### 5.2 Giá trị thực của Hexagonal
 
 Ước tính **thời gian phát triển** cho việc thêm một engine mới:
 
-```markdown
-Monolith approach:
+```
+Cách tiếp cận Monolith:
   - Hiểu toàn bộ codebase: 2–3 ngày
   - Sửa KallistoCore trực tiếp: 1–2 ngày
   - Sửa HttpHandler routing: 1 ngày
   - Fix regression tests: 1–2 ngày
-  - Total: 5–8 ngày, HIGH RISK regression
+  - Tổng: 5–8 ngày, HIGH RISK regression
 
-Hexagonal approach:
-  1. Tạo TransitEngine : public ISecretEngine  → 1 ngày
-  2. static_assert(ValidEngine<TransitEngine>) → Compiler verify, 0 ngày
+Cách tiếp cận Hexagonal:
+  1. Tạo TransitEngine : public ISecretEngine  	→ 1 ngày
+  2. static_assert(ValidEngine<TransitEngine>) 	→ Compiler verify, 0 ngày
   3. registry.mount("transit", engine)          → 1 dòng code, 0 ngày
-  4. Unit test riêng biệt                      → 0.5 ngày
-  Total: 1.5–2 ngày, ZERO regression risk
+  4. Unit test riêng biệt      					→ 0.5 ngày
+  Tổng: 1.5–2 ngày, ZERO regression risk
 ```
 
 ### 5.3 The Strangler Fig Dividend
 
-```markdown
-Giá trị ẩn của Hexagonal = Σ (future_engines × dev_time_saved)
+Giá trị ẩn của kiến trúc Hexagonal được tính bởi công thức giả định sau:
 
-Nếu Kallisto cần 4 engines (kv, transit, pki, totp):
-  Monolith: 4 × 6.5 ngày = 26 ngày, compounding risk
-  Hexagonal: 4 × 1.75 ngày = 7 ngày, isolated risk
+```
+Σ (future_engines × dev_time_saved)
+```
+
+Nếu Kallisto cần, ví dụ 4 engines (`kv`, `transit`, `pki`, `totp`):
+
+```
+Monolith: 4 × 6.5 ngày = 26 ngày, compounding risk
+Hexagonal: 4 × 1.75 ngày = 7 ngày, isolated risk
 
 Net savings = 19 engineer-days = ~$7,600 (at $400/day)
 Risk reduction = immeasurable (nhưng rất lớn)
 ```
 
-> **Kết luận §5:** Hexagonal architecture "mất" 25% throughput nhưng "mua" được 3.7x faster feature delivery và near-zero regression risk. Cho một niche product cần iterate nhanh, đây là trade-off **cực kỳ hợp lý**.
+> **Kết luận §5:** Kiến trúc Hexagonal "mất" 25% throughput nhưng "mua" được thêm 3.7x tốc độ ra mắt tính năng mới và giảm tối đa rủi ro hồi quy (regression risks). Cho một sản phẩm ngách cần phát triển nhanh chóng, đây là trade-off **cực kỳ hợp lý**.
 
 ---
 
@@ -360,7 +363,7 @@ Risk reduction = immeasurable (nhưng rất lớn)
 
 Hãy trung thực đánh giá tính công bằng của benchmark:
 
-| Yếu tố | Kallisto | DragonflyDB | Fair? |
+| Yếu tố | Kallisto | DragonflyDB | Công bằng không? |
 |---|---|---|---|
 | Protocol | HTTP/1.1 + JSON | Redis RESP | ⚠️ RESP nhẹ hơn |
 | Benchmark tool | wrk (HTTP) | memtier (Redis) | ⚠️ Khác tool |
@@ -372,20 +375,27 @@ Hãy trung thực đánh giá tính công bằng của benchmark:
 
 ### 6.2 Normalization Analysis
 
-```markdown
+```
 Dragonfly write ratio = 1/(1+10) = 9.09%
-Kallisto write ratio  = 5/100   = 5.00%
+Kallisto write ratio  = 5/100    = 5.00%
+```
 
-Nếu normalize Kallisto lên 9.09% write (giống Dragonfly):
-Ước tính: MIXED_normalized ≈ 0.9091 × GET_RPS + 0.0909 × PUT_RPS
+Nếu normalize Kallisto lên 9.09% write (giống Dragonfly), ước tính: 
+
+```
+MIXED_normalized ≈ 0.9091 × GET_RPS + 0.0909 × PUT_RPS
+```
 
 Cho 2-core data:
+
+```
 Kallisto_normalized ≈ 0.9091 × 126,469 + 0.0909 × 91,879
 					≈ 114,972 + 8,352
 					≈ 123,324 RPS  (vs Dragonfly 87,060)
-					
-Kallisto vẫn thắng: +41.7%
 ```
+
+Kallisto vẫn thắng: +41.7%
+
 
 ### 6.3 Protocol Overhead Correction
 
@@ -411,7 +421,7 @@ Nếu Kallisto dùng RESP thay vì HTTP:
 
 ### 6.4 Durability Model Comparison
 
-```markdown
+```
 Kallisto: Write-Behind + RocksDB WAL
   - Mỗi write → CuckooTable (sync) + LockFreeQueue (async)
   - Batch flush: 1024 ops HOẶC 5ms timeout
@@ -423,14 +433,15 @@ DragonflyDB: Periodic Snapshot
 
 Durability ratio = 60,000 / 5 = 12,000x
 
-Kallisto có durability tốt hơn 12,000 LẦN trong benchmark này.
 ```
+
+Kallisto có durability tốt hơn 12,000 LẦN trong benchmark này.
 
 > **Kết luận §6:** Kallisto thắng DragonflyDB **thật**, nhưng cần hiểu rõ context:
 > - Thắng p99 nhờ **write-behind architecture** (không phải nhờ Rust)
 > - Thắng throughput nhờ **less write percentage** (95/5 vs 91/9)
 > - Nếu normalize protocol + write ratio, Kallisto vẫn thắng **~40%**
-> - Quan trọng nhất: Kallisto có **durability tốt hơn 12,000x** — đây mới là giá trị kinh doanh thực sự
+> - Quan trọng nhất: Kallisto có **durability tốt hơn 12,000x** - đây mới là giá trị kinh doanh thực sự
 
 ---
 
@@ -440,7 +451,7 @@ Kallisto có durability tốt hơn 12,000 LẦN trong benchmark này.
 
 Giả sử con số 212k ops/sec là throughput bão hòa của RocksDB WAL writes trong IMMEDIATE mode:
 
-```markdown
+```
 RocksDB Write Path:
   1. WAL append (sequential write): ~2–5 µs per entry
   2. Memtable insert (SkipList): ~0.5–1 µs
@@ -458,7 +469,7 @@ Với batch grouping (BATCH mode, 1024 ops per fsync):
 
 Kallisto là **Operational Secret Engine**. Hãy ước tính write volume thực tế:
 
-```markdown
+```
 Scenario: Enterprise 10,000 microservices, mỗi service đọc secrets khi khởi động
 
 Write events:
@@ -473,7 +484,7 @@ Headroom = 212,000 / 4.2 = 50,476x
 
 ### 7.3 Khi Nào 212k Trở Thành Vấn Đề?
 
-```markdown
+```
 Điều kiện để 212k trở thành bottleneck:
 
 Required_write_RPS > 212,000
@@ -497,12 +508,14 @@ Required_write_RPS > 212,000
 | Redis (AOF fsync=always) | ~30,000–80,000 | RESP |
 | DragonflyDB (snapshot/min) | ~200,000+ | RESP |
 
-```markdown
-Kallisto vs Vault write performance:
+
+Kallisto vs Vault trên hiệu năng ghi:
+
+```
 Ratio = 212,000 / 1,500 ≈ 141x NHANH HƠN
+```
 
 Trong domain Secret Management, 212k writes/sec là CON SỐ KHỔNG LỒ.
-```
 
 > **Kết luận §7:** 212k writes/sec **KHÔNG** phải án tử. Nó là **overkill** cho business domain. Bạn có headroom **50,000x** so với workload thực tế, và nhanh hơn Vault **141x**. Bất kỳ ai cần hơn 212k persisted writes/sec cho secrets thì họ có vấn đề về architecture, không phải về Kallisto.
 
@@ -536,18 +549,18 @@ class KvEngine final : public ISecretEngine { /* ... */ };
 
 ### 8.2 So Sánh Chi Phí
 
-```markdown
-						  TEMPLATE/CRTP          VIRTUAL + final
-						  ═════════════          ═══════════════
-Dispatch cost:            0 ns (inline)          0–8 ns (devirt possible)
-Compile time:             LONGER (template inst) SHORTER
-Binary size:              LARGER (code bloat)    SMALLER
-EngineRegistry possible?  ❌ Không (type-erased) ✅ Có
-Runtime engine swap?      ❌ Không               ✅ Có
-GMock testable?           ❌ Rất khó             ✅ Dễ dàng
-Error messages:           🤮 Template vomit      ✅ Clear
-Code readability:         ⚠️ Complex             ✅ Straightforward
-```
+
+| Tiêu chí | TEMPLATE/CRTP | VIRTUAL + final |
+|-----------|:-----------:|:-----------:|
+| Dispatch cost 	| 0 ns (inline) 		| 0–8 ns (devirt possible)|
+| Compile time | LONGER (template inst) | SHORTER |
+| Binary size | LARGER (code bloat) | SMALLER |
+| EngineRegistry possible? | ❌ Không (type-erased) | ✅ Có |
+| Runtime engine swap? | ❌ Không | ✅ Có |
+| GMock testable? | ❌ Rất khó | ✅ Dễ dàng |
+| Error messages: | 🤮 Template vomit | ✅ Clear |
+| Code readability: | ⚠️ Complex | ✅ Straightforward |
+
 
 ### 8.3 The EngineRegistry Problem
 
@@ -574,47 +587,51 @@ std::unordered_map<std::string, AnyEngine> engines_;
 
 ### 8.4 Performance Gain Calculation
 
-```markdown
 Lợi ích thực sự của template thay vì virtual:
-  Saved = T_vtable = 5–8 ns per call
 
+```
+Saved = T_vtable = 5–8 ns per call
 Fraction of total request = 8 / 1908 = 0.42%
-
-Throughput gain at 1M RPS:
-  Current: 1,076,393 RPS
-  With templates: 1,076,393 × (1908 / 1900) ≈ 1,080,924 RPS
-  
-  Delta = +4,531 RPS (+0.42%)
 ```
 
-Bạn sẽ **phá hủy** khả năng extensibility, testability, và runtime configurability để đổi lấy **4,531 RPS** (<0.5%). Đó không phải optimization, đó là **self-sabotage**.
+Thông lượng thực tế khi có 1M RPS:
+
+```
+Current: 1,076,393 RPS
+With templates: 1,076,393 × (1908 / 1900) ≈ 1,080,924 RPS
+  
+Delta = +4,531 RPS (+0.42%)
+```
+
+Bạn sẽ **phá hủy** khả năng mở rộng, khả năng kiểm thử, và khả năng cấu hình động tại runtime để đổi lấy **4,531 RPS** (<0.5%). Đó là **self-sabotage**.
 
 ### 8.5 The Hybrid Sweet Spot (Hiện Tại Của Kallisto)
 
-```markdown
 Kallisto đang ở vị trí tối ưu:
 
-  ✅ Virtual dispatch cho runtime flexibility (ISecretEngine*)
-  ✅ `final` keyword cho devirtualization (KvEngine final)
-  ✅ C++20 concepts cho compile-time safety (ValidEngine<T>)
-  ✅ Raw pointer shortcut (default_kv_engine_) bypass registry
+- Virtual dispatch cho runtime flexibility với `ISecretEngine*`
+- `final` keyword cho devirtualization với `KvEngine final`
+- C++20 concepts cho compile-time safety với `ValidEngine<T>`
+- Raw pointer shortcut với `default_kv_engine_` bypass registry
 
-Kết quả: Best of both worlds
-  - Runtime: ISecretEngine* cho EngineRegistry, GMock, extensibility
-  - Compile-time: ValidEngine concept ngăn lỗi contract
-  - Performance: `final` cho phép compiler optimize
-```
+Kết quả là nhận được lợi ích từ cả hai thế giới:
 
-> **Kết luận §8:** Template-only approach sẽ tiết kiệm **< 0.5%** performance nhưng phá hủy toàn bộ extensibility model. Kiến trúc hiện tại (virtual + final + concept) là **hybrid tối ưu** — giữ cả flexibility lẫn performance.
+- Runtime: `ISecretEngine*` cho EngineRegistry, GMock, extensibility
+- Compile-time: `ValidEngine` concept ngăn lỗi contract
+- Performance: `final` cho phép compiler optimize
+
+
+> **Kết luận §8:** Template-only sẽ tiết kiệm **< 0.5%** hiệu năng nhưng phá hủy toàn bộ mô hình mở rộng. Kiến trúc hiện tại (`virtual` + `final` + `concept`) là **hybrid tối ưu** — giữ cả sự linh hoạt và hiệu năng.
 
 ---
 
-## 9. Business Domain Fit: Niche Product Analysis
+## 9. Phù Hợp Với Phân khúc sản phẩm: Phân Tích Sản Phẩm
 
-### 9.1 Domain Characteristics
+### 9.1 Đặc Điểm Domain
+
+Secret Management Domain:
 
 ```
-Secret Management Domain:
   ┌─────────────────────────────────────────────┐
   │  Read/Write Ratio:  95/5 → 99/1             │
   │  Workload Type:     Read-dominant           │
@@ -630,7 +647,7 @@ Secret Management Domain:
 
 ### 9.2 Architecture-Domain Alignment Score
 
-```markdown
+```
 							  Kallisto    Vault/OpenBao    DragonflyDB
 							  ════════    ═════════════    ═══════════
 Read throughput (1M+):        ★★★★★       ★★☆☆☆            ★★★★★
@@ -649,33 +666,38 @@ TỔNG:                         37/40       29/40            25/40
 
 Hãy phân biệt **hai con đường hoàn toàn khác nhau**:
 
-
 Con đường "Ngáo đá" (KHÔNG phải Kallisto):
-  ❌ Rewrite KvEngine trong Rust
-  ❌ Rewrite ShardedCuckooTable trong Rust
-  ❌ Rewrite HTTP handler trong Rust
-  ❌ Rewrite epoll event loop trong Rust
-  → Mất 6–12 tháng, mất hết performance advantage, mất kiến thức C++
+```
+	❌ Rewrite KvEngine trong Rust
+	❌ Rewrite ShardedCuckooTable trong Rust
+	❌ Rewrite HTTP handler trong Rust
+	❌ Rewrite epoll event loop trong Rust
+
+	→ Mất 6–12 tháng, mất hết performance advantage, mất kiến thức C++
+```
 
 Con đường Kallisto (Core-Armor Pattern):
-  ✅ Giữ C++ data plane nguyên vẹn (hotpath)
-  ✅ Chỉ dùng Rust cho coldpath (crypto, audit, metrics, gossip)
-  ✅ FFI bridge rõ ràng, bounded context
-  ✅ Anti-corruption layer (ffi_bridge/ là điểm duy nhất giao tiếp)
-  → Mất ~0 performance trên hotpath, gain memory safety cho security-critical code
 
+```
+	✅ Giữ C++ data plane nguyên vẹn (hotpath)
+	✅ Chỉ dùng Rust cho coldpath (crypto, audit, metrics, gossip)
+	✅ FFI bridge rõ ràng, bounded context
+	✅ Anti-corruption layer (ffi_bridge/ là điểm duy nhất giao tiếp)
 
-### 9.4 Risk Assessment
+	→ Mất ~0 performance trên hotpath, gain memory safety cho security-critical code
+```
 
-| Risk | Probability | Impact | Mitigation |
+### 9.4 Quản lý rủi ro
+
+| Rủi ro | Xác suất | Ảnh hưởng | Giải pháp |
 |---|---|---|---|
-| FFI complexity increases | Medium | Medium | Strict ffi_bridge boundary |
-| Rust compile times slow CI | High | Low | Cargo workspace caching |
-| Interop bugs (memory) | Low | High | `cxx` prevents UB by design |
-| Developer hiring (C++ & Rust) | High | High | Accept: niche product needs niche talent |
-| Abstraction tax grows | Medium | Medium | Profile regularly, optimize hot DTOs |
+| Tăng độ phức tạp FFI | Trung bình | Trung bình | Ranh giới `ffi_bridge` nghiêm ngặt |
+| Thời gian biên dịch Rust chậm | Cao | Thấp | Sử dụng Cargo workspace caching |
+| Lỗi tương tác (bộ nhớ) | Thấp | Cao | `cxx` prevents UB by design |
+| Tuyển dụng lập trình viên (C++ & Rust) | Cao | Cao | Chấp nhận: sản phẩm niche cần nhân tài niche |
+| Tăng phí trừu tượng | Trung bình | Trung bình | Profile thường xuyên, tối ưu hóa DTOs nóng |
 
-> **Kết luận §9:** Kallisto's Rust integration follows the **Core-Armor pattern**, not the "Rewrite in Rust" anti-pattern. C++ giữ quyền kiểm soát tuyệt đối trên data plane. Rust chỉ đảm nhiệm những gì C++ không nên làm: quản lý Master Key (mlock, zeroize), Shamir's Secret Sharing, và audit logging — nơi memory safety là **yêu cầu bắt buộc**, không phải nice-to-have.
+> **Kết luận §9:** Tích hợp Rust của Kallisto tuân theo **Core-Armor pattern**, không phải là "Rewrite in Rust" anti-pattern. C++ giữ quyền kiểm soát tuyệt đối trên data plane. Rust chỉ đảm nhiệm những gì C++ không nên làm: quản lý Master Key (mlock, zeroize), Shamir's Secret Sharing, và audit logging — nơi memory safety là **yêu cầu bắt buộc**, không phải nice-to-have.
 
 ---
 
@@ -685,8 +707,6 @@ Con đường Kallisto (Core-Armor Pattern):
 
 ```markdown
 ╔══════════════════════════════════════════════════════════════════╗
-║                                                                  ║
-║   BẠN KHÔNG BỊ NGÁO ĐÁ.                                          ║
 ║                                                                  ║
 ║   Bạn đang thực hiện một chiến lược kiến trúc có kỷ luật,        ║
 ║   với trade-offs được tính toán rõ ràng và phù hợp với           ║
