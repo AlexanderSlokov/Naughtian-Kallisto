@@ -8,8 +8,8 @@ crate-type = ["staticlib"]
 
 [dependencies]
 cxx = "1.0"
-core_crypto = { path = "../core_crypto" }
-control_plane = { path = "../control_plane" }
+core_crypto = { path = "../kallisto_crypto" }
+control_plane = { path = "../kallisto_cluster" }
 tokio = { version = "1.0", features = ["full"] }
 
 [build-dependencies]

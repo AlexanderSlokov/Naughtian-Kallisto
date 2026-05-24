@@ -1,0 +1,14 @@
+[workspace]
+resolver = "2"
+members = [
+    "cmd/*",
+    "components/*",
+]
+
+# (Optional) You can define workspace dependencies here like TiKV does
+[workspace.dependencies]
+tokio = { version = "1.x", features = ["rt", "net", "macros"] }
+axum = "0.7"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+rocksdb = "0.21"
