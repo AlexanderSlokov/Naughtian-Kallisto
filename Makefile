@@ -1,8 +1,92 @@
 # Kallisto Makefile
 # Unified workflow for Terminal, IDE, and Docker
 
+SHELL := bash
+ENABLE_FEATURES ?=
+
+# Docker / DevContainer
+REGISTRY ?= docker.io/thanhzeus2016
+DEVCONTAINER_IMAGE ?= naughtain-kallisto-devcontainer
+DEVCONTAINER_TAG ?= 1.0.0
+CLOUD_BUILDER ?= cloud-thanhzeus2016-aleksandr-slokov-cloud-builder
 BUILD_DIR = build
 TARGET = kallisto
+
+# Build-time environment, captured for reporting by the application binary
+BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
+BUILD_INFO_RUSTC_FALLBACK := "Unknown"
+export KALLISTO_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
+export KALLISTO_BUILD_RUSTC_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }')
+export KALLISTO_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+export KALLISTO_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO_GIT_FALLBACK})
+export KALLISTO_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+
+
+clean:
+	cargo clean
+	# rm -rf bin dist
+
+# Development builds
+# ------------------
+
+
+# A special target for building Kallisto docker images
+# ------------------------------------------------
+
+devcontainer_cloud_build:
+	docker buildx build . \
+		-t $(REGISTRY)/$(DEVCONTAINER_IMAGE):$(DEVCONTAINER_TAG) \
+		-f .devcontainer/Dockerfile \
+		--platform linux/amd64 \
+		--builder $(CLOUD_BUILDER) \
+		--build-arg GIT_HASH=${KALLISTO_BUILD_GIT_HASH} \
+		--build-arg GIT_TAG=${KALLISTO_BUILD_GIT_TAG} \
+		--build-arg GIT_BRANCH=${KALLISTO_BUILD_GIT_BRANCH} \
+		--push
+
+devcontainer_local_build:
+	docker build . \
+		-t $(REGISTRY)/$(DEVCONTAINER_IMAGE):$(DEVCONTAINER_TAG)
+		-f .devcontainer/Dockerfile \
+		--platform linux/amd64 \
+		--build-arg GIT_HASH=${KALLISTO_BUILD_GIT_HASH} \
+		--build-arg GIT_TAG=${KALLISTO_BUILD_GIT_TAG} \
+		--build-arg GIT_BRANCH=${KALLISTO_BUILD_GIT_BRANCH}
+
+docker-build:
+	@docker build -t $(REGISTRY)/$(DEVCONTAINER_IMAGE):latest .
+
+docker-test:
+	@docker build --target tester -t $(REGISTRY)/$(DEVCONTAINER_IMAGE):latest .
+	@docker run --rm $(REGISTRY)/$(DEVCONTAINER_IMAGE):latest make test
+
+docker-run:
+	@docker run -d --name kallisto -p 8200:8200 -p 8202:8202 \
+	  -v my-kallisto-data:/kallisto/data $(REGISTRY)/$(DEVCONTAINER_IMAGE):latest
+
+
+# Benchmarks (Server — HTTP wrk)
+# ------------------------------
+
+bench-server: clean build-server
+	@bash benchmarks/server/run_server_bench.sh
+
+
+# Documentation
+# -------------
+
+docs-serve:
+	hugo server -s docs
+
+docs-build:
+	hugo -s docs
+
+# Go to http://localhost:1313/ for preview
+
+
+# CMake Toolchain (legacy)
+# ------------------------
+CMAKE_FLAGS = -DCMAKE_TOOLCHAIN_FILE=$(VCPKG_ROOT)/scripts/buildsystems/vcpkg.cmake
 
 # Auto-detect vcpkg: env var → CLion's default → Docker/system default
 ifdef VCPKG_ROOT
@@ -13,29 +97,6 @@ else
     VCPKG_ROOT = /usr/local/vcpkg
 endif
 DB_PATH ?= /kallisto/data
-
-# Docker / DevContainer
-REGISTRY ?= docker.io/thanhzeus2016
-DEVCONTAINER_IMAGE ?= naughtain-kallisto-devcontainer
-DEVCONTAINER_TAG ?= 1.0.0
-CLOUD_BUILDER ?= cloud-thanhzeus2016-aleksandr-slokov-cloud-builder
-
-devcontainer_cloud_build:
-	docker buildx build . \
-		-f .devcontainer/Dockerfile \
-		--platform linux/amd64 \
-		--builder $(CLOUD_BUILDER) \
-		-t $(REGISTRY)/$(DEVCONTAINER_IMAGE):$(DEVCONTAINER_TAG) \
-		--push
-
-devcontainer_local_build:
-	docker build . \
-		-f .devcontainer/Dockerfile \
-		--platform linux/amd64 \
-		-t $(REGISTRY)/$(DEVCONTAINER_IMAGE):$(DEVCONTAINER_TAG)
-
-# CMake Toolchain
-CMAKE_FLAGS = -DCMAKE_TOOLCHAIN_FILE=$(VCPKG_ROOT)/scripts/buildsystems/vcpkg.cmake
 
 # Auto-detect cmake: CLion snap → system cmake
 ifneq (,$(wildcard /snap/clion/455/bin/cmake/linux/x64/bin/cmake))
@@ -184,51 +245,3 @@ test-atomic: build
 benchmark-multithread: build
 	@./$(BUILD_DIR)/bench_multithread
 
-# ===========================================================================
-# Benchmarks (Server — HTTP wrk)
-# ===========================================================================
-
-bench-server: clean build-server
-	@bash benchmarks/server/run_server_bench.sh
-
-bench-http: bench-server
-
-# ===========================================================================
-# Docker
-# ===========================================================================
-
-docker-build:
-	@docker build -t kallisto-server:latest .
-
-docker-test:
-	@docker build --target tester -t kallisto-tester:latest .
-	@docker run --rm kallisto-tester:latest make test
-
-docker-run:
-	@docker run -d --name kallisto -p 8200:8200 -p 8202:8202 \
-	  -v my-kallisto-data:/kallisto/data kallisto-server:latest
-
-# ===========================================================================
-# Utilities
-# ===========================================================================
-
-clean:
-	@rm -rf $(BUILD_DIR)
-	@rm -rf /tmp/kallisto_bench_data
-	@rm -f /tmp/kallisto_bench.log
-	@pkill -x kallisto_server 2>/dev/null || true
-	@echo "Build directory and temp files cleared."
-
-logs:
-	@tail -f kallisto.server.log 2>/dev/null || echo "No logs found."
-
-# ===========================================================================
-# Documentation
-# ===========================================================================
-# Go to http://localhost:1313/ for preview.
-
-docs-serve:
-	hugo server -s docs
-
-docs-build:
-	hugo -s docs

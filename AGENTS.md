@@ -1,42 +1,63 @@
----
-description: 'Provide expert C++ software engineering guidance using modern C++ and industry best practices.'
-name: 'C++ Expert'
----
-# Expert C++ software engineer mode instructions
+# AGENTS.md
 
-You are in expert software engineer mode. Your task is to provide expert C++ software engineering guidance that prioritizes clarity, maintainability, and reliability, referring to current industry standards and best practices as they evolve rather than prescribing low-level details.
+This file provides guidance to AI agents when working with code in this repository.
 
-You will provide:
+## Developing Environment Tips
 
-- insights, best practices, and recommendations for C++ as if you were Bjarne Stroustrup and Herb Sutter, with practical depth from Andrei Alexandrescu.
-- general software engineering guidance and clean code practices, as if you were Robert C. Martin (Uncle Bob).
-- DevOps and CI/CD best practices, as if you were Jez Humble.
-- Testing and test automation best practices, as if you were Kent Beck (TDD/XP).
-- Legacy code strategies, as if you were Michael Feathers.
-- Architecture and domain modeling guidance using Clean Architecture and Domain-Driven Design (DDD) principles, as if you were Eric Evans and Vaughn Vernon: clear boundaries (entities, use cases, interfaces/adapters), ubiquitous language, bounded contexts, aggregates, and anti-corruption layers.
+### Prerequisites
 
-For C++-specific guidance, focus on the following areas (reference recognized standards like the ISO C++ Standard, C++ Core Guidelines, CERT C++, and the project’s conventions):
+- git - Version control
+- rustup - Rust installer and toolchain manager
+- make - Build tool (run common workflows)
+- awk - Pattern scanning/processing language
 
-- **Standards and Context**: Align with current industry standards and adapt to the project’s domain and constraints.
-- **Modern C++ and Ownership**: Prefer RAII and value semantics; make ownership and lifetimes explicit; avoid ad‑hoc manual memory management.
-- **Error Handling and Contracts**: Apply a consistent policy (exceptions or suitable alternatives) with clear contracts and safety guarantees appropriate to the codebase.
-- **Concurrency and Performance**: Use standard facilities; design for correctness first; measure before optimizing; optimize only with evidence.
-- **Architecture and DDD**: Maintain clear boundaries; apply Clean Architecture/DDD where useful; favor composition and clear interfaces over inheritance-heavy designs.
-- **Testing**: Use mainstream frameworks; write simple, fast, deterministic tests that document behavior; include characterization tests for legacy; focus on critical paths.
-- **Legacy Code**: Apply Michael Feathers’ techniques—establish seams, add characterization tests, refactor safely in small steps, and consider a strangler‑fig approach; keep CI and feature toggles.
-- **Build, Tooling, API/ABI, Portability**: Use modern build/CI tooling with strong diagnostics, static analysis, and sanitizers; keep public headers lean, hide implementation details, and consider portability/ABI needs.
+### Code Organization
 
----
+- `/cmd/` - Binary entry points
+    - `/cmd/kallisto-ctl/` - Kallisto control utility
+    - `/cmd/kallisto-server/` - Main Kallisto server binary
 
-# Kallisto Architecture Reference
+- `/components/` - Modular components and libraries
+    - `components/kallisto_cluster` - Foca implementation for masterless cluster
+    - `components/kallisto_telemetry` - Prometheus exporter, Audit Log (Tokio)
 
-> **Purpose:** Persistent context for all future sessions. Read this before modifying any core component.
+- `/tests/` - Integration tests
+- `/fuzz/` - Fuzzing targets (For future use, not implemented yet)
+
+#### KV Engine (Pre-Rust rewrite)
+
+```
+include/kallisto/engine/
+├── engine_concept.hpp      # C++20 concept ValidEngine
+├── i_secret_engine.hpp     # Port interface (abstract base)
+├── engine_registry.hpp     # Router: prefix → engine mapping
+└── kv_engine.hpp           # KV engine (first concrete impl)
+
+src/engine/
+├── kv_engine.cpp           # KV engine implementation
+├── engine_registry.cpp     # Registry implementation
+├── test_kv_engine.cpp      # KvEngine test suite
+└── test_engine_registry.cpp # EngineRegistry test suite (GMock)
+
+rust_integrates/            # Rust Workspace (Control Plane)
+├── Cargo.toml              # Workspace root
+├── ffi_bridge/             # FFI Adapter (using cxx)
+├── core_crypto/            # KEK Keyring, Vault Transit Client, DEK management
+├── telemetry/              # Prometheus exporter, Audit Log (Tokio)
+├── control_plane/          # Gossip (foca), Configuration
+└── kallisto_tui/           # Admin Terminal UI (ratatui)
+```
+
+# Architecture Reference
+
+Persistent context for all future sessions. Read this before modifying any core component.
 
 ## Architecture: Hexagonal (Port/Adapter)
 
-Kallisto follows a **Hexagonal Architecture** with a **Strangler Fig** migration strategy. The `KallistoCore` was refactored into a thin **Facade** that delegates to an **EngineRegistry** of pluggable **ISecretEngine** implementations.
+Kallisto follows a Hexagonal Architecture with a **Strangler Fig** migration strategy. 
+The `KallistoCore` was refactored into a thin **Facade** that delegates to an **EngineRegistry** of pluggable **ISecretEngine** implementations.
 
-### Hybrid Architecture / Core-Shell Pattern (Version 2.0.0+)
+### From version 1.0.0+
 
 Kallisto implements a **FFI-based Hybrid Architecture** (Core-Armor pattern) to combine C++ performance with Rust's memory safety and security features.
 
@@ -56,30 +77,6 @@ The two sides communicate through a high-performance **FFI (Foreign Function Int
 | **`KallistoCore` as Facade** | Zero breaking changes. All existing consumers (`HttpHandler`, `UdsAdminHandler`, tests) use the unchanged `KallistoCore` API. |
 | **C++20 `concept ValidEngine`** | Compile-time safety net. Any new engine that doesn't satisfy the contract fails to build via `static_assert`. |
 | **Vault Transit as Root of Trust** | Eliminates self-implemented Shamir/mlock/master key code. Vault handles key hierarchy; Kallisto only holds a KEK in-memory (zeroize on drop). Industry-standard envelope encryption pattern (same as AWS KMS / GCP KMS). |
-
-## Directory Structure (Engine Layer)
-
-```
-include/kallisto/engine/
-├── engine_concept.hpp      # C++20 concept ValidEngine
-├── i_secret_engine.hpp     # Port interface (abstract base)
-├── engine_registry.hpp     # Router: prefix → engine mapping
-└── kv_engine.hpp           # KV engine (first concrete impl)
-
-src/engine/
-├── kv_engine.cpp           # KV engine implementation
-├── engine_registry.cpp     # Registry implementation
-├── test_kv_engine.cpp      # KvEngine test suite
-└── test_engine_registry.cpp # EngineRegistry test suite (GMock)
-
-rust_integrates/            # Rust Workspace (Control Plane)
-├── Cargo.toml              # Workspace root
-├── ffi_bridge/             # FFI Adapter (using cxx)
-├── core_crypto/            # KEK Keyring, Vault Transit Client, DEK management
-├── telemetry/              # Prometheus, Audit Log (Tokio)
-├── control_plane/          # Gossip (foca), Configuration
-└── kallisto_tui/           # Admin Terminal UI (ratatui)
-```
 
 ## Core Components
 
