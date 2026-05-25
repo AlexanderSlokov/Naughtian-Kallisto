@@ -17,10 +17,18 @@ This file provides guidance to AI agents when working with code in this reposito
     - `/cmd/kallisto-ctl/` - Kallisto control utility
     - `/cmd/kallisto-server/` - Main Kallisto server binary
 
-- `/components/` - Modular components and libraries
-    - `components/kallisto_cluster` - Foca implementation for masterless cluster
-    - `components/kallisto_telemetry` - Prometheus exporter, Audit Log (Tokio)
+- `/src/` - Main Kallisto server source code
+    - `/src/engine/` - Engines implementation (migrated from C++ to Rust)
+	- `/src/event/` - Event handling and processing (migrated from C++ to Rust)
+	- `/src/server/` - Server implementation (migrated from C++ to Rust)
+	- `/src/thread_local/` - Thread-local data structure (migrated from C++ to Rust)
 
+- `/components/` - Modular components and libraries (Rust Workspace)
+    - `components/kallisto_cluster` - Gossip cluster membership (`foca`) & administration
+    - `components/kallisto_telemetry` - Prometheus metrics exporter & async Audit logging
+    - `components/kallisto_crypto` - Vault transit KMS client, KEK keyring, and DEK manager
+    - `components/kallisto_policy` - Engine ACL policy matching and validation
+	
 - `/tests/` - Integration tests
 - `/fuzz/` - Fuzzing targets (For future use, not implemented yet)
 
