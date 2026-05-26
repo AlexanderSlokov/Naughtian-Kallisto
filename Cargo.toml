@@ -1,3 +1,8 @@
+[package]
+name = "naughtian-kallisto"
+version = "1.0.0"
+edition = "2024"
+
 [workspace]
 resolver = "2"
 members = [
@@ -5,10 +10,26 @@ members = [
     "components/*",
 ]
 
-# (Optional) You can define workspace dependencies here like TiKV does
 [workspace.dependencies]
-tokio = { version = "1.x", features = ["rt", "net", "macros"] }
+tokio = { version = "1.x", features = ["rt", "net", "macros", "sync"] }
 axum = "0.7"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
+crossbeam-epoch = "0.9"
+arc-swap = "1.7"
+dashmap = "6.0"
 rocksdb = "0.21"
+thiserror = "1.0"
+async-trait = "0.1"
+
+[dependencies]
+tokio = { workspace = true }
+axum = { workspace = true }
+parking_lot = { workspace = true }
+crossbeam-channel = { workspace = true }
+crossbeam-epoch = { workspace = true }
+arc-swap = { workspace = true }
+dashmap = { workspace = true }
+rocksdb = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }

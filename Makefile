@@ -2,9 +2,8 @@
 # Unified workflow for Terminal, IDE, and Docker
 
 SHELL := bash
-ENABLE_FEATURES ?=
 
-# Docker / DevContainer
+# Docker
 REGISTRY ?= docker.io/thanhzeus2016
 DEVCONTAINER_IMAGE ?= naughtain-kallisto-devcontainer
 DEVCONTAINER_TAG ?= 1.0.0

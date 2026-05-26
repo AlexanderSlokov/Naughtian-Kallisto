@@ -13,37 +13,47 @@ Tài liệu này là kế hoạch chính thức để rewrite **toàn bộ** Nau
 
 ## 1. Tại sao phải Rewrite — Bài học từ Hybrid C++/Rust
 
-### 1.1. Bản án tử của C++ trong một Secret Engine
+Việc chuyển dịch không chỉ là chạy theo ngôn ngữ mới, mà là để giải quyết triệt để hai nhóm rủi ro chí mạng đang tồn tại trong Data Plane C++: An toàn bộ nhớ (Memory Safety) và Đồng thời (Concurrency).
 
-Kallisto lưu trữ **operational secrets** — credentials mà hàng triệu request/giây phụ thuộc vào. Một lỗi `use-after-free` hay `buffer overflow` trong Data Plane C++ không chỉ là crash — nó là **data exfiltration vector**. Đây là những rủi ro đã được chứng minh qua thực tế vận hành:
+### 1.1. Rủi ro An toàn bộ nhớ: Bản án tử của C++ trong Secret Engine
 
-| Rủi ro C++                         | Hậu quả với Secret Engine         | Rust giải quyết bằng           |
-|------------------------------------|-----------------------------------|--------------------------------|
-| Use-after-free trong CuckooTable   | Đọc được secret đã bị destroy     | Ownership + lifetime           |
-| Data race trong ShardedCuckooTable | Secret bị corrupt, trả sai data   | `Send`/`Sync` traits           |
-| Buffer overflow trong HTTP parser  | Remote Code Execution             | Bounds checking + `&[u8]`      |
-| Double-free trong RCU BTree        | Crash → DoS toàn cluster          | `Arc<T>` thay raw pointer swap |
-| Integer overflow trong SipHash     | Hash flooding → CPU exhaustion    | Checked arithmetic             |
-| Dangling pointer qua FFI boundary  | Undefined behavior xuyên ngôn ngữ | Không còn FFI                  |
+Kallisto lưu trữ **operational secrets** — credentials mà hàng triệu request/giây phụ thuộc vào. Một lỗi `use-after-free` hay `buffer overflow` trong C++ không chỉ là crash — nó là **data exfiltration vector**.
 
-### 1.2. Hybrid Architecture đã hoàn thành sứ mệnh
+| Rủi ro C++ hiện tại | Hậu quả với Secret Engine | Rust giải quyết bằng |
+|---|---|---|
+| Use-after-free trong CuckooTable | Đọc được secret đã bị destroy | Ownership + lifetime |
+| Data race trong ShardedCuckooTable | Secret bị corrupt, trả sai data | `Send`/`Sync` traits |
+| Buffer overflow trong HTTP parser | Remote Code Execution (RCE) | Bounds checking + `&[u8]` |
+| Dangling pointer qua FFI boundary | Undefined behavior xuyên ngôn ngữ | Không còn FFI |
+| Integer overflow trong SipHash | Hash flooding → CPU exhaustion | Checked arithmetic |
 
-Kiến trúc Hybrid C++/Rust ban đầu có mục đích rõ ràng:
+### 1.2. Những "Quả mìn" Concurrency ẩn giấu trong Cấu trúc dữ liệu
 
-1. **C++ Data Plane** làm baseline hiệu năng tuyệt đối (The Absolute Zero).
+Thông qua kiểm toán mã nguồn, trình biên dịch C++ đang "nhắm mắt làm ngơ" cho các lỗi kiến trúc đồng thời. Đây là 4 "quả mìn" bắt buộc phải dùng Rust để vá:
+
+| Component C++ hiện tại | Lỗ hổng / "Quả mìn" kiến trúc | Mục tiêu tái cấu trúc bằng Rust |
+|---|---|---|
+| `ShardedCuckooTable` | **Cú lừa "Lock-free":** Đang dùng `std::shared_mutex` là Lock-based sharding, hoàn toàn không phải Lock-free. Gây thắt cổ chai dưới tải hỗn hợp. | Dùng crate `dashmap` — Concurrent Hash Map tối ưu cực hạn, read lock-free thực sự. |
+| `EngineRegistry` | **Undefined Behavior (UB):** Dùng `std::unordered_map` cho phép đọc lock-free nhưng ghi không khóa. Một thao tác `mount()` lúc runtime sẽ làm crash toàn cluster. | Dùng crate `arc-swap` cho cơ chế đọc 100% lock-free, thay thế/ghi an toàn. |
+| `TlsBTreeManager` | **Cơn ác mộng Lifetime:** Tự implement cơ chế RCU bằng `thread_local` và gc_queue quá mong manh. Cực kỳ dễ dính double-free. | Dùng `crossbeam-epoch` (hoặc `arc-swap`) để Garbage Collection an toàn tuyệt đối. |
+| `LockFreeQueue` (I/O) | **Thiếu tính Transactional:** Hàng đợi tự viết dễ sai sót memory_order. Logic cacheRaw thiếu rollback nếu ghi RocksDB thất bại giữa chừng. | Dùng `crossbeam-channel` (MPMC chuẩn) và mượn `Result` type để force error handling. |
+
+### 1.3. Hybrid Architecture đã hoàn thành sứ mệnh
+
+Kiến trúc Hybrid C++/Rust ban đầu có 3 mục đích:
+
+1. **C++ Data Plane** làm baseline hiệu năng tuyệt đối.
 2. **Rust Control Plane** chứng minh Rust hoạt động được trong production.
-3. **Benchmark so sánh** cho thấy Rust chỉ ăn mất **2-5% hiệu năng** — mức phí bảo hiểm quá rẻ.
+3. **Benchmark so sánh** cho thấy Rust chỉ ăn mất **2-5% hiệu năng**.
 
-Giờ đây, khi đã có C++ baseline (~126k RPS GET, ~91k RPS PUT, p99 < 10ms), ta biết chính xác mục tiêu mà Rust phải đạt. Hybrid đã làm xong việc — giờ là lúc all-in Rust.
+Khi C++ baseline đã thiết lập (~126k RPS GET, ~91k RPS PUT, p99 < 10ms), Hybrid đã hoàn thành sứ mệnh. Mức phí 2-5% hiệu năng là quá rẻ để đổi lấy hệ thống an toàn tuyệt đối.
 
-### 1.3. Loại bỏ sự phức tạp của Build System
+### 1.4. Loại bỏ sự phức tạp của Build System
 
-Hybrid architecture kéo theo một build system cực kỳ phức tạp:
+Hybrid architecture kéo theo một build system thảm họa:
 
 - **CMake** + **vcpkg** + **Corrosion** + **Cargo** + **cxx-build** = 5 build tools
-- `CMakeLists.txt` dài 324 dòng chỉ để link đúng thứ tự
-- Dockerfile phải cài cả GCC, vcpkg, Rust toolchain
-- CI build time >10 phút chỉ vì vcpkg compile RocksDB từ source
+- `CMakeLists.txt` dài 324 dòng chỉ để link đúng thứ tự. CI build time >10 phút chỉ vì vcpkg.
 
 Rust thuần túy: **1 tool** (`cargo build`), **1 file** (`Cargo.toml`), done.
 
@@ -88,7 +98,9 @@ Rust thuần túy: **1 tool** (`cargo build`), **1 file** (`Cargo.toml`), done.
 
 ### 2.2. Thread-per-Core với Tokio (Mô hình Envoy)
 
-Thay vì Envoy dùng raw epoll + manual event loop, ta tận dụng **Tokio runtime pinned vào từng CPU core** — cùng hiệu quả nhưng an toàn hơn:
+Thay vì Envoy dùng raw epoll + manual event loop, ta tận dụng **Tokio runtime pinned vào từng CPU core** — cùng hiệu quả nhưng an toàn hơn.
+
+> **Lưu ý cực kỳ quan trọng:** KHÔNG dùng `multi_thread` (work-stealing) của Tokio để tránh phá vỡ Thread-Local Cache. Ta bắt buộc phải dùng `current_thread`.
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -128,7 +140,7 @@ for core_id in 0..num_workers {
         // Pin thread vào CPU core (bọc unsafe trong safe fn)
         pin_to_core(core_id);
 
-        // Tokio current_thread runtime — 1 thread, 1 epoll
+        // Tokio current_thread runtime — 1 thread, 1 epoll (KHÔNG work-stealing)
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -137,7 +149,6 @@ for core_id in 0..num_workers {
         rt.block_on(async {
             // Mỗi worker bind riêng socket với SO_REUSEPORT
             let listener = bind_reuseport(port).await;
-            // Kernel phân phối connection đều giữa các worker
             axum::serve(listener, app.clone()).await;
         });
     });
@@ -311,12 +322,12 @@ naughtian-kallisto/
 **Mục tiêu:** Cargo workspace biên dịch được, CI chạy `cargo check --all`.
 
 **Deliverables:**
-- [ ] Cập nhật `Cargo.toml` workspace: thêm `src/` là library crate, khai báo tất cả workspace dependencies
-- [ ] Tạo `src/lib.rs` với các module stubs: `pub mod server; pub mod engine; pub mod storage; pub mod event;`
-- [ ] Cập nhật `cmd/kallisto-server/Cargo.toml` → depend on `naughtian-kallisto` lib crate
-- [ ] Makefile mới: `make build` = `cargo build --all`, `make test` = `cargo test --all`
-- [ ] Dockerfile mới: single Rust-only multi-stage build (xóa vcpkg, GCC)
-- [ ] `cargo check --all` pass
+- [x] Cập nhật `Cargo.toml` workspace: thêm `src/` là library crate, khai báo tất cả workspace dependencies
+- [x] Tạo `src/lib.rs` với các module stubs: `pub mod server; pub mod engine; pub mod storage; pub mod event;`
+- [x] Cập nhật `cmd/kallisto-server/Cargo.toml` → depend on `naughtian-kallisto` lib crate
+- [x] Makefile mới: `make build` = `cargo build --all`, `make test` = `cargo test --all`
+- [x] Dockerfile mới: single Rust-only multi-stage build (xóa vcpkg, GCC)
+- [x] `cargo check --all` pass
 
 **Thời gian ước tính:** 1 ngày
 
