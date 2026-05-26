@@ -390,9 +390,9 @@ pub trait SecretEngine: Send + Sync {
 - Background `std::thread` drains queue và batch-flush mỗi 1024 ops hoặc 5ms
 
 **Validation:**
-- [ ] Port toàn bộ 7 test cases từ `test_kv_engine.cpp`
-- [ ] Port toàn bộ test cases từ `test_engine_registry.cpp`
-- [ ] `cargo test --lib engine` pass 100%
+- [x] Port toàn bộ 7 test cases từ `test_kv_engine.cpp`
+- [x] Port toàn bộ test cases từ `test_engine_registry.cpp`
+- [x] `cargo test --lib engine` pass 100%
 
 **Thời gian ước tính:** 3-5 ngày
 
