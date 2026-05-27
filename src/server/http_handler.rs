@@ -278,7 +278,7 @@ mod tests {
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
         let body: serde_json::Value = serde_json::from_slice(&body_bytes).unwrap();
         
-        assert_eq!(body["value"], "mocked_value");
+        assert_eq!(body["data"]["value"], "mocked_value");
     }
 
     #[tokio::test]
