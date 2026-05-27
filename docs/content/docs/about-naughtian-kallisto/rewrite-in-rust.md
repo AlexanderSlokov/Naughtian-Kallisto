@@ -497,8 +497,8 @@ impl WorkerPool {
 ```
 
 **Validation:**
-- [ ] Port toàn bộ tests từ `test_http_handler.cpp` (22k LOC)
-- [ ] Port toàn bộ tests từ `test_sys_handler.cpp`
+- [x] Port toàn bộ tests từ `test_http_handler.cpp` (22k LOC)
+- [x] Port toàn bộ tests từ `test_sys_handler.cpp`
 - [ ] `wrk` benchmark: GET ≥ 120k RPS, PUT ≥ 87k RPS
 - [ ] Stress test: 0 errors under load (c=200, 10s)
 
