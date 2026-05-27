@@ -22,7 +22,7 @@ fn main() {
         registry: Arc::new(registry),
     };
     
-    let num_workers = 6;
+    let num_workers = 2;
     let port = 8200;
     
     println!("Starting Kallisto Rust Server on port 8200 with {} workers...", num_workers);
