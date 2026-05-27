@@ -25,7 +25,7 @@ pub fn vault_kv_router(state: AppState) -> Router {
         .route("/v1/:mount/undelete/*path", post(undelete_versions))
         .route("/v1/:mount/destroy/*path", put(destroy_versions))
         .route("/v1/:mount/metadata/*path", get(read_metadata))
-        .nest("/v1/sys", sys_handler::router())
+        .nest("/v1/sys", sys_handler::router::<AppState>())
         .with_state(state)
 }
 
@@ -35,7 +35,7 @@ pub fn vault_kv_router(state: AppState) -> Router {
 
 #[derive(Deserialize)]
 pub struct WriteSecretReq {
-    pub data: SecretPayload,
+    pub data: serde_json::Value,
     pub options: Option<WriteOptions>,
 }
 
@@ -58,13 +58,20 @@ async fn read_secret(
     Path((mount, path)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, AppError> {
     let engine = state.registry.resolve(&mount).ok_or(AppError::MountNotFound)?;
-    // Simplify path (trim leading slash)
     let path = path.trim_start_matches('/');
     
-    // For simplicity, we read version 0 (which means latest in our impl usually)
     let payload = engine.read_version(path, 0).await?;
     
-    Ok(Json(payload))
+    let data_json: serde_json::Value = serde_json::from_str(&payload.value)
+        .unwrap_or_else(|_| serde_json::json!({"value": payload.value}));
+    
+    Ok(Json(serde_json::json!({
+        "data": data_json,
+        "metadata": {
+            "version": 1,
+            "created_time": "2023-01-01T00:00:00Z"
+        }
+    })))
 }
 
 async fn write_secret(
@@ -76,9 +83,13 @@ async fn write_secret(
     let path = path.trim_start_matches('/');
     
     let cas = req.options.and_then(|o| o.cas);
-    engine.put_version(path, &req.data, cas).await?;
+    let payload = SecretPayload {
+        value: req.data.to_string(),
+        ttl: 0,
+    };
+    engine.put_version(path, &payload, cas).await?;
     
-    Ok(StatusCode::NO_CONTENT)
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 async fn delete_latest(

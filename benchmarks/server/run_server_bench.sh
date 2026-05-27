@@ -28,7 +28,7 @@ HTTP_PORT=8200
 ADMIN_PORT=8202
 BENCH_DB_PATH="/tmp/kallisto_bench_data"
 BENCH_LOG="/tmp/kallisto_bench.log"
-SERVER_BIN="./build/kallisto_server"
+SERVER_BIN="./target/release/kallisto-server"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKLOAD_DIR="$SCRIPT_DIR/workloads"
 
