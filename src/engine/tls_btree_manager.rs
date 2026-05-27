@@ -33,25 +33,15 @@ impl TlsBTreeManager {
             return false;
         }
 
-        // Lock-free RCU Loop: clone, update, compare-and-swap
-        let mut current_arc = snapshot;
-        loop {
-            // Deep copy the snapshot (or clone the ARC's inner value)
-            let mut updated_clone = (*current_arc).clone();
-            updated_clone.insert_path(path);
-            
-            let new_arc = Arc::new(updated_clone);
-            let prev = self.master_btree.compare_and_swap(current_arc.clone(), new_arc);
-            if Arc::ptr_eq(&prev, &current_arc) {
-                // Success
-                break;
+        self.master_btree.rcu(|old| {
+            if old.validate_path(path) {
+                old.clone()
+            } else {
+                let mut updated_clone = (**old).clone();
+                updated_clone.insert_path(path);
+                Arc::new(updated_clone)
             }
-            // Retry with new current if CAS failed
-            if prev.validate_path(path) {
-                return false;
-            }
-            current_arc = prev;
-        }
+        });
         
         true
     }
