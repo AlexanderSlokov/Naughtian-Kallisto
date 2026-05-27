@@ -27,8 +27,22 @@ fn main() {
     
     println!("Starting Kallisto Rust Server on port 8200 with {} workers...", num_workers);
     
-    let pool = WorkerPool::spawn(num_workers, port, state);
+    let pool = WorkerPool::spawn(num_workers, port, state.clone());
     
+    // Start Admin API on port 8202
+    let admin_state = naughtian_kallisto::server::admin_handler::AdminState {
+        registry: state.registry.clone(),
+    };
+    std::thread::spawn(move || {
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        rt.block_on(async {
+            let admin_router = naughtian_kallisto::server::admin_handler::router(admin_state);
+            let listener = tokio::net::TcpListener::bind("0.0.0.0:8202").await.unwrap();
+            println!("Starting Admin API on port 8202...");
+            axum::serve(listener, admin_router).await.unwrap();
+        });
+    });
+
     // In test environment, let it run until killed
     pool.join_all();
 }
