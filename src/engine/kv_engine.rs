@@ -352,8 +352,7 @@ impl SecretEngine for KvEngine {
     async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, EngineError> {
         let mut keys = BTreeSet::new();
 
-        let path_index = self.path_index.get_local_snapshot();
-        for stored_path in path_index.get_all_paths() {
+        for stored_path in self.path_index.get_all_paths() {
             if prefix.is_empty() {
                 let parts: Vec<&str> = stored_path.split('/').collect();
                 if !parts.is_empty() {
