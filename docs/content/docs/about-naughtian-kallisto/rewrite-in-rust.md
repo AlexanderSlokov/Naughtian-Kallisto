@@ -420,8 +420,8 @@ pub trait SecretEngine: Send + Sync {
 - Graceful shutdown: drain hết queue trước khi exit
 
 **Validation:**
-- [ ] Port toàn bộ tests từ `test_rocksdb_storage.cpp`
-- [ ] Port toàn bộ tests từ `test_sharded_cuckoo_table.cpp`
+- [x] Port toàn bộ tests từ `test_rocksdb_storage.cpp`
+- [x] Port toàn bộ tests từ `test_sharded_cuckoo_table.cpp`
 - [ ] Benchmark: single-thread PUT/GET latency ≤ 10% so với C++
 
 **Thời gian ước tính:** 3-4 ngày
