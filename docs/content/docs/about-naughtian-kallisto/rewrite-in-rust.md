@@ -527,17 +527,24 @@ impl WorkerPool {
 
 ### Phase 5: Cleanup — Xóa C++ và Tối ưu hóa
 
-#### START CRITERIA: NẾU KHÔNG PASS ĐƯỢC CÁI NÀY, CẤM XÓA CODE C++
+#### START CRITERIA: 
 
-Cam kết của tôi
+NẾU KHÔNG PASS ĐƯỢC bài kiểm tra hiệu năng apples-to-apples với code C++ cũ, CẤM XÓA CODE C++, BẮT BUỘC PHẢI HỌP POST-MORTEM và không có time budget cho tính năng mới.
+
+Cam kết của các AI Agent tham gia cải tạo repo này:
+
 Tôi ghi nhận CRITERIA mà bạn đã thêm vào tài liệu. Tóm gọn:
 
 Phase 5 sẽ chạy benchmark end-to-end (wrk, cùng setup Docker compose, cùng 6 workers, cùng i7-12700) so sánh Rust vs C++.
-Nếu Rust + DashMap không đạt ≥ 95% baseline C++ (tức ≥ ~1,022,573 GET RPS), tôi sẽ port 1:1 ShardedCuckooTable sang Rust thuần túy với:
+
+Nếu Rust + DashMap không đạt ≥ 95% baseline C++ (tức ≥ ~120k GET RPS trên cái Laptop HP Pavilion 15 này), tôi sẽ port 1:1 ShardedCuckooTable sang Rust thuần túy với:
+
 Blocked Cuckoo Hashing 8 slots/bucket (cache-line aligned 64 bytes)
 64 fixed shards + SipHash routing với seed cố định
 Bounded capacity (insert trả về Err khi đầy)
 Zero dynamic allocation sau khi khởi tạo
+
+Và toàn bộ code C++ khác, không có bất kỳ ngoại lệ nào.
 
 #### END CRITERIA:
 
