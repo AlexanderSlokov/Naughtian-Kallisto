@@ -113,16 +113,16 @@ impl CuckooTable {
 
     pub fn insert(&self, key: &str, entry: SecretEntry) -> bool {
         let mut state = self.state.write();
+        let CuckooState { table_1, table_2, storage, free_list } = &mut *state;
 
         let h1_raw = Self::hash1_full(key);
         let tag = Self::get_tag(h1_raw);
         let idx1 = (h1_raw as usize) % self.capacity;
 
-        // Check Table 1
-        for slot in &mut state.table_1[idx1].slots {
+        for slot in &mut table_1[idx1].slots {
             if slot.index != u32::MAX && slot.tag == tag {
-                if state.storage[slot.index as usize].key == key {
-                    state.storage[slot.index as usize] = SecretEntry {
+                if storage[slot.index as usize].key == key {
+                    storage[slot.index as usize] = SecretEntry {
                         key: key.to_string(),
                         payload: entry.payload,
                     };
@@ -134,11 +134,10 @@ impl CuckooTable {
         let h2_raw = Self::hash2_full(key);
         let idx2 = (h2_raw as usize) % self.capacity;
 
-        // Check Table 2
-        for slot in &mut state.table_2[idx2].slots {
+        for slot in &mut table_2[idx2].slots {
             if slot.index != u32::MAX && slot.tag == tag {
-                if state.storage[slot.index as usize].key == key {
-                    state.storage[slot.index as usize] = SecretEntry {
+                if storage[slot.index as usize].key == key {
+                    storage[slot.index as usize] = SecretEntry {
                         key: key.to_string(),
                         payload: entry.payload,
                     };
@@ -148,32 +147,32 @@ impl CuckooTable {
         }
 
         let new_storage_idx: u32;
-        if let Some(recycled_idx) = state.free_list.pop() {
+        if let Some(recycled_idx) = free_list.pop() {
             new_storage_idx = recycled_idx;
-            self.shadow_free_list_size.store(state.free_list.len(), Ordering::Relaxed);
-            state.storage[new_storage_idx as usize] = SecretEntry {
+            self.shadow_free_list_size.store(free_list.len(), Ordering::Relaxed);
+            storage[new_storage_idx as usize] = SecretEntry {
                 key: key.to_string(),
-                payload: entry.payload,
+                payload: entry.payload.clone(),
             };
         } else {
-            state.storage.push(SecretEntry {
+            storage.push(SecretEntry {
                 key: key.to_string(),
-                payload: entry.payload,
+                payload: entry.payload.clone(),
             });
-            new_storage_idx = (state.storage.len() - 1) as u32;
-            self.shadow_storage_capacity.store(state.storage.capacity(), Ordering::Relaxed);
-            self.shadow_storage_size.store(state.storage.len(), Ordering::Relaxed);
+            new_storage_idx = (storage.len() - 1) as u32;
+            self.shadow_storage_capacity.store(storage.capacity(), Ordering::Relaxed);
+            self.shadow_storage_size.store(storage.len(), Ordering::Relaxed);
         }
 
         let mut current_index = new_storage_idx;
         let mut current_tag = tag;
 
         for i in 0..256 {
-            let cur_key = &state.storage[current_index as usize].key;
+            let cur_key = storage[current_index as usize].key.clone();
             
-            let h1 = Self::hash1_full(cur_key);
+            let h1 = Self::hash1_full(&cur_key);
             let b1 = (h1 as usize) % self.capacity;
-            for slot in &mut state.table_1[b1].slots {
+            for slot in &mut table_1[b1].slots {
                 if slot.index == u32::MAX {
                     slot.tag = current_tag;
                     slot.index = current_index;
@@ -181,9 +180,9 @@ impl CuckooTable {
                 }
             }
 
-            let h2 = Self::hash2_full(cur_key);
+            let h2 = Self::hash2_full(&cur_key);
             let b2 = (h2 as usize) % self.capacity;
-            for slot in &mut state.table_2[b2].slots {
+            for slot in &mut table_2[b2].slots {
                 if slot.index == u32::MAX {
                     slot.tag = current_tag;
                     slot.index = current_index;
@@ -195,11 +194,11 @@ impl CuckooTable {
             let temp_tag = current_tag;
             let temp_idx = current_index;
             
-            current_tag = state.table_1[b1].slots[victim_slot].tag;
-            current_index = state.table_1[b1].slots[victim_slot].index;
+            current_tag = table_1[b1].slots[victim_slot].tag;
+            current_index = table_1[b1].slots[victim_slot].index;
             
-            state.table_1[b1].slots[victim_slot].tag = temp_tag;
-            state.table_1[b1].slots[victim_slot].index = temp_idx;
+            table_1[b1].slots[victim_slot].tag = temp_tag;
+            table_1[b1].slots[victim_slot].index = temp_idx;
         }
 
         eprintln!("Insert rejected: Cuckoo Table is full (Max displacement reached).");
@@ -237,19 +236,20 @@ impl CuckooTable {
 
     pub fn remove(&self, key: &str) -> bool {
         let mut state = self.state.write();
+        let CuckooState { table_1, table_2, storage, free_list } = &mut *state;
 
         let h1_raw = Self::hash1_full(key);
         let tag = Self::get_tag(h1_raw);
         let idx1 = (h1_raw as usize) % self.capacity;
 
-        for slot in &mut state.table_1[idx1].slots {
+        for slot in &mut table_1[idx1].slots {
             if slot.index != u32::MAX && slot.tag == tag {
-                if state.storage[slot.index as usize].key == key {
+                if storage[slot.index as usize].key == key {
                     let removed_index = slot.index;
                     slot.index = u32::MAX;
                     slot.tag = 0;
-                    state.free_list.push(removed_index);
-                    self.shadow_free_list_size.store(state.free_list.len(), Ordering::Relaxed);
+                    free_list.push(removed_index);
+                    self.shadow_free_list_size.store(free_list.len(), Ordering::Relaxed);
                     return true;
                 }
             }
@@ -258,14 +258,14 @@ impl CuckooTable {
         let h2_raw = Self::hash2_full(key);
         let idx2 = (h2_raw as usize) % self.capacity;
 
-        for slot in &mut state.table_2[idx2].slots {
+        for slot in &mut table_2[idx2].slots {
             if slot.index != u32::MAX && slot.tag == tag {
-                if state.storage[slot.index as usize].key == key {
+                if storage[slot.index as usize].key == key {
                     let removed_index = slot.index;
                     slot.index = u32::MAX;
                     slot.tag = 0;
-                    state.free_list.push(removed_index);
-                    self.shadow_free_list_size.store(state.free_list.len(), Ordering::Relaxed);
+                    free_list.push(removed_index);
+                    self.shadow_free_list_size.store(free_list.len(), Ordering::Relaxed);
                     return true;
                 }
             }
