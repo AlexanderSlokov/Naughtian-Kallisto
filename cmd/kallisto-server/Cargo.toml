@@ -6,3 +6,4 @@ edition = "2024"
 [dependencies]
 naughtian-kallisto = { path = "../.." }
 tokio = { workspace = true }
+axum = { workspace = true }

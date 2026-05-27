@@ -1,4 +1,3 @@
-use parking_lot::RwLock;
 use siphasher::sip::SipHasher24;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicUsize, Ordering};

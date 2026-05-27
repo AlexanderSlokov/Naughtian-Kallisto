@@ -23,7 +23,6 @@ export KALLISTO_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /
 
 clean:
 	cargo clean
-	# rm -rf bin dist
 
 # Development builds
 # ------------------
@@ -64,10 +63,16 @@ docker-run:
 	  -v my-kallisto-data:/kallisto/data $(REGISTRY)/$(DEVCONTAINER_IMAGE):latest
 
 
+# Build System
+# ------------
+
+build-server:
+	cargo build --release -p kallisto-server
+
 # Benchmarks (Server — HTTP wrk)
 # ------------------------------
 
-bench-server: clean build-server
+bench-server: build-server
 	@bash benchmarks/server/run_server_bench.sh
 
 
@@ -146,23 +151,6 @@ help:
 	@echo "  Utilities:"
 	@echo "    make clean          - Deep clean build artifacts"
 
-# ===========================================================================
-# Build System
-# ===========================================================================
-
-build:
-	@cmake -B $(BUILD_DIR) -S .
-	@cmake --build $(BUILD_DIR) -j $(shell nproc)
-
-build-server:
-	$(CMAKE) -B $(BUILD_DIR) -S . $(CMAKE_FLAGS)
-	$(CMAKE) --build $(BUILD_DIR) -j $(shell nproc)
-
-run: build
-	@./$(BUILD_DIR)/$(TARGET)
-
-run-server: build-server
-	@./$(BUILD_DIR)/kallisto_server --workers=$(shell nproc) --db-path=$(DB_PATH)
 
 # ===========================================================================
 # Unit Tests

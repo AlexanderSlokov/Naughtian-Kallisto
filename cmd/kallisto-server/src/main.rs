@@ -4,7 +4,7 @@ use naughtian_kallisto::server::http_handler::AppState;
 use naughtian_kallisto::event::worker::WorkerPool;
 use std::sync::Arc;
 use std::path::PathBuf;
-use std::time::Duration;
+
 
 fn main() {
     let registry = EngineRegistry::new();
@@ -34,7 +34,7 @@ fn main() {
         registry: state.registry.clone(),
     };
     std::thread::spawn(move || {
-        let rt = tokio::runtime::Runtime::new().unwrap();
+        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
         rt.block_on(async {
             let admin_router = naughtian_kallisto::server::admin_handler::router(admin_state);
             let listener = tokio::net::TcpListener::bind("0.0.0.0:8202").await.unwrap();
