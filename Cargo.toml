@@ -43,6 +43,7 @@ serde_json = { workspace = true }
 bincode = { workspace = true }
 socket2 = { workspace = true }
 core_affinity = { workspace = true }
+siphasher = "1.0.3"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

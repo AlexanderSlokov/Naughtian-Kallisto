@@ -1309,6 +1309,7 @@ dependencies = [
  "rocksdb",
  "serde",
  "serde_json",
+ "siphasher",
  "socket2 0.5.10",
  "thiserror 1.0.69",
  "tokio",

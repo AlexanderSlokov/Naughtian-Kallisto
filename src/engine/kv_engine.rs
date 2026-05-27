@@ -1,7 +1,8 @@
 use async_trait::async_trait;
-use dashmap::DashMap;
-use parking_lot::RwLock;
 use std::collections::BTreeSet;
+use crate::engine::sharded_cuckoo_table::ShardedCuckooTable;
+use crate::engine::tls_btree_manager::TlsBTreeManager;
+use crate::engine::cuckoo_table::SecretEntry;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
@@ -22,8 +23,8 @@ pub enum AsyncOp {
 }
 
 pub struct KvEngine {
-    cache: DashMap<String, Vec<u8>>,
-    path_index: Arc<RwLock<BTreeSet<String>>>,
+    cache: Arc<ShardedCuckooTable>,
+    path_index: Arc<TlsBTreeManager>,
     rocksdb: Arc<RocksDbBackend>,
     sync_mode: AtomicU8, // 1 = Immediate, 0 = Batch
     async_sender: crossbeam_channel::Sender<AsyncOp>,
@@ -37,8 +38,8 @@ impl KvEngine {
             EngineError::StorageError(format!("Failed to open RocksDB: {}", e))
         })?);
 
-        let cache = DashMap::new();
-        let path_index = Arc::new(RwLock::new(BTreeSet::new()));
+        let cache = Arc::new(ShardedCuckooTable::new(1024 * 1024));
+        let path_index = Arc::new(TlsBTreeManager::new(3));
         let sync_mode = AtomicU8::new(SyncMode::Batch as u8); // Default: Batch
 
         // Rebuild path index from RocksDB keys
@@ -46,7 +47,7 @@ impl KvEngine {
         rocksdb.iterate_keys(move |key| {
             if key.starts_with(b"m:") {
                 if let Ok(path_str) = std::str::from_utf8(&key[2..]) {
-                    path_index_clone.write().insert(path_str.to_string());
+                    path_index_clone.insert_path_if_absent(path_str);
                 }
             }
         });
@@ -85,13 +86,16 @@ impl KvEngine {
     }
 
     fn read_raw_optimistic(&self, key: &str) -> Result<Option<Vec<u8>>, EngineError> {
-        if let Some(cached) = self.cache.get(key) {
-            return Ok(Some(cached.clone()));
+        if let Some(cached) = self.cache.lookup(key) {
+            return Ok(Some(cached.payload));
         }
         if let Some(disk) = self.rocksdb.get_raw(key.as_bytes()).map_err(|e| {
             EngineError::StorageError(format!("RocksDB get error: {}", e))
         })? {
-            self.cache.insert(key.to_string(), disk.clone());
+            self.cache.insert(key, SecretEntry {
+                key: key.to_string(),
+                payload: disk.clone(),
+            });
             return Ok(Some(disk));
         }
         Ok(None)
@@ -243,16 +247,16 @@ impl SecretEngine for KvEngine {
             key: vkey.clone(),
             value: serialized_payload.clone(),
         })?;
-        self.cache.insert(vkey, serialized_payload);
+        self.cache.insert(&vkey, SecretEntry { key: vkey.clone(), payload: serialized_payload });
 
         let serialized_meta = Self::serialize_metadata(&meta)?;
         self.enqueue_or_execute(AsyncOp::Put {
             key: mkey.clone(),
             value: serialized_meta.clone(),
         })?;
-        self.cache.insert(mkey, serialized_meta);
+        self.cache.insert(&mkey, SecretEntry { key: mkey.clone(), payload: serialized_meta });
 
-        self.path_index.write().insert(path.to_string());
+        self.path_index.insert_path_if_absent(path);
 
         Ok(())
     }
@@ -279,7 +283,7 @@ impl SecretEngine for KvEngine {
             key: mkey.clone(),
             value: serialized_meta.clone(),
         })?;
-        self.cache.insert(mkey, serialized_meta);
+        self.cache.insert(&mkey, SecretEntry { key: mkey.clone(), payload: serialized_meta });
 
         Ok(())
     }
@@ -309,7 +313,7 @@ impl SecretEngine for KvEngine {
             key: mkey.clone(),
             value: serialized_meta.clone(),
         })?;
-        self.cache.insert(mkey, serialized_meta);
+        self.cache.insert(&mkey, SecretEntry { key: mkey.clone(), payload: serialized_meta });
 
         Ok(())
     }
@@ -340,7 +344,7 @@ impl SecretEngine for KvEngine {
             key: mkey.clone(),
             value: serialized_meta.clone(),
         })?;
-        self.cache.insert(mkey, serialized_meta);
+        self.cache.insert(&mkey, SecretEntry { key: mkey.clone(), payload: serialized_meta });
 
         Ok(())
     }
@@ -348,8 +352,8 @@ impl SecretEngine for KvEngine {
     async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, EngineError> {
         let mut keys = BTreeSet::new();
 
-        let path_index = self.path_index.read();
-        for stored_path in path_index.iter() {
+        let path_index = self.path_index.get_local_snapshot();
+        for stored_path in path_index.get_all_paths() {
             if prefix.is_empty() {
                 let parts: Vec<&str> = stored_path.split('/').collect();
                 if !parts.is_empty() {
