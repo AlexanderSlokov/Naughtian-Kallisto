@@ -6,6 +6,7 @@ use crate::engine::cuckoo_table::SecretEntry;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::thread::JoinHandle;
+use crate::engine::lock_free_queue::{LockFreeQueue, QueueError};
 
 use crate::storage::rocksdb_backend::{BatchOp, RocksDbBackend};
 use super::error::EngineError;
@@ -27,7 +28,7 @@ pub struct KvEngine {
     path_index: Arc<TlsBTreeManager>,
     rocksdb: Arc<RocksDbBackend>,
     sync_mode: AtomicU8, // 1 = Immediate, 0 = Batch
-    async_sender: crossbeam_channel::Sender<AsyncOp>,
+    async_queue: Arc<LockFreeQueue<AsyncOp>>,
     async_running: Arc<AtomicBool>,
     async_worker: Option<JoinHandle<()>>,
 }
@@ -52,14 +53,15 @@ impl KvEngine {
             }
         });
 
-        let (tx, rx) = crossbeam_channel::bounded::<AsyncOp>(262_144);
+        let async_queue = Arc::new(LockFreeQueue::new(262144));
         let async_running = Arc::new(AtomicBool::new(true));
 
         // Background worker loop
         let rocksdb_clone = rocksdb.clone();
         let running_clone = async_running.clone();
+        let queue_clone = async_queue.clone();
         let async_worker = std::thread::spawn(move || {
-            async_worker_loop(rx, rocksdb_clone, running_clone);
+            async_worker_loop(queue_clone, rocksdb_clone, running_clone);
         });
 
         Ok(Self {
@@ -67,7 +69,7 @@ impl KvEngine {
             path_index,
             rocksdb,
             sync_mode,
-            async_sender: tx,
+            async_queue,
             async_running,
             async_worker: Some(async_worker),
         })
@@ -119,12 +121,9 @@ impl KvEngine {
                 }
             }
         } else {
-            self.async_sender.try_send(op).map_err(|e| match e {
-                crossbeam_channel::TrySendError::Full(_) => EngineError::QueueFull,
-                crossbeam_channel::TrySendError::Disconnected(_) => {
-                    EngineError::StorageError("Async queue worker disconnected".to_string())
-                }
-            })?;
+            if let Err(QueueError::Full) = self.async_queue.enqueue(op) {
+                return Err(EngineError::QueueFull);
+            }
         }
         Ok(())
     }
@@ -398,7 +397,7 @@ impl SecretEngine for KvEngine {
 }
 
 fn async_worker_loop(
-    rx: crossbeam_channel::Receiver<AsyncOp>,
+    queue: Arc<LockFreeQueue<AsyncOp>>,
     rocksdb: Arc<RocksDbBackend>,
     running: Arc<AtomicBool>,
 ) {
@@ -406,19 +405,21 @@ fn async_worker_loop(
     let mut last_flush = std::time::Instant::now();
 
     while running.load(Ordering::Relaxed) {
-        match rx.recv_timeout(std::time::Duration::from_millis(1)) {
-            Ok(op) => match op {
-                AsyncOp::Put { key, value } => {
-                    batch.push(BatchOp::Put { key, value });
+        let mut dequeued = false;
+        
+        match queue.dequeue() {
+            Ok(op) => {
+                dequeued = true;
+                match op {
+                    AsyncOp::Put { key, value } => {
+                        batch.push(BatchOp::Put { key, value });
+                    }
+                    AsyncOp::Delete { key } => {
+                        batch.push(BatchOp::Delete { key });
+                    }
                 }
-                AsyncOp::Delete { key } => {
-                    batch.push(BatchOp::Delete { key });
-                }
-            },
-            Err(crossbeam_channel::RecvTimeoutError::Timeout) => {}
-            Err(crossbeam_channel::RecvTimeoutError::Disconnected) => {
-                break;
             }
+            Err(_) => {}
         }
 
         let now = std::time::Instant::now();
@@ -430,11 +431,14 @@ fn async_worker_loop(
             }
             batch.clear();
             last_flush = std::time::Instant::now();
+        } else if !dequeued {
+            // Spin-sleep if idle to prevent 100% CPU burn but maintain low latency
+            std::thread::sleep(std::time::Duration::from_micros(100));
         }
     }
 
     // Flush any remaining ops on shutdown
-    while let Ok(op) = rx.try_recv() {
+    while let Ok(op) = queue.dequeue() {
         match op {
             AsyncOp::Put { key, value } => {
                 batch.push(BatchOp::Put { key, value });

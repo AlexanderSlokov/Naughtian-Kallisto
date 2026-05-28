@@ -4,6 +4,10 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ## Developing Environment Tips
 
+### NO BARGAIN:
+
+- The number of `unsafe` blocks is strictly limited to 96 (as`TiKV` is currently only using 96 `unsafe` blocks for the whole system).
+
 ### Prerequisites
 
 - git - Version control
@@ -20,6 +24,7 @@ This file provides guidance to AI agents when working with code in this reposito
 - `/src/` - Main Kallisto server source code
     - `/src/engine/` - Engines implementation (migrated from C++ to Rust)
 	- `/src/event/` - Event handling and processing (migrated from C++ to Rust)
+	- `/src/engine/lock_free_queue.rs` - Async flusher using Dmitry Vyukov's MPMC Lock-Free Queue
 	- `/src/server/` - Server implementation (migrated from C++ to Rust)
 	- `/src/thread_local/` - Thread-local data structure (migrated from C++ to Rust)
 
