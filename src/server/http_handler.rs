@@ -3,7 +3,7 @@ use axum::{
     http::{StatusCode, header},
     response::IntoResponse,
     routing::{get, post, put},
-    Json, Router,
+    Router,
 };
 use std::sync::Arc;
 use axum::body::Bytes;
@@ -30,62 +30,21 @@ pub fn vault_kv_router(state: AppState) -> Router {
 }
 
 // -----------------------------------------------------------------------------
-// Manual Unsafe JSON Parsers (Mimicking C++ Zero-Cost Parsing)
+// Fast SIMD JSON Extraction (sonic-rs)
 // -----------------------------------------------------------------------------
 
-/// Fast, zero-allocation array parser for payloads like {"versions": [1, 2, 3]}
+use sonic_rs::{JsonValueTrait, JsonContainerTrait, Value};
+
+/// Fast, safe array parser for payloads like {"versions": [1, 2, 3]} using SIMD
 fn parse_versions_list(body: &[u8]) -> Vec<u32> {
     let mut versions = Vec::new();
-    unsafe {
-        // Unsafe Block 3: Raw pointer arithmetic for extreme speed, skipping bounds checks
-        let ptr = body.as_ptr();
-        let len = body.len();
-        
-        let mut idx = 0;
-        let mut found = false;
-        
-        while idx + 10 <= len {
-            if *ptr.add(idx) == b'"' && *ptr.add(idx+1) == b'v' && *ptr.add(idx+8) == b's' && *ptr.add(idx+9) == b'"' {
-                found = true;
-                idx += 10;
-                break;
-            }
-            idx += 1;
-        }
-        
-        if !found { return versions; }
-        
-        let mut in_array = false;
-        while idx < len {
-            if *ptr.add(idx) == b'[' {
-                in_array = true;
-                idx += 1;
-                break;
-            }
-            idx += 1;
-        }
-        
-        if !in_array { return versions; }
-        
-        let mut num = 0;
-        let mut parsing = false;
-        
-        while idx < len {
-            let c = *ptr.add(idx);
-            if c >= b'0' && c <= b'9' {
-                num = num * 10 + (c - b'0') as u32;
-                parsing = true;
-            } else if c == b',' {
-                if parsing {
-                    versions.push(num);
-                    num = 0;
-                    parsing = false;
+    if let Ok(root) = sonic_rs::from_slice::<Value>(body) {
+        if let Some(arr) = root.pointer(sonic_rs::pointer!["versions"]).and_then(|v| v.as_array()) {
+            for item in arr.iter() {
+                if let Some(num) = item.as_u64() {
+                    versions.push(num as u32);
                 }
-            } else if c == b']' {
-                if parsing { versions.push(num); }
-                break;
             }
-            idx += 1;
         }
     }
     versions
@@ -121,60 +80,19 @@ async fn write_secret(
     let engine = state.registry.resolve(&mount).ok_or(AppError::MountNotFound)?;
     let path = path.trim_start_matches('/');
     
-    let mut secret_value = "";
+    let mut secret_value = String::new();
     
-    unsafe {
-        // Unsafe Block 4: Zero-copy JSON value extraction
-        let ptr = body.as_ptr();
-        let len = body.len();
-        
-        let mut idx = 0;
-        let mut data_pos = usize::MAX;
-        
-        while idx + 6 <= len {
-            if *ptr.add(idx) == b'"' && *ptr.add(idx+1) == b'd' && *ptr.add(idx+4) == b'a' && *ptr.add(idx+5) == b'"' {
-                data_pos = idx;
-                break;
-            }
-            idx += 1;
-        }
-        
-        if data_pos != usize::MAX {
-            let mut obj_start = usize::MAX;
-            for i in data_pos + 6..len {
-                if *ptr.add(i) == b'{' {
-                    obj_start = i;
-                    break;
-                }
-            }
-            
-            if obj_start != usize::MAX {
-                let mut depth = 0;
-                let mut obj_end = obj_start;
-                for i in obj_start..len {
-                    let c = *ptr.add(i);
-                    if c == b'{' { depth += 1; }
-                    else if c == b'}' {
-                        depth -= 1;
-                        if depth == 0 {
-                            obj_end = i;
-                            break;
-                        }
-                    }
-                }
-                
-                let slice = std::slice::from_raw_parts(ptr.add(obj_start), obj_end - obj_start + 1);
-                secret_value = std::str::from_utf8_unchecked(slice);
-            }
-        }
-        
-        if secret_value.is_empty() {
-            secret_value = std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len));
-        }
+    // Sử dụng Lazy Evaluation của sonic-rs để trích xuất Zero-Copy chuỗi "data" (Safe Rust)
+    if let Ok(lazy) = sonic_rs::get(body.as_ref(), sonic_rs::pointer!["data"]) {
+        secret_value = lazy.as_raw_str().to_string();
+    }
+    
+    if secret_value.is_empty() {
+        secret_value = String::from_utf8_lossy(body.as_ref()).into_owned();
     }
     
     let payload = SecretPayload {
-        value: secret_value.to_string(),
+        value: secret_value,
         ttl: 0,
     };
     engine.put_version(path, &payload, None).await?;

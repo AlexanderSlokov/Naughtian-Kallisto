@@ -285,10 +285,16 @@ naughtian-kallisto/
 | `socket2`              | Raw `socket()/bind()/listen()`     | SO_REUSEPORT socket creation       | Safe wrapper cho syscall, < 5 dòng unsafe     |
 | `dashmap`              | `ShardedCuckooTable` (2k LOC)      | Concurrent in-memory hashmap       | 256 shards mặc định, lock-free reads          |
 | `rocksdb` 0.21         | `RocksDBStorage` (9k LOC)          | Persistent WAL + SST storage       | Safe Rust wrapper cho C library               |
-| `serde` + `serde_json` | `simdjson` + manual serialize      | JSON parse/format                  | Vault KV-v2 API request/response              |
+| `sonic-rs`             | `simdjson` + manual serialize      | SIMD Zero-copy JSON extraction     | Cực nhanh, trích xuất "data" không cần AST    |
 | `crossbeam-channel`    | `LockFreeQueue` (84 LOC)           | MPMC bounded queue cho async flush | Bounded channel thay Vyukov queue             |
 | `parking_lot`          | `std::shared_mutex`                | Faster RwLock/Mutex                | 30-50% nhanh hơn std mutex                    |
 | `arc-swap`             | RCU pointer swap (TlsBTreeManager) | Lock-free atomic pointer swap      | Safe `Arc` swapping, không cần unsafe         |
+
+#### Ý tưởng Triển khai `sonic-rs` (SIMD JSON Extraction)
+Thay vì dùng `serde_json::Value` (bắt buộc phải cấp phát toàn bộ cấu trúc JSON lên Heap dưới dạng cây AST), chúng ta sẽ dùng vũ khí hạng nặng **`sonic-rs`** của ByteDance. Thư viện này có tính năng **Lazy Evaluation** thông qua `sonic_rs::get()`.
+- **Đọc (GET):** Trả về JSON String bằng cách pre-allocate dung lượng và nối chuỗi tĩnh trực tiếp, giống hệt `ostringstream` của C++. Mất 0 byte cấp phát thêm!
+- **Ghi (PUT/POST):** Thay vì tạo các vòng lặp `unsafe` (pointer arithmetic) thủ công rủi ro, `sonic-rs` dùng tập lệnh SIMD (AVX2/AVX-512) quét lướt qua bộ đệm immutable (`axum::body::Bytes`). Nó sẽ dò trúng field `"data"`, cắt chính xác `&str` (Zero-copy slice) và trả về dưới dạng tham chiếu an toàn. 
+- **Kết quả:** Đòi lại được 2 token `unsafe` đã dùng cho JSON parsing. Mã nguồn trở thành **Safe Rust 100%** nhưng vẫn đạt thông lượng (throughput) tương đương kiến trúc C++ `simdjson::ondemand`.
 
 ### 4.2. Cold Path (Control Plane — an toàn & bảo mật)
 
@@ -586,7 +592,7 @@ Và toàn bộ code C++ khác, không có bất kỳ ngoại lệ nào.
 
 | Rủi ro                                   | Xác suất   | Impact              | Mitigation                                                |
 |------------------------------------------|------------|---------------------|-----------------------------------------------------------|
-| `serde_json` chậm hơn `simdjson`         | Trung bình | GET latency tăng    | Dùng `simd-json` crate nếu cần, hoặc `sonic-rs`           |
+| `sonic-rs` khác biệt API so với serde | Rất thấp   | Cần học cách dùng Lazy API  | Đọc tài liệu, gói gọn logic SIMD vào các helper functions |
 | `DashMap` contention cao hơn CuckooTable | Thấp       | Throughput giảm     | Tune shard count, hoặc dùng `flurry` (concurrent hashmap) |
 | RocksDB Rust binding thiếu feature       | Thấp       | Không build được    | Crate `rocksdb` 0.21 đã mature, đủ API                    |
 | Tokio `current_thread` overhead          | Thấp       | Latency tăng nhẹ    | Benchmark sớm ở Phase 3, fallback sang `multi_thread`     |
