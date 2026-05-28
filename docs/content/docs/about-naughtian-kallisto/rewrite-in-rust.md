@@ -512,9 +512,6 @@ impl WorkerPool {
 
 **Deliverables:**
 - [ ] `components/kallisto_cluster`: Refactor `admin_http.rs` — xóa raw pointer FFI, dùng `Arc<KallistoCore>` trực tiếp
-- [ ] `components/kallisto_telemetry`: Kết nối audit log trực tiếp (không cần FFI channel)
-- [ ] `components/kallisto_crypto`: Implement Shamir + Master Key (theo spec trong `README.md`)
-- [ ] `components/kallisto_policy`: Implement RBAC + Lease manager
 - [ ] Admin server (port 8202) chạy trên cùng process, shared `Arc<KallistoCore>`
 
 **Validation:**

@@ -48,6 +48,8 @@ siphasher = "1.0.3"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", features = ["json"] }
+control_plane = { path = "components/kallisto_cluster" }
 
 [[bench]]
 name = "storage_bench"

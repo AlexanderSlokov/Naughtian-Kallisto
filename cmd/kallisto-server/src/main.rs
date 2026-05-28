@@ -1,25 +1,20 @@
-use naughtian_kallisto::engine::engine_registry::EngineRegistry;
-use naughtian_kallisto::engine::kv_engine::KvEngine;
+use naughtian_kallisto::KallistoCore;
 use naughtian_kallisto::server::http_handler::AppState;
 use naughtian_kallisto::event::worker::WorkerPool;
 use std::sync::Arc;
 use std::path::PathBuf;
-
+use control_plane::admin_http::{start_admin_server, stop_admin_server};
 
 fn main() {
-    let registry = EngineRegistry::new();
-    
-    // Test database path
     let db_path = PathBuf::from("/tmp/kallisto_server_bench");
     if db_path.exists() {
         std::fs::remove_dir_all(&db_path).unwrap();
     }
     
-    let engine = Arc::new(KvEngine::open(db_path.to_str().unwrap()).unwrap());
-    registry.mount("secret", engine);
+    let core = Arc::new(KallistoCore::new(db_path.to_str().unwrap()).unwrap());
     
     let state = AppState {
-        registry: Arc::new(registry),
+        registry: core.registry.clone(),
     };
     
     let num_workers = 2;
@@ -29,20 +24,11 @@ fn main() {
     
     let pool = WorkerPool::spawn(num_workers, port, state.clone());
     
-    // Start Admin API on port 8202
-    let admin_state = naughtian_kallisto::server::admin_handler::AdminState {
-        registry: state.registry.clone(),
-    };
-    std::thread::spawn(move || {
-        let rt = tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
-        rt.block_on(async {
-            let admin_router = naughtian_kallisto::server::admin_handler::router(admin_state);
-            let listener = tokio::net::TcpListener::bind("0.0.0.0:8202").await.unwrap();
-            println!("Starting Admin API on port 8202...");
-            axum::serve(listener, admin_router).await.unwrap();
-        });
-    });
+    // Start Admin API on port 8202 using control_plane
+    let admin_server = start_admin_server(core.clone(), 8202);
 
     // In test environment, let it run until killed
     pool.join_all();
+    
+    stop_admin_server(admin_server);
 }
