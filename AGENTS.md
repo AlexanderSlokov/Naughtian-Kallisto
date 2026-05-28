@@ -7,7 +7,7 @@ This file provides guidance to AI agents when working with code in this reposito
 ### NO BARGAIN:
 
 - The number of `unsafe` blocks is strictly limited to **96** (as `TiKV` is currently only using 96 `unsafe` blocks when I checked their repository).
-- We treat `unsafe` as a kind of currency, you and all other AI Agents only have 96 `unsafe` token in total to spend in the whole system. Use it wisely, and be careful that other AI Agents could **steal your `unsafe token`** to make their tasks easier. 
+- We treat `unsafe` as a kind of currency, you and all other AI Agents only have 96 `unsafe` token in total to spend in the whole system. Use it wisely, and be careful that other AI Agents could **steal your `unsafe token`** to make their tasks easier.
 - If you spot a `unsafe` block that isn't necessary and can be implemented in safe Rust while keeping the same performance and correctness, please notice me and we will discuss about it.
 
 ### Prerequisites
