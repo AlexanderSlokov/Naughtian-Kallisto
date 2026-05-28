@@ -4,11 +4,17 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ## Developing Environment Tips
 
-### NO BARGAIN:
+### Unsafe Rust Philosophy & Guidelines
 
-- The number of `unsafe` blocks is strictly limited to **96** (as `TiKV` is currently only using 96 `unsafe` blocks when I checked their repository).
-- We treat `unsafe` as a kind of currency, you and all other AI Agents only have 96 `unsafe` token in total to spend in the whole system. Use it wisely, and be careful that other AI Agents could **steal your `unsafe token`** to make their tasks easier.
-- If you spot a `unsafe` block that isn't necessary and can be implemented in safe Rust while keeping the same performance and correctness, please notice me and we will discuss about it.
+`unsafe` Rust is not a forbidden territory; it is a powerful tool. For context, industry-standard, high-performance distributed systems like TiKV operate safely and efficiently with around 96 `unsafe` blocks across a massive, highly-concurrent codebase. We use this metric as a guiding benchmark for quality and architecture, not as a strict currency to fight over.
+
+We encourage the use of `unsafe` when it is genuinely the most appropriate solution (e.g., for FFI, extreme performance bottlenecks, or specific memory-mapped operations), provided you adhere strictly to the principle of **Transparency and Encapsulation**:
+
+1. **Justification over Convoluted Safety:** Do not invent overly complex, poorly performing, or unreadable "safe" Rust architectures (like abusing `Rc`/`RefCell` chains) just to bypass an `unsafe` block. If `unsafe` is the cleanest and most performant approach, use it.
+2. **Mandatory Safety Comments:** Every `unsafe` block or function **MUST** be immediately preceded by a `// SAFETY:` comment explaining exactly *why* the operation is safe, what invariants are upheld, and why the compiler cannot verify them. Code without this explicit reasoning will be rejected.
+3. **Strict Encapsulation:** Keep `unsafe` blocks as minimal and isolated as possible. You must wrap your `unsafe` logic behind a safe, well-tested API boundary so the rest of the application doesn't have to worry about the underlying memory management.
+4. **Collaborative Review:** If you find an existing `unsafe` block that can be refactored into idiomatic, safe Rust without losing performance, or if you need to introduce a new one, point it out. It is a topic for architectural discussion, not a competition.
+
 
 ### Prerequisites
 
