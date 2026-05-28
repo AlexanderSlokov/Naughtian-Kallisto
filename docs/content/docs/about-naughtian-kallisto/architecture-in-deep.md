@@ -1,16 +1,13 @@
 
-# Architecture Reference
 
-Persistent context for all future sessions. Read this before modifying any core component.
-
-## Architecture: Hexagonal (Port/Adapter)
+## Core architecture: Hexagonal (Port/Adapter)
 
 Kallisto follows a Hexagonal Architecture with a **Strangler Fig** migration strategy. 
 The `KallistoCore` was refactored into a thin **Facade** that delegates to an **EngineRegistry** of pluggable **ISecretEngine** implementations.
 
 ### From version 1.0.0+
 
-Kallisto implements a **FFI-based Hybrid Architecture** (Core-Armor pattern) to combine C++ performance with Rust's memory safety and security features.
+Kallisto implements full Rust code base to archieve memory safety and security features.
 
 - **C++ Engine Core (Data Plane):** High-performance hotpath. Responsible for I/O, sharded storage, lock-free data structures, and AES-256-GCM encryption via BoringSSL using DEKs.
 - **Rust Security Shell (Control Plane):** Coldpath management. Responsible for KEK keyring management, Vault Transit client (envelope encryption), Gossip protocol, Telemetry (Prometheus), and Audit Logging.

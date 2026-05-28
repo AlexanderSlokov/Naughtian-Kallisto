@@ -44,6 +44,13 @@ impl ShardedCuckooTable {
         self.get_shard(key).lookup(key)
     }
 
+    pub fn lookup_map<F, R>(&self, key: &str, f: F) -> Option<R>
+    where
+        F: FnOnce(&SecretEntry) -> R,
+    {
+        self.get_shard(key).lookup_map(key, f)
+    }
+
     pub fn remove(&self, key: &str) -> bool {
         self.get_shard(key).remove(key)
     }

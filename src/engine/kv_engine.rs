@@ -85,9 +85,12 @@ impl KvEngine {
         }
     }
 
-    fn read_raw_optimistic(&self, key: &str) -> Result<Option<Vec<u8>>, EngineError> {
-        if let Some(cached) = self.cache.lookup(key) {
-            return Ok(Some(cached.payload));
+    fn read_raw_optimistic<F, R>(&self, key: &str, mut f: F) -> Result<Option<R>, EngineError> 
+    where
+        F: FnMut(&[u8]) -> R
+    {
+        if let Some(res) = self.cache.lookup_map(key, |entry| f(&entry.payload)) {
+            return Ok(Some(res));
         }
         if let Some(disk) = self.rocksdb.get_raw(key.as_bytes()).map_err(|e| {
             EngineError::StorageError(format!("RocksDB get error: {}", e))
@@ -96,7 +99,7 @@ impl KvEngine {
                 key: key.to_string(),
                 payload: disk.clone(),
             });
-            return Ok(Some(disk));
+            return Ok(Some(f(&disk)));
         }
         Ok(None)
     }
@@ -173,9 +176,9 @@ impl Drop for KvEngine {
 impl SecretEngine for KvEngine {
     async fn read_metadata(&self, path: &str) -> Result<KeyMetadata, EngineError> {
         let mkey = Self::build_meta_key(path);
-        let raw = self.read_raw_optimistic(&mkey)?;
-        if let Some(data) = raw {
-            Self::deserialize_metadata(&data)
+        let meta = self.read_raw_optimistic(&mkey, |data| Self::deserialize_metadata(data))?;
+        if let Some(res) = meta {
+            res
         } else {
             Err(EngineError::NotFound)
         }
@@ -207,9 +210,9 @@ impl SecretEngine for KvEngine {
         }
 
         let vkey = Self::build_version_key(path, target_version);
-        let raw_payload = self.read_raw_optimistic(&vkey)?;
-        if let Some(data) = raw_payload {
-            Self::deserialize_payload(&data)
+        let payload = self.read_raw_optimistic(&vkey, |data| Self::deserialize_payload(data))?;
+        if let Some(res) = payload {
+            res
         } else {
             Err(EngineError::StorageError("Missing version payload".to_string()))
         }

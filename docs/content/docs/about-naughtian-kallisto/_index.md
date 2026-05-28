@@ -13,4 +13,3 @@ Chọn một chủ đề dưới đây hoặc xem trực tiếp ở menu bên tr
 2. [Tại sao nên dùng Kallisto?](why-use-kallisto/)
 3. [Kallisto hoạt động như thế nào?](how-kallisto-works/)
 4. [Kế hoạch Rewrite Kallisto sang thuần Rust (Phase 1-5)](rewrite-in-rust/)
-5. [Đánh giá Unsafe & Thiết kế An toàn cho admin_http.rs](review-admin-http-unsafe/)
