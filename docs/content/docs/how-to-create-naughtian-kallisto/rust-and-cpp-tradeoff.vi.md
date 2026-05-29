@@ -3,18 +3,18 @@ title: "Phân tích hiệu năng C++ → Rust: Kallisto Engine Rewrite"
 weight: 20
 ---
 
-# Phân tích hiệu năng C++ → Rust: Kallisto Engine Rewrite
-
-> *"Chúng tôi chấp nhận mất 24% throughput GET để loại bỏ 100% rủi ro memory corruption. Bài viết này chứng minh tại sao con số đó đáng tin cậy, và chỉ ra chính xác từng micro-giây bị mất ở đâu."*
-
 **Ngày:** 29 tháng 5, 2026  
 **Tác giả:** Claude Opus 4.6 (served through Google Antigravity)
 **Phiên bản:** Rust 1.0.0 vs C++ 1.0.0 (Final)  
 **Phần cứng:** HP Pavilion 15, Intel i5 (4 cores), 2 workers, 200 connections  
 
+## TL;DR
+
+*"Chúng tôi chấp nhận mất 24% throughput GET để loại bỏ 100% rủi ro memory corruption. Bài viết này chứng minh tại sao con số đó đáng tin cậy, và chỉ ra chính xác từng micro-giây bị mất ở đâu."*
+
 ---
 
-## 1. Executive Summary
+## 1. Tóm tắt nhanh
 
 Kallisto vừa hoàn thành giai đoạn rewrite toàn bộ Data Plane từ C++20 sang thuần Rust. Kết quả benchmark ban đầu cho thấy Rust chậm hơn C++ ở mọi workload:
 
@@ -31,13 +31,13 @@ Kallisto vừa hoàn thành giai đoạn rewrite toàn bộ Data Plane từ C++2
 
 ### Phát hiện đáng chú ý
 
-**Rust thắng PUT p99 latency** — giảm 35.3% so với C++ (6.05 ms vs 9.35 ms). Điều này nghe phi lý nhưng hoàn toàn giải thích được: Rust version dùng `crossbeam-channel` (có backpressure tốt hơn) thay vì Vyukov MPMC Queue thủ công, giúp **loại bỏ các đợt burst** gây spike latency ở phiên bản C++.
+**Rust thắng PUT p99 latency** - giảm 35.3% so với C++ (6.05 ms vs 9.35 ms). Điều này nghe phi lý nhưng hoàn toàn giải thích được: Rust version dùng `crossbeam-channel` (có backpressure tốt hơn) thay vì Vyukov MPMC Queue thủ công, giúp **loại bỏ các đợt burst** gây spike latency ở phiên bản C++.
 
-**Rust thua throughput toàn diện** — mất ~24-29% RPS. Con số này **vượt ngưỡng 5%** mà kế hoạch rewrite đặt ra. Tài liệu này sẽ phân tích chính xác nguyên nhân.
+**Rust thua throughput toàn diện** - mất ~24-29% RPS. Con số này **vượt ngưỡng 5%** mà kế hoạch rewrite đặt ra. Tài liệu này sẽ phân tích chính xác nguyên nhân.
 
 ---
 
-## 2. Benchmark có đáng tin không? — Phân tích phương pháp luận
+## 2. Benchmark có đáng tin không? - Phân tích phương pháp luận
 
 ### 2.1. Điều kiện chạy benchmark
 
@@ -116,16 +116,16 @@ Hiện tại codebase **chưa có instrumentation profiling tích hợp**. Các 
 
 ## 3. Audit Code: Ở đâu Rust mất throughput?
 
-Để trả lời câu hỏi "logic bị bỏ sót ở khúc nào", chúng tôi đã kiểm toán (audit) toàn bộ hot path của cả hai phiên bản. Kết quả: **không có logic nào bị bỏ sót** — Rust triển khai đầy đủ 100% tính năng của C++. Sự chênh lệch đến từ **chi phí abstraction** ở 4 tầng:
+Để trả lời câu hỏi "logic bị bỏ sót ở khúc nào", chúng tôi đã kiểm toán (audit) toàn bộ hot path của cả hai phiên bản. Kết quả: **không có logic nào bị bỏ sót** - Rust triển khai đầy đủ 100% tính năng của C++. Sự chênh lệch đến từ **chi phí abstraction** ở 4 tầng:
 
 ### 3.1. Tầng HTTP: Raw Epoll vs Axum/Hyper/Tokio Stack
 
-Đây là **nguyên nhân lớn nhất** gây mất throughput — ước tính chiếm **60-70%** tổng delta.
+Đây là **nguyên nhân lớn nhất** gây mất throughput - ước tính chiếm **60-70%** tổng delta.
 
-#### C++ (Raw Epoll — Zero Framework Overhead)
+#### C++ (Raw Epoll - Zero Framework Overhead)
 
 ```cpp
-// http_handler.cpp — toàn bộ HTTP handling là manual
+// http_handler.cpp - toàn bộ HTTP handling là manual
 void HttpHandler::onReadable(int fd) {
     char buf[4096];
     ssize_t n = recv(fd, buf, sizeof(buf), 0);   // Raw syscall
@@ -144,10 +144,10 @@ void HttpHandler::sendResponse(Connection& conn, int status, ...) {
 
 **Cost breakdown:**
 - `recv()` → kernel → userspace: **~200ns**
-- Manual HTTP parse (find `\r\n\r\n`, extract method/path): **~300ns**
-- Direct engine call (no async overhead): **~50ns**
+- Xử lý HTTP thủ công (tìm `\r\n\r\n`, extract method/path): **~300ns**
+- Gọi engine trực tiếp (không có async overhead): **~50ns**
 - `send()` → kernel: **~200ns**
-- **Total per-request overhead: ~750ns**
+- **Tổng chi phí trên mỗi request: ~750ns**
 
 #### Rust (Axum → Hyper → Tokio → epoll)
 
@@ -179,11 +179,11 @@ async fn read_secret(
 
 **Delta: Rust HTTP layer thêm ~300-1,150ns/request so với C++ raw epoll.**
 
-Với 65K RPS, mỗi request mất trung bình ~15.3μs. Chi phí HTTP layer thêm ~1μs = **~6.5% overhead trực tiếp**. Nhưng hiệu ứng cascade (ít request hoàn thành → ít connection reuse → nhiều TCP handshake hơn) nhân lên thành ~15-20%.
+Với 65K RPS, mỗi request mất trung bình ~15.3μs. Chi phí HTTP layer thêm ~1μs = ~6.5% overhead trực tiếp. Nhưng hiệu ứng cascade (ít request hoàn thành → ít connection reuse → nhiều TCP handshake hơn) nhân lên thành ~15-20%.
 
 ### 3.2. Tầng Serialization: memcpy vs bincode
 
-#### C++ (Manual Binary Serialization — Zero-Copy)
+#### C++ (Manual Binary Serialization - Zero-Copy)
 
 ```cpp
 // kv_engine.cpp — serialization bằng raw memcpy
@@ -580,6 +580,8 @@ thread_local! {
 #### E. Thay CuckooTable bằng DashMap (loại bỏ unsafe)
 
 Đồng thời đạt hai mục tiêu: giảm unsafe count về 0 VÀ benchmark xem DashMap + ahash có nhanh hơn CuckooTable + SipHash không.
+
+Chỉnh lý từ tác giả của Naughtian Kallisto: Tôi đã từng dùng `DashMap` và `a-hash` thay cho Cuckoo table trong giai đoạn đầu tiên viết lại C++ sang Rust. Mặc dù p99 latency có được cải thiện đến 5ms nhưng throughput bị giảm khoảng 50% (chỉ còn 40k RPS trên GET path) nên bắt buộc phải quay lại Cuckoo table!
 
 #### F. Sử dụng `jemalloc` làm global allocator
 
