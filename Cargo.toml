@@ -1,7 +1,7 @@
 [package]
 name = "naughtian-kallisto"
-version = "1.0.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 
 [workspace]
 resolver = "2"
@@ -9,6 +9,10 @@ members = [
     "cmd/*",
     "components/*",
 ]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
 
 [workspace.dependencies]
 tokio = { version = "1.x", features = ["rt", "net", "macros", "sync"] }

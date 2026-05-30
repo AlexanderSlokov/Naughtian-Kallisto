@@ -376,7 +376,7 @@ dependencies = [
 
 [[package]]
 name = "control_plane"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "foca",
@@ -434,7 +434,7 @@ dependencies = [
 
 [[package]]
 name = "core_crypto"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "secrecy",
  "zeroize",
@@ -1353,7 +1353,7 @@ dependencies = [
 
 [[package]]
 name = "kallisto-server"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "axum",
  "control_plane",
@@ -1363,7 +1363,7 @@ dependencies = [
 
 [[package]]
 name = "kallisto_tui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "ratatui",
 ]
@@ -1936,7 +1936,7 @@ dependencies = [
 
 [[package]]
 name = "policy_engine"
-version = "0.1.0"
+version = "1.0.0"
 
 [[package]]
 name = "portable-atomic"
@@ -2802,7 +2802,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "prometheus",
  "tokio",
