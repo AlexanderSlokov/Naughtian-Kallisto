@@ -112,6 +112,6 @@ impl<T> LockFreeQueue<T> {
 
 impl<T> Drop for LockFreeQueue<T> {
     fn drop(&mut self) {
-        while let Ok(_) = self.dequeue() {}
+        while self.dequeue().is_ok() {}
     }
 }

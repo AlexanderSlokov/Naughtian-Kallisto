@@ -38,12 +38,12 @@ use sonic_rs::{JsonValueTrait, JsonContainerTrait, Value};
 /// Fast, safe array parser for payloads like {"versions": [1, 2, 3]} using SIMD
 fn parse_versions_list(body: &[u8]) -> Vec<u32> {
     let mut versions = Vec::new();
-    if let Ok(root) = sonic_rs::from_slice::<Value>(body) {
-        if let Some(arr) = root.pointer(sonic_rs::pointer!["versions"]).and_then(|v| v.as_array()) {
-            for item in arr.iter() {
-                if let Some(num) = item.as_u64() {
-                    versions.push(num as u32);
-                }
+    if let Ok(root) = sonic_rs::from_slice::<Value>(body)
+        && let Some(arr) = root.pointer(sonic_rs::pointer!["versions"]).and_then(|v| v.as_array())
+    {
+        for item in arr.iter() {
+            if let Some(num) = item.as_u64() {
+                versions.push(num as u32);
             }
         }
     }
@@ -192,10 +192,12 @@ impl IntoResponse for AppError {
             AppError::MountNotFound => (StatusCode::NOT_FOUND, "Mount path not found".to_string()),
             AppError::Engine(e) => match e {
                 EngineError::NotFound => (StatusCode::NOT_FOUND, "Secret not found".to_string()),
-                EngineError::CasMismatch { .. } => (StatusCode::CONFLICT, "CAS mismatch".to_string()),
+                EngineError::SoftDeleted => (StatusCode::NOT_FOUND, "Secret soft-deleted".to_string()),
                 EngineError::Destroyed => (StatusCode::NOT_FOUND, "Key destroyed".to_string()),
+                EngineError::InvalidVersion(v) => (StatusCode::NOT_FOUND, format!("Invalid version: {}", v)),
+                EngineError::CasMismatch { .. } => (StatusCode::CONFLICT, "CAS mismatch".to_string()),
                 EngineError::StorageError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
-                _ => (StatusCode::INTERNAL_SERVER_ERROR, "Internal error".to_string()),
+                EngineError::QueueFull => (StatusCode::SERVICE_UNAVAILABLE, "Write queue full".to_string()),
             },
         };
         

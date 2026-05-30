@@ -1,11 +1,6 @@
 avoid-breaking-exported-api = false
 
-[[disallowed-methods]]
-path = "std::thread::Builder::spawn"
-reason = """
-Wrapper function `<std::thread::Builder as tikv_util::sys::thread::StdThreadBuildWrapper>::spawn_wrapper`
-should be used instead, refer to https://github.com/tikv/tikv/pull/12442 for more details.
-"""
+
 [[disallowed-methods]]
 path = "tokio::runtime::builder::Builder::on_thread_start"
 reason = """
@@ -93,13 +88,13 @@ see RUSTSEC-2024-0357
 """
 
 # See more about RUSTSEC-2025-0022 in deny.toml.
-[[disallowed-types]]
+[[disallowed-methods]]
 path = "openssl::cipher::Cipher::fetch"
 reason = """
 When a Some(...) value was passed to the properties argument of openssl::cipher::Cipher::fetch, \
 a use-after-free would result. See RUSTSEC-2025-0022
 """
-[[disallowed-types]]
+[[disallowed-methods]]
 path = "openssl::md::Md::fetch"
 reason = """
 When a Some(...) value was passed to the properties argument of openssl::md::Md::fetch, \

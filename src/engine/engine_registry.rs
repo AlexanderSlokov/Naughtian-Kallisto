@@ -8,6 +8,12 @@ pub struct EngineRegistry {
     write_lock: parking_lot::Mutex<()>,
 }
 
+impl Default for EngineRegistry {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl EngineRegistry {
     pub fn new() -> Self {
         Self {

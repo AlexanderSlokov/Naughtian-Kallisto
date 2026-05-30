@@ -60,4 +60,3 @@ control_plane = { path = "components/kallisto_cluster" }
 [[bench]]
 name = "storage_bench"
 harness = false
-

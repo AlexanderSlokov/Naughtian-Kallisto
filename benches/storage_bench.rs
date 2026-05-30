@@ -217,7 +217,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
     group.bench_function("95_get_5_put", |b| {
         let mut i = 0u64;
         b.iter(|| {
-            if i % 20 == 0 {
+            if i.is_multiple_of(20) {
                 // 5% PUT
                 let key = format!("mixed_new_{}", i);
                 let value = vec![0x42u8; 64];

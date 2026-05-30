@@ -4,7 +4,7 @@ use std::mem;
 pub struct Node {
     pub is_leaf_node: bool,
     pub path_keys: Vec<String>,
-    pub child_nodes: Vec<Box<Node>>,
+    pub child_nodes: Vec<Node>,
 }
 
 impl Node {
@@ -41,7 +41,7 @@ impl BTreeIndex {
         if self.root_node.path_keys.len() == 2 * self.min_degree - 1 {
             let mut new_root = Box::new(Node::new(false));
             let old_root = mem::replace(&mut self.root_node, Box::new(Node::new(false)));
-            new_root.child_nodes.push(old_root);
+            new_root.child_nodes.push(*old_root);
             self.root_node = new_root;
             Self::split_child_node_static(self.min_degree, &mut self.root_node, 0);
             Self::insert_into_non_full_node_static(self.min_degree, &mut self.root_node, path);
@@ -71,7 +71,7 @@ impl BTreeIndex {
                 self.collect_paths_recursive(&node.child_nodes[i], paths);
                 paths.push(node.path_keys[i].clone());
             }
-            self.collect_paths_recursive(&node.child_nodes.last().unwrap(), paths);
+            self.collect_paths_recursive(node.child_nodes.last().unwrap(), paths);
         }
     }
 
@@ -121,7 +121,7 @@ impl BTreeIndex {
 
     fn split_child_node_static(min_degree: usize, parent_node: &mut Node, child_index: usize) {
         let child_node = &mut parent_node.child_nodes[child_index];
-        let mut new_sibling_node = Box::new(Node::new(child_node.is_leaf_node));
+        let mut new_sibling_node = Node::new(child_node.is_leaf_node);
 
         for _ in 0..(min_degree - 1) {
             new_sibling_node.path_keys.push(child_node.path_keys[min_degree].clone());

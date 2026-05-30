@@ -46,10 +46,10 @@ impl KvEngine {
         // Rebuild path index from RocksDB keys
         let path_index_clone = path_index.clone();
         rocksdb.iterate_keys(move |key| {
-            if key.starts_with(b"m:") {
-                if let Ok(path_str) = std::str::from_utf8(&key[2..]) {
-                    path_index_clone.insert_path_if_absent(path_str);
-                }
+            if key.starts_with(b"m:")
+                && let Ok(path_str) = std::str::from_utf8(&key[2..])
+            {
+                path_index_clone.insert_path_if_absent(path_str);
             }
         });
 
@@ -175,7 +175,7 @@ impl Drop for KvEngine {
 impl SecretEngine for KvEngine {
     async fn read_metadata(&self, path: &str) -> Result<KeyMetadata, EngineError> {
         let mkey = Self::build_meta_key(path);
-        let meta = self.read_raw_optimistic(&mkey, |data| Self::deserialize_metadata(data))?;
+        let meta = self.read_raw_optimistic(&mkey, Self::deserialize_metadata)?;
         if let Some(res) = meta {
             res
         } else {
@@ -209,7 +209,7 @@ impl SecretEngine for KvEngine {
         }
 
         let vkey = Self::build_version_key(path, target_version);
-        let payload = self.read_raw_optimistic(&vkey, |data| Self::deserialize_payload(data))?;
+        let payload = self.read_raw_optimistic(&vkey, Self::deserialize_payload)?;
         if let Some(res) = payload {
             res
         } else {
@@ -225,13 +225,13 @@ impl SecretEngine for KvEngine {
             Err(e) => return Err(e),
         };
 
-        if let Some(expected_cas) = cas {
-            if meta.current_version != expected_cas {
-                return Err(EngineError::CasMismatch {
-                    expected: expected_cas,
-                    actual: meta.current_version,
-                });
-            }
+        if let Some(expected_cas) = cas
+            && meta.current_version != expected_cas
+        {
+            return Err(EngineError::CasMismatch {
+                expected: expected_cas,
+                actual: meta.current_version,
+            });
         }
 
         meta.current_version += 1;
@@ -407,19 +407,16 @@ fn async_worker_loop(
     while running.load(Ordering::Relaxed) {
         let mut dequeued = false;
         
-        match queue.dequeue() {
-            Ok(op) => {
-                dequeued = true;
-                match op {
-                    AsyncOp::Put { key, value } => {
-                        batch.push(BatchOp::Put { key, value });
-                    }
-                    AsyncOp::Delete { key } => {
-                        batch.push(BatchOp::Delete { key });
-                    }
+        if let Ok(op) = queue.dequeue() {
+            dequeued = true;
+            match op {
+                AsyncOp::Put { key, value } => {
+                    batch.push(BatchOp::Put { key, value });
+                }
+                AsyncOp::Delete { key } => {
+                    batch.push(BatchOp::Delete { key });
                 }
             }
-            Err(_) => {}
         }
 
         let now = std::time::Instant::now();

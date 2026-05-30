@@ -155,10 +155,10 @@ fn worker_loop(
     while let Ok(op) = rx.try_recv() {
         batch.push(convert_op(op));
     }
-    if !batch.is_empty() {
-        if let Err(e) = rocksdb.apply_batch(&batch) {
-            eprintln!("[AsyncFlusher] Final drain flush error: {}", e);
-        }
+    if !batch.is_empty()
+        && let Err(e) = rocksdb.apply_batch(&batch)
+    {
+        eprintln!("[AsyncFlusher] Final drain flush error: {}", e);
     }
 }
 

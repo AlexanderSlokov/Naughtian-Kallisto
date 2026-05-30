@@ -23,7 +23,7 @@ async fn test_phase4_integration() {
     let data_port = 18200;
     let admin_port = 18202;
 
-    let pool = WorkerPool::spawn(1, data_port, state.clone());
+    let _pool = WorkerPool::spawn(1, data_port, state.clone());
     let admin_server = start_admin_server(core.clone(), admin_port);
 
     sleep(Duration::from_millis(500)).await;
@@ -47,7 +47,7 @@ async fn test_phase4_integration() {
         .unwrap();
     assert!(res.status().is_success());
     let json: serde_json::Value = res.json().await.unwrap();
-    assert_eq!(json["data"]["value"], "super_secret");
+    assert_eq!(json["data"]["data"]["value"], "super_secret");
 
     // 3. Admin API: /admin/mode/immediate
     let res = client
