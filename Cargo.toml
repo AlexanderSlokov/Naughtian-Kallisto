@@ -2,6 +2,7 @@
 name = "naughtian-kallisto"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [workspace]
 resolver = "2"
@@ -13,6 +14,7 @@ members = [
 [workspace.package]
 version = "1.0.0"
 edition = "2024"
+license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
 tokio = { version = "1.x", features = ["rt", "net", "macros", "sync"] }

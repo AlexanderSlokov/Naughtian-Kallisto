@@ -2,6 +2,7 @@
 name = "control_plane"
 version.workspace = true
 edition.workspace = true
+license.workspace = true
 
 [dependencies]
 foca = "1.0.0"

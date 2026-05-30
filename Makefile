@@ -23,6 +23,9 @@ export KALLISTO_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /
 
 clean:
 	cargo clean
+	rm -rf $(BUILD_DIR)
+	rm -rf coverage_report
+	rm -rf /tmp/kallisto_*
 
 # Development builds
 # ------------------
