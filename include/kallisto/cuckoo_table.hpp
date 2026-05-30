@@ -1,3 +1,4 @@
+// #[PerformanceCriticalPath]
 #pragma once
 
 #include "kallisto/secret_entry.hpp"

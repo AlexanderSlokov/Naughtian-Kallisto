@@ -7,40 +7,34 @@ weight: 10
 
 ### P1 — Chuẩn hóa Vault/OpenBao API
 
-- [ ] **Vault KV v2 API Compliance**:
-  - Chuẩn hóa response JSON format theo OpenBao/Vault spec:
-    ```
-    {
-      "request_id": "...",
-      "lease_id": "",
-      "renewable": false,
-      "lease_duration": 0,
-      "data": { "data": {...}, "metadata": {...} },
-      "wrap_info": null,
-      "warnings": null,
-      "auth": null
-    }
-    ```
-  - Implement đầy đủ các endpoint KV v2:
-    - `GET    /v1/secret/data/:path` — Read secret (with `?version=N`)
-    - `POST   /v1/secret/data/:path` — Create/Update secret
-    - `DELETE /v1/secret/data/:path` — Soft delete latest version
-    - `POST   /v1/secret/delete/:path` — Soft delete specific versions
-    - `POST   /v1/secret/undelete/:path` — Undelete specific versions
-    - `POST   /v1/secret/destroy/:path` — Permanently destroy versions
-    - `GET    /v1/secret/metadata/:path` — Read metadata
-    - `POST   /v1/secret/metadata/:path` — Update metadata
-    - `DELETE /v1/secret/metadata/:path` — Delete all versions + metadata
-    - `LIST   /v1/secret/metadata/:path` — List keys
-  - Implement proper HTTP status codes (200, 204, 400, 403, 404, 405, 500).
-  - Support `X-Vault-Token` header (mock/pass-through cho đến khi có ACL).
+- [x] **Vault KV v2 API Compliance (Core CRUD)**:
+  - Chuẩn hóa response JSON format theo OpenBao/Vault spec: Hoàn tất
+  - Implement đầy đủ các endpoint KV v2 cơ bản:
+    - [x] `GET    /v1/secret/data/:path` — Read secret (with `?version=N`)
+    - [x] `POST   /v1/secret/data/:path` — Create/Update secret
+    - [x] `DELETE /v1/secret/data/:path` — Soft delete latest version
+    - [x] `POST   /v1/secret/delete/:path` — Soft delete specific versions
+    - [x] `POST   /v1/secret/undelete/:path` — Undelete specific versions
+    - [x] `POST   /v1/secret/destroy/:path` — Permanently destroy versions
+    - [x] `GET    /v1/secret/metadata/:path` — Read metadata
+- [ ] **Vault KV v2 API Compliance (Deferred / Advanced)**:
+    - [ ] `PATCH  /v1/secret/data/:path` — JSON Merge Patch (RFC 7396)
+    - [ ] `GET    /v1/secret/subkeys/:path` — Read Secret Subkeys (with ?depth=N)
+    - [ ] `LIST   /v1/secret/metadata/:path` — List keys (HTTP LIST or GET ?list=true)
+    - [ ] `POST   /v1/secret/metadata/:path` — Update metadata (custom_metadata, max_versions, cas_required)
+    - [ ] `PATCH  /v1/secret/metadata/:path` — Patch metadata
+    - [ ] `DELETE /v1/secret/metadata/:path` — Delete all versions + metadata
+    - [ ] `POST   /v1/secret/config` — Configure Engine
+    - [ ] Thêm support `custom_metadata` field
+    - [ ] Parse/format ISO 8601 duration cho `delete_version_after` (vd: "3h25m19s")
 
-- [ ] **`/v1/sys/*` System Endpoints (Mock)**:
-  - `GET /v1/sys/health` — Health check (trả status sealed/unsealed/standby).
-  - `GET /v1/sys/seal-status` — Seal status.
-  - **Healthcheck Binary Support**: Implement `kallisto status` để dùng làm healthcheck chính thống. **Exit codes:** 0: Đã unsealed (hoạt động bình thường). 2: Đang bị sealed (chưa sẵn sàng phục vụ). 1: Có lỗi xảy ra.
-  - `POST /v1/sys/mounts/:path` — Mount engine (mock: chỉ KV hiện tại).
-  - `GET /v1/sys/mounts` — List mounted engines.
+- [x] **`/v1/sys/*` System Endpoints (Mock)**:
+  - [x] `GET /v1/sys/health` — Health check
+  - [x] `GET /v1/sys/seal-status` — Seal status
+  - [x] `GET /v1/sys/mounts` — List mounted engines
+- [ ] **System Endpoints (Pending)**:
+  - [ ] **Healthcheck Binary Support**: Implement `kallisto status`
+  - [ ] `POST /v1/sys/mounts/:path` — Mount engine (mock: chỉ KV hiện tại)
 
 ### P2 — Logging, Config & Observability
 > *Server chạy production mà không có file log, config, metric thì không ai dám dùng.*
@@ -82,7 +76,7 @@ weight: 10
 
 ---
 
-### 🔒 Security Backlog (Làm sau khi có Hexagonal + API chuẩn)
+### Security Backlog (sau khi có Hexagonal + API chuẩn)
 
 - [ ] **Vault Transit Integration (Root of Trust)** *(Updated 22/05/2026)*:
   - Implement `vault_client.rs`: Xác thực với Vault (AppRole/Kubernetes auth), gọi `POST /v1/transit/decrypt/kallisto-kek` để unwrap KEK lúc startup.
@@ -101,6 +95,25 @@ weight: 10
 - [ ] **Cấp phát secret động có TTL ngắn theo policy**.
 - [ ] **Cơ chế tự động xoá secret hết hạn**.
 - [ ] **Chống timing attack**: Hạn chế thời gian xử lý request, không để thời gian xử lý request phụ thuộc vào nội dung request. Hashicorps Vault đã phát hiện ra rằng request xác thực sai trả kết quả nhanh hơn request xác thực đúng. Do đó hacker có thể dò ra token bằng cách gửi request liên tục và đo thời gian trả về.
+
+---
+
+### Rust Rewrite Blueprint
+
+**1. Networking / Runtime: Tokio Single-Threaded + `SO_REUSEPORT` + Pinned Cores**
+Giữ nguyên triết lý Thread-per-Core của Envoy. Không dùng work-stealing, pin CPU và sử dụng `socket2` để phân tải qua kernel. Giúp tận dụng toàn bộ hệ sinh thái Tokio (axum, reqwest) mà không vướng vào runtime model và behavior của các runtime khác như Monoio/Glommio.
+
+**2. Sharding & Concurrency: Shared State với `parking_lot`**
+Không dùng `DashMap` để bảo toàn tính `O(1)` tuyệt đối của Cuckoo Hashing.
+Sử dụng cấu trúc `Arc<[parking_lot::RwLock<CuckooTable>; 64]>`. Khóa `parking_lot` cực nhẹ, tối ưu cho môi trường lock contention thấp.
+
+**3. Write-Behind Queue: `crossbeam-channel`**
+Dùng hàng đợi MPMC lock-free có giới hạn (`bounded(262_144)`). Thay thế  cho `LockFreeQueue` của C++. Tạo Backpressure tự nhiên (trả về HTTP 503 khi Full). Background worker dùng `recv_timeout` để lấy batch và fsync xuống disk.
+
+**4. Core Algorithms:**
+- Băm: `siphasher` (SipHash-2-4 chống DoS).
+- RCU (Read-Copy-Update) cho B-Tree: `arc-swap`.
+
 
 ---
 

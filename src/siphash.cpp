@@ -1,3 +1,4 @@
+// #[PerformanceCriticalPath]
 #include "kallisto/siphash.hpp"
 #include <cstring>
 

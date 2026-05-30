@@ -10,6 +10,8 @@
 
 # Build directories & Dependencies
 build/
+target/
+.cache/
 vcpkg_installed/
 
 # Logs & Data

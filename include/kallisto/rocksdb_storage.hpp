@@ -1,3 +1,4 @@
+// #[PerformanceCriticalPath]
 #pragma once
 
 #include <string>
