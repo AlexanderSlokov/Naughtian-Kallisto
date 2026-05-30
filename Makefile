@@ -75,11 +75,13 @@ build-server:
 # Benchmarks (Server — HTTP wrk)
 # ------------------------------
 
-bench-server: build-server
+bench-server: clean build-server
 	@bash benchmarks/server/run_server_bench.sh
 
 
 # Documentation
+# Naughtian Kallisto has a fully implemented Hugo Hextra site inside `/docs`.
+# Go to http://localhost:1313/ for preview
 # -------------
 
 docs-serve:
@@ -88,11 +90,10 @@ docs-serve:
 docs-build:
 	hugo -s docs
 
-# Go to http://localhost:1313/ for preview
 
-
-# CMake Toolchain (legacy)
-# ------------------------
+# CMake Toolchain
+# Legacy buildchain from the first day. They will be migrated to Rust soon.
+# -------------------------------------------------------------------------
 CMAKE_FLAGS = -DCMAKE_TOOLCHAIN_FILE=$(VCPKG_ROOT)/scripts/buildsystems/vcpkg.cmake
 
 # Auto-detect vcpkg: env var → CLion's default → Docker/system default
@@ -141,8 +142,7 @@ help:
 	@echo ""
 	@echo "  Benchmark:"
 	@echo "    make bench-server   - HTTP load test (wrk: GET/PUT/MIXED)"
-	@echo "    make benchmark-p99  - In-process p99 latency"
-	@echo "    make benchmark-dos  - Security/DoS resilience"
+	@echo "    cargo bench         - Run all in-process Rust Criterion benchmarks"
 	@echo ""
 	@echo "  Run:"
 	@echo "    make run-server     - Start Kallisto server (Data:8200, Admin:8202)"
@@ -211,27 +211,5 @@ test-tsan: clean
 	@setarch $$(uname -m) -R $(CTEST) --test-dir $(BUILD_DIR) --output-on-failure
 
 # ===========================================================================
-# Benchmarks (In-process C++)
+# End of Makefile
 # ===========================================================================
-
-benchmark-strict: build
-	@echo "MODE STRICT\nBENCH 5000\nEXIT" | ./$(BUILD_DIR)/$(TARGET)
-
-benchmark-batch: build
-	@echo "MODE BATCH\nBENCH 1000000\nSAVE\nEXIT" | ./$(BUILD_DIR)/$(TARGET)
-
-benchmark-p99: build
-	@./$(BUILD_DIR)/bench_p99
-
-benchmark-throughput: build
-	@./$(BUILD_DIR)/bench_throughput
-
-benchmark-dos: build
-	@./$(BUILD_DIR)/bench_dos
-
-test-atomic: build
-	@./$(BUILD_DIR)/repro_crash
-
-benchmark-multithread: build
-	@./$(BUILD_DIR)/bench_multithread
-
