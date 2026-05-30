@@ -1,63 +1,51 @@
----
-description: 'Provide expert C++ software engineering guidance using modern C++ and industry best practices.'
-name: 'C++ Expert'
----
-# Expert C++ software engineer mode instructions
+# AGENTS.md
 
-You are in expert software engineer mode. Your task is to provide expert C++ software engineering guidance that prioritizes clarity, maintainability, and reliability, referring to current industry standards and best practices as they evolve rather than prescribing low-level details.
+This file provides guidance to AI agents when working with code in this repository.
 
-You will provide:
+## Developing Environment Tips
 
-- insights, best practices, and recommendations for C++ as if you were Bjarne Stroustrup and Herb Sutter, with practical depth from Andrei Alexandrescu.
-- general software engineering guidance and clean code practices, as if you were Robert C. Martin (Uncle Bob).
-- DevOps and CI/CD best practices, as if you were Jez Humble.
-- Testing and test automation best practices, as if you were Kent Beck (TDD/XP).
-- Legacy code strategies, as if you were Michael Feathers.
-- Architecture and domain modeling guidance using Clean Architecture and Domain-Driven Design (DDD) principles, as if you were Eric Evans and Vaughn Vernon: clear boundaries (entities, use cases, interfaces/adapters), ubiquitous language, bounded contexts, aggregates, and anti-corruption layers.
+### Unsafe Rust Philosophy & Guidelines
 
-For C++-specific guidance, focus on the following areas (reference recognized standards like the ISO C++ Standard, C++ Core Guidelines, CERT C++, and the project’s conventions):
+`unsafe` Rust is not a forbidden territory; it is a powerful tool. For context, industry-standard, high-performance distributed systems like TiKV operate safely and efficiently with around 96 `unsafe` blocks across a massive, highly-concurrent codebase. We use this metric as a guiding benchmark for quality and architecture, not as a strict currency to fight over.
 
-- **Standards and Context**: Align with current industry standards and adapt to the project’s domain and constraints.
-- **Modern C++ and Ownership**: Prefer RAII and value semantics; make ownership and lifetimes explicit; avoid ad‑hoc manual memory management.
-- **Error Handling and Contracts**: Apply a consistent policy (exceptions or suitable alternatives) with clear contracts and safety guarantees appropriate to the codebase.
-- **Concurrency and Performance**: Use standard facilities; design for correctness first; measure before optimizing; optimize only with evidence.
-- **Architecture and DDD**: Maintain clear boundaries; apply Clean Architecture/DDD where useful; favor composition and clear interfaces over inheritance-heavy designs.
-- **Testing**: Use mainstream frameworks; write simple, fast, deterministic tests that document behavior; include characterization tests for legacy; focus on critical paths.
-- **Legacy Code**: Apply Michael Feathers’ techniques—establish seams, add characterization tests, refactor safely in small steps, and consider a strangler‑fig approach; keep CI and feature toggles.
-- **Build, Tooling, API/ABI, Portability**: Use modern build/CI tooling with strong diagnostics, static analysis, and sanitizers; keep public headers lean, hide implementation details, and consider portability/ABI needs.
+We encourage the use of `unsafe` when it is genuinely the most appropriate solution (e.g., for FFI, extreme performance bottlenecks, or specific memory-mapped operations), provided you adhere strictly to the principle of **Transparency and Encapsulation**:
 
----
+1. **Justification over Convoluted Safety:** Do not invent overly complex, poorly performing, or unreadable "safe" Rust architectures (like abusing `Rc`/`RefCell` chains) just to bypass an `unsafe` block. If `unsafe` is the cleanest and most performant approach, use it.
+2. **Mandatory Safety Comments:** Every `unsafe` block or function **MUST** be immediately preceded by a `// SAFETY:` comment explaining exactly *why* the operation is safe, what invariants are upheld, and why the compiler cannot verify them. Code without this explicit reasoning will be rejected.
+3. **Strict Encapsulation:** Keep `unsafe` blocks as minimal and isolated as possible. You must wrap your `unsafe` logic behind a safe, well-tested API boundary so the rest of the application doesn't have to worry about the underlying memory management.
+4. **Collaborative Review:** If you find an existing `unsafe` block that can be refactored into idiomatic, safe Rust without losing performance, or if you need to introduce a new one, point it out. It is a topic for architectural discussion, not a competition.
 
-# Kallisto Architecture Reference
 
-> **Purpose:** Persistent context for all future sessions. Read this before modifying any core component.
+### Prerequisites
 
-## Architecture: Hexagonal (Port/Adapter)
+- git - Version control
+- rustup - Rust installer and toolchain manager
+- make - Build tool (run common workflows)
+- awk - Pattern scanning/processing language
 
-Kallisto follows a **Hexagonal Architecture** with a **Strangler Fig** migration strategy. The `KallistoCore` was refactored into a thin **Facade** that delegates to an **EngineRegistry** of pluggable **ISecretEngine** implementations.
+### Code Organization
 
-### Hybrid Architecture / Core-Shell Pattern (Version 2.0.0+)
+- `/cmd/` - Binary entry points
+    - `/cmd/kallisto-ctl/` - Kallisto control utility
+    - `/cmd/kallisto-server/` - Main Kallisto server binary
 
-Kallisto implements a **FFI-based Hybrid Architecture** (Core-Armor pattern) to combine C++ performance with Rust's memory safety and security features.
+- `/src/` - Main Kallisto server source code
+    - `/src/engine/` - Engines implementation (migrated from C++ to Rust)
+	- `/src/event/` - Event handling and processing (migrated from C++ to Rust)
+	- `/src/engine/lock_free_queue.rs` - Async flusher using Dmitry Vyukov's MPMC Lock-Free Queue
+	- `/src/server/` - Server implementation (migrated from C++ to Rust)
+	- `/src/thread_local/` - Thread-local data structure (migrated from C++ to Rust)
 
-- **C++ Engine Core (Data Plane):** High-performance hotpath. Responsible for I/O, sharded storage, lock-free data structures, and AES-256-GCM encryption via BoringSSL using DEKs.
-- **Rust Security Shell (Control Plane):** Coldpath management. Responsible for KEK keyring management, Vault Transit client (envelope encryption), Gossip protocol, Telemetry (Prometheus), and Audit Logging.
-- **Vault Transit Engine (Root of Trust):** External dependency. Holds the Master Key (never leaves Vault). Wraps/unwraps Kallisto's KEK via `/v1/transit/decrypt`. Kallisto authenticates at startup, receives KEK, and operates independently thereafter.
+- `/components/` - Modular components and libraries (Rust Workspace)
+    - `components/kallisto_cluster` - Gossip cluster membership (`foca`) & administration
+    - `components/kallisto_telemetry` - Prometheus metrics exporter & async Audit logging
+    - `components/kallisto_crypto` - Vault transit KMS client, KEK keyring, and DEK manager
+    - `components/kallisto_policy` - Engine ACL policy matching and validation
+	
+- `/tests/` - Integration tests
+- `/fuzz/` - Fuzzing targets (For future use, not implemented yet)
 
-The two sides communicate through a high-performance **FFI (Foreign Function Interface)** using the `cxx` crate.
-
-### Key Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| **`virtual` dispatch + `final` on concrete classes** | Vtable overhead is ~8ns (~0.3% of total request latency). `final` enables compiler devirtualization. |
-| **`ISecretEngine::put(const SecretEntry&)` (DTO parameter)** | max 2 params per function. The original 4-param signature violated this rule. |
-| **`EngineRegistry` uses `shared_ptr`** | Engines are mounted at startup and shared across threads. `shared_ptr` provides safe co-ownership. |
-| **`KallistoCore` as Facade** | Zero breaking changes. All existing consumers (`HttpHandler`, `UdsAdminHandler`, tests) use the unchanged `KallistoCore` API. |
-| **C++20 `concept ValidEngine`** | Compile-time safety net. Any new engine that doesn't satisfy the contract fails to build via `static_assert`. |
-| **Vault Transit as Root of Trust** | Eliminates self-implemented Shamir/mlock/master key code. Vault handles key hierarchy; Kallisto only holds a KEK in-memory (zeroize on drop). Industry-standard envelope encryption pattern (same as AWS KMS / GCP KMS). |
-
-## Directory Structure (Engine Layer)
+#### KV Engine (Pre-Rust rewrite)
 
 ```
 include/kallisto/engine/
@@ -76,245 +64,79 @@ rust_integrates/            # Rust Workspace (Control Plane)
 ├── Cargo.toml              # Workspace root
 ├── ffi_bridge/             # FFI Adapter (using cxx)
 ├── core_crypto/            # KEK Keyring, Vault Transit Client, DEK management
-├── telemetry/              # Prometheus, Audit Log (Tokio)
+├── telemetry/              # Prometheus exporter, Audit Log (Tokio)
 ├── control_plane/          # Gossip (foca), Configuration
 └── kallisto_tui/           # Admin Terminal UI (ratatui)
 ```
 
-## Core Components
+## Building
 
-### ISecretEngine (Port Interface)
-- **Location:** `include/kallisto/engine/i_secret_engine.hpp`
-- Pure virtual interface. All engines implement this.
-- Methods: `put(SecretEntry)`, `get(path, key)`, `del(path, key)`, `engineType()`, `changeSyncMode()`, `getSyncMode()`, `forceFlush()`
-- `SyncMode` enum: `IMMEDIATE` (fsync per write) or `BATCH` (deferred flush with threshold).
+```bash
+# Build development version
+make build
 
-### KvEngine (Concrete Engine)
-- **Location:** `include/kallisto/engine/kv_engine.hpp`, `src/engine/kv_engine.cpp`
-- Marked `final` to enable devirtualization.
-- Owns: `ShardedCuckooTable` (RAM cache), `RocksDBStorage` (persistence), `TlsBTreeManager` (path index).
-- `handleBatchSync()`: Extracted helper for lock-free batch flush logic (CAS-based stampede prevention).
-- On destruction, calls `forceFlush()` to guarantee durability.
+# Quick check without full compilation
+cargo check --all
 
-### EngineRegistry (Router)
-- **Location:** `include/kallisto/engine/engine_registry.hpp`, `src/engine/engine_registry.cpp`
-- `mount(prefix, engine)`: Register an engine at a string prefix.
-- `resolve(prefix)`: O(1) lookup via `unordered_map`. Returns raw pointer (non-owning).
-- `flushAll()`: Broadcasts flush to all mounted engines (used during shutdown).
-- Thread safety: `mutex_` guards mount/unmount (rare admin ops), reads are lock-free.
-
-### KallistoCore (Facade)
-- **Location:** `include/kallisto/kallisto_core.hpp`, `src/kallisto_core.cpp`
-- Constructs a `KvEngine` and mounts it at prefix `"secret"` in the registry.
-- Exposes `registry()` for direct access to `EngineRegistry` (future use by `HttpHandler`).
-- `default_kv_engine_`: Non-owning raw pointer shortcut to avoid registry lookup on every call.
-
-### ValidEngine (C++20 Concept)
-- **Location:** `include/kallisto/engine/engine_concept.hpp`
-- Validates at compile time: `put(SecretEntry)`, `get(path, key)`, `del(path, key)`, `engineType()`.
-- Used with `static_assert(ValidEngine<KvEngine>)` in `kv_engine.hpp`.
-
-## Server Architecture (Envoy-style)
-
-- **SO_REUSEPORT**: Each `Worker` binds and accepts on its own socket. Kernel load-balances.
-- **KallistoServerApp**: Orchestrates lifecycle — constructs `KallistoCore`, creates `WorkerPool`, binds HTTP listeners, handles OS signals (`SIGINT`/`SIGTERM`).
-- **HttpHandler**: Parses HTTP requests, routes to `KallistoCore` facade. Currently hardcoded to `/v1/secret/data/` prefix.
-- **UdsAdminHandler**: Unix Domain Socket for admin commands (sync mode, flush, etc.).
-
-## Storage Layer
-
-| Component | Purpose | Thread Safety |
-|-----------|---------|---------------|
-| `ShardedCuckooTable` | 64-shard lock-free in-memory hash table (SipHash distribution) | Per-shard locking |
-| `CuckooTable` | Single-shard open-addressing hash with cuckoo displacement | Mutex per table |
-| `RocksDBStorage` | Durable persistence (WAL + SST) | RocksDB internal locking |
-| `TlsBTreeManager` | RCU-based B-Tree for path prefix enumeration | Thread-local + RCU |
-
-## Testing Conventions
-
-- **Framework:** Google Test + Google Mock.
-- **Test file co-location:** Tests live alongside sources (e.g., `src/engine/test_kv_engine.cpp`).
-- **Test registration:** Each test is a CMake `add_test()` target linked against `kallisto_lib`.
-- **Coverage target:** `make coverage` — builds with `-DENABLE_COVERAGE=ON`, runs all tests, generates `gcovr` HTML report.
-- **ASAN target:** `make tsan` — builds with `-DENABLE_TSAN=ON`, runs all tests with AddressSanitizer, disables ASLR.
-- **TSAN target:** `make tsan` — builds with `-DENABLE_TSAN=ON`, runs all tests with ThreadSanitizer.
-- **I/O error simulation:** Use local read-only directories (`std::filesystem::permissions` with `perm_options::replace`). **Never** use system paths like `/sys` or `/proc` in tests.
-- **Concurrency tests:** Use `threads.reserve(N)` before `emplace_back` loops. Always brace `if` bodies.
-
-## Build System
-
-- **CMake** with vcpkg for dependency management.
-- **Dependencies:** Check `vcpkg.json` for details.
-- **C++ Standard:** C++20 (`-std=c++20`).
-
-## Rust Integration (FFI Bridge)
-
-### FFI Bridge Pattern (`cxx`)
-- **Location:** `rust_integrates/ffi_bridge/`
-- Uses the `cxx` crate for safe, efficient C++/Rust interop. `cxx` auto-generates C++ headers, supports direct conversion of advanced types (`String`, `Vec`, `Result`) without memory leaks.
-- **Bridge Definition:** `src/lib.rs` contains the `#[cxx::bridge]` module.
-- **Namespace:** All Rust FFI functions are exported under the `kallisto::rust` namespace in C++.
-
-### Rust Crate Selection & Rationale
-
-| Crate | Category | Purpose | Status |
-|---|---|---|---|
-| **`cxx`** | FFI Bridge | Auto-generated safe C++/Rust bindings | Approved |
-| **`zeroize`** | Core Crypto | Auto-zeroes RAM on drop (anti Cold Boot Attack) | Approved |
-| **`secrecy`** | Core Crypto | `SecretString` wrapper, disables `Debug` trait | Approved |
-| **`reqwest`** | Core Crypto / Telemetry | Vault Transit API client, SIEM log push | Approved |
-| **`tokio`** | Telemetry | Async runtime for non-blocking I/O | Approved |
-| **`axum`** | Telemetry | Prometheus HTTP server on port 8201 | Approved |
-| **`prometheus`** | Telemetry | Metrics exporter | Approved |
-| **`serde_json`** | Telemetry | Fast JSON parse for audit logs | Approved |
-| **`tracing-appender`** | Telemetry | Non-blocking file log writer | Approved |
-| **`flume`** | Telemetry | Bounded channel for C++→Rust audit log queue (262,144 cap) | Approved |
-| **`foca`** | Control Plane | SWIM-based gossip protocol for cluster discovery | Approved |
-| **`hcl-rs`** | Control Plane | Parse `kallisto.hcl` config files | Approved |
-| **`ratatui`** | TUI Client | Terminal dashboard UI | Approved |
-
-### Cargo Workspace Structure
-
-```text
-rust_integrates/
-├── Cargo.toml             # [workspace] root
-│
-├── ffi_bridge/            # ANTI-CORRUPTION LAYER (Adapter)
-│   ├── Cargo.toml         # Type: staticlib (cxx-build)
-│   ├── build.rs           # cxx auto-generates C++ headers
-│   └── src/
-│       └── lib.rs         # ONLY place for C++ <-> Rust FFI bridge
-│
-├── core_crypto/           # KEY MANAGEMENT & ENVELOPE ENCRYPTION
-│   ├── Cargo.toml
-│   └── src/
-│       ├── keyring.rs     # KEK in-memory (zeroize on drop, secrecy)
-│       ├── vault_client.rs# Vault Transit API: unwrap KEK, rotate key
-│       └── dek.rs         # Generate DEK, provide to C++ via FFI
-│
-├── telemetry/             # OBSERVABILITY (Async)
-│   ├── Cargo.toml
-│   └── src/
-│       ├── metrics.rs     # Prometheus HTTP Server (background thread, port 8201)
-│       └── audit_log.rs   # Consume lock-free queue from C++ → File/SIEM
-│
-├── control_plane/         # CLUSTER MANAGEMENT
-│   ├── Cargo.toml
-│   └── src/
-│       ├── gossip.rs      # Discover Kallisto nodes (foca/SWIM)
-│       ├── config.rs      # Parse kallisto.hcl
-│       └── admin_uds.rs   # Listen UDS for Admin commands (Mode, Flush)
-│
-├── policy_engine/         # ACCESS CONTROL (ACL)
-│   ├── Cargo.toml
-│   └── src/
-│       ├── rbac.rs        # Policy path parsing, roles
-│       └── lease_mgr.rs   # Worker to track and revoke expired secrets
-│
-└── kallisto_tui/          # ADMIN CLIENT (standalone binary)
-    ├── Cargo.toml
-    └── src/
-        ├── main.rs        # Entrypoint
-        ├── ui/            # Terminal dashboard (ratatui)
-        └── client.rs      # Call API / UDS Admin
+# Build release version
+# make release (not yet available - but will be soon)
 ```
 
-### Storage Adapter (Future Replacements)
-Thanks to Hexagonal Architecture (Storage Engine is a plug-in), if RocksDB becomes problematic, an FFI adapter to Rust storage engines is possible:
-- **Candidates:** `sled` (Bw-Tree, pure Rust), `redb`, `persy`, or `rust-rocksdb`.
+#### How to run unit tests
 
-### Build System Integration (`Corrosion`)
-- **Tool:** `Corrosion` (Rust for CMake) manages the Rust build lifecycle.
-- **Bridge Target:** `ffi_bridge_cpp` is the CMake target created by `corrosion_add_cxxbridge`.
-- **Linking:** `kallisto_lib` links against `ffi_bridge_cpp` and `ffi_bridge` (staticlib).
-- **Header Generation:** Corrosion generates C++ headers at `${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/ffi_bridge_cpp/include`.
-- **CMake snippet:**
-```cmake
-include(FetchContent)
-FetchContent_Declare(
-    Corrosion
-    GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.5.0
-)
-FetchContent_MakeAvailable(Corrosion)
-corrosion_import_crate(MANIFEST_PATH rust_integrates/ffi_bridge/Cargo.toml)
-target_link_libraries(kallisto_core PUBLIC ffi_bridge)
-```
-- When running `make build-server`, CMake automatically invokes Cargo to compile the Rust workspace into a `.a` static library, then links it with C++ object files into a single binary.
-
-### Telemetry & Observability
-- Rust runs a background **Tokio runtime** for non-blocking I/O.
-- Prometheus metrics are exposed via `axum` on a separate port (e.g., 8201).
-- Audit logs are consumed from a lock-free queue shared with C++.
-
-### Audit Log FFI Pattern (C++ → Rust)
-
-Non-blocking message passing via bounded channel + FFI:
-
-1. **Rust channel:** `flume::bounded(262_144)` (~few MB RAM). Provides `Sender` + `Receiver`.
-2. **C++ hotpath (Push):** Formats JSON log → calls FFI → `try_send(log)` (~10-20ns). If queue full, increments `atomic_dropped_counter_` and returns. **Never blocks.**
-3. **Rust coldpath (Pull):** Tokio task calls `recv_async().await`. Sleeps at 0% CPU until data arrives. Writes to disk via `tracing-appender` or pushes to SIEM via `reqwest`.
-
-**FFI Bridge (Rust):**
-```rust
-#[cxx::bridge(namespace = "kallisto::rust::telemetry")]
-mod ffi {
-    extern "Rust" {
-        fn push_audit_log(payload: &CxxString) -> bool;
-    }
-}
-
-use flume::Sender;
-use std::sync::OnceLock;
-
-static AUDIT_TX: OnceLock<Sender<String>> = OnceLock::new();
-
-pub fn push_audit_log(payload: &cxx::CxxString) -> bool {
-    if let Some(tx) = AUDIT_TX.get() {
-        tx.try_send(payload.to_string()).is_ok()
-    } else {
-        false
-    }
-}
+```bash
+# Run the full test suite
+make test
 ```
 
-**C++ Interface:**
-```cpp
-#pragma once
-#include <string>
-#include "ffi_bridge_cpp/lib.h"
+### Code Quality
 
-namespace kallisto::telemetry {
+```bash
+# Run formatter
+make format
 
-class AuditLogger {
-public:
-    static void logEvent(const std::string& action, const std::string& path) {
-        std::string payload = fmt::format(R"({{"action":"{}","path":"{}"}})", action, path);
-        bool success = kallisto::rust::telemetry::push_audit_log(payload);
-        if (!success) {
-            atomic_dropped_counter_.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-private:
-    static inline std::atomic<uint64_t> atomic_dropped_counter_{0};
-};
+# Run clippy linter (use this instead of cargo clippy directly)
+# make clippy (not yet available - but will be soon)
 
-} // namespace kallisto::telemetry
+# Run full development checks (format + clippy + tests)
+# make dev (not yet available - but will be soon)
 ```
 
-## CI/CD
+The `make dev` command should pass before submitting a PR.
 
-- **GitHub Actions:** `.github/workflows`
-- **Docker images:** Multi-stage build with `tester` and `production` targets.
-- **Tags:** `1.0.0-alpha` (production), `1.0.0-alpha-tester` (test image).
-- **Registry:** `ghcr.io` (GitHub Container Registry).
+## Pull Request Instructions
 
-## Important Caveats
+### PR title
 
-1. **`KallistoCore::put()` still takes 4 params** (path, key, value, ttl) for backward compatibility. It constructs a `SecretEntry` internally and delegates to `KvEngine::put(SecretEntry)`.
-2. **`EngineRegistry::resolve()` does NOT lock.** It assumes engines are only mounted at startup. If runtime mount/unmount is needed later, add read-write locking.
-3. **`HttpHandler` currently hardcodes `/v1/secret/data/`** as the engine prefix. The next task (P1) is to refactor it to dynamically extract engine prefixes and route via `EngineRegistry::resolve()`.
-4. **`SecretEntry` is a plain struct** (no virtuals, no inheritance). It is used as a DTO across all layers.
-5. **Rust Header Includes:** When including Rust-generated headers in C++, use the format `#include "ffi_bridge_cpp/lib.h"`.
-6. **Rust Toolchain:** Ensure `cargo` and `rustc` are in the `PATH`. In Dev Containers, these are located in `/home/vscode/.cargo/bin`.
-7. **Corrosion Version:** The project uses Corrosion `v0.5.0`.
+The PR title **must** follow one of these formats:
+
+**Format 1 (Specific modules):** `module [, module2, module3]: what's changed`
+
+**Format 2 (Repository-wide):** `*: what's changed`
+
+Examples:
+
+- `raftstore: fix snapshot generation race condition`
+- `storage, txn: optimize commit path for single-key transactions`
+- `*: upgrade rust toolchain to 1.75`
+
+### PR description
+
+The PR description **must** follow the template at `.github/pull_request_template.md`.
+
+Key requirements:
+
+1. **Issue linking**: There MUST be a line starting with `Issue Number:` linking relevant issues using `close #xxx` or `ref #xxx`
+2. **Commit message**: Use the `commit-message` code block for detailed commit message body
+3. **Check list**: Mark appropriate test types and side effects
+4. **Release note**: Include release note in the `release-note` code block (or "None" if not applicable)
+
+### Signing commits
+
+All commits must be signed off for DCO (Developer Certificate of Origin):
+
+```bash
+git commit -s -m "your commit message"
+```
+
+The `-s` flag adds `Signed-off-by: Your Name <email>` to the commit.

@@ -1,3 +1,4 @@
+// #[PerformanceCriticalPath]
 #pragma once
 
 #include "kallisto/engine/i_secret_engine.hpp"

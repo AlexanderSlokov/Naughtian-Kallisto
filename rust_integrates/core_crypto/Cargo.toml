@@ -1,8 +1,0 @@
-[package]
-name = "core_crypto"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-secrecy = "0.10.3"
-zeroize = { version = "1.7", features = ["derive"] }

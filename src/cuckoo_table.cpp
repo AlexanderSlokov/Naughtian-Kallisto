@@ -1,3 +1,4 @@
+// #[PerformanceCriticalPath]
 #include "kallisto/cuckoo_table.hpp"
 #include "kallisto/logger.hpp"
 

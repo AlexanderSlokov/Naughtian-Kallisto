@@ -1,0 +1,11 @@
+[package]
+name = "kallisto-server"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+naughtian-kallisto = { path = "../.." }
+tokio = { workspace = true }
+axum = { workspace = true }
+control_plane = { path = "../../components/kallisto_cluster" }

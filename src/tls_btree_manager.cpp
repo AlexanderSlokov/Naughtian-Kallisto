@@ -1,3 +1,4 @@
+// #[PerformanceCriticalPath]
 #include "kallisto/tls_btree_manager.hpp"
 #include "kallisto/logger.hpp"
 

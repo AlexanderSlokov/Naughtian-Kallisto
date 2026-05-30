@@ -1,3 +1,4 @@
+// #[PerformanceCriticalPath]
 #include "kallisto/event/worker.hpp"
 #include "kallisto/net/listener.hpp"
 #include "kallisto/logger.hpp"

@@ -12,3 +12,4 @@ Chọn một chủ đề dưới đây hoặc xem trực tiếp ở menu bên tr
 1. [Naughtian Kallisto là gì?](what-is-kallisto/)
 2. [Tại sao nên dùng Kallisto?](why-use-kallisto/)
 3. [Kallisto hoạt động như thế nào?](how-kallisto-works/)
+4. [Kế hoạch Rewrite Kallisto sang thuần Rust (Phase 1-5)](rewrite-in-rust/)

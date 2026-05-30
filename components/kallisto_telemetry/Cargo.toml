@@ -1,0 +1,9 @@
+[package]
+name = "telemetry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+tokio = { version = "1.0", features = ["full"] }
+prometheus = "0.14.0"

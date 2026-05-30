@@ -1,0 +1,68 @@
+[package]
+name = "naughtian-kallisto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[workspace]
+resolver = "2"
+members = [
+    "cmd/*",
+    "components/*",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2024"
+license = "AGPL-3.0-or-later"
+
+[workspace.dependencies]
+tokio = { version = "1.x", features = ["rt", "net", "macros", "sync"] }
+axum = "0.7"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+crossbeam-epoch = "0.9"
+arc-swap = "1.7"
+dashmap = "6.0"
+rocksdb = "0.21"
+thiserror = "1.0"
+async-trait = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+sonic-rs = "0.3"
+bincode = "1.3"
+socket2 = { version = "0.5", features = ["all"] }
+core_affinity = "0.8"
+
+[dependencies]
+tokio = { workspace = true }
+axum = { workspace = true }
+parking_lot = { workspace = true }
+crossbeam-channel = { workspace = true }
+crossbeam-epoch = { workspace = true }
+arc-swap = { workspace = true }
+dashmap = { workspace = true }
+rocksdb = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sonic-rs = { workspace = true }
+bincode = { workspace = true }
+socket2 = { workspace = true }
+core_affinity = { workspace = true }
+siphasher = "1.0.3"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", features = ["json"] }
+control_plane = { path = "components/kallisto_cluster" }
+
+[[bench]]
+name = "storage_bench"
+harness = false
+
+[[bench]]
+name = "security_bench"
+harness = false

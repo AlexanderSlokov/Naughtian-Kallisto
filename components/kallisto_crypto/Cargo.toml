@@ -1,0 +1,9 @@
+[package]
+name = "core_crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+secrecy = "0.10.3"
+zeroize = { version = "1.7", features = ["derive"] }
