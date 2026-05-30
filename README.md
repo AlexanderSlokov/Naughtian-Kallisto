@@ -1,12 +1,9 @@
 # Naughtian Kallisto - A High-Performance Operational Secret Engine
 
 <p align="center">
-  <img src="https://img.shields.io/badge/C%2B%2B-20-blue.svg?style=for-the-badge&logo=c%2B%2B" alt="C++20">
-  <img src="https://img.shields.io/badge/Rust-FFI-orange.svg?style=for-the-badge&logo=rust" alt="Rust FFI">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-blue.svg?style=for-the-badge&logo=c%2B%2B" alt="Rust 2024 edition">
   <img src="https://img.shields.io/badge/License-AGPLv3-red.svg?style=for-the-badge" alt="License">
 </p>
-
-*Fast like Redis. API requests? Just like Vault. Sounds like it uses RocksDB? Hell yes! And architecturally, it's the lovely daughter of Envoy Proxy.*
 
 <p align="center">
   <img src="docs/kallisto_logo.webp" alt="Kallisto Logo" width="300">
