@@ -595,13 +595,13 @@ static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
 ### 7.3. Tier 3: High effort (ước tính +5-15% RPS)
 
-#### G. Viết custom HTTP parser thay Hyper
+#### G. Viết custom HTTP parser thay Hyper (Author không phê duyệt - không làm)
 
 Port lại HTTP parser từ C++ (hỗ trợ minimal HTTP/1.1 subset cần thiết) chạy trên raw Tokio IO. Loại bỏ Hyper overhead hoàn toàn.
 
 **Rủi ro:** Dễ tạo bug trong HTTP parsing. Cần extensive fuzzing.
 
-#### H. Dùng `io_uring` thay epoll
+#### H. Dùng `io_uring` thay epoll (Author không phê duyệt - không làm)
 
 Tokio đang thử nghiệm `tokio-uring`. Có thể giảm syscall overhead đáng kể trên kernel 5.x+.
 

@@ -1,6 +1,6 @@
 use axum::{
-    extract::{Path, State},
-    http::{StatusCode, header},
+    extract::State,
+    http::{StatusCode, header, Uri},
     response::IntoResponse,
     routing::{get, post, put},
     Router,
@@ -51,15 +51,30 @@ fn parse_versions_list(body: &[u8]) -> Vec<u32> {
 }
 
 // -----------------------------------------------------------------------------
-// Handlers
+// Handlers & Extractors
 // -----------------------------------------------------------------------------
+
+fn extract_mount_and_path<'a>(uri_path: &'a str, expected_action: &str) -> Option<(&'a str, &'a str)> {
+    let path_without_version = uri_path.strip_prefix("/v1/")?;
+    let mut path_segments = path_without_version.splitn(3, '/');
+    
+    let mount = path_segments.next()?;
+    let action = path_segments.next()?;
+    
+    if action != expected_action {
+        return None;
+    }
+    
+    let secret_path = path_segments.next()?;
+    Some((mount, secret_path))
+}
 
 async fn read_secret(
     State(state): State<AppState>,
-    Path((mount, path)): Path<(String, String)>,
+    uri: Uri,
 ) -> Result<impl IntoResponse, AppError> {
-    let engine = state.registry.resolve(&mount).ok_or(AppError::MountNotFound)?;
-    let path = path.trim_start_matches('/');
+    let (mount, path) = extract_mount_and_path(uri.path(), "data").ok_or(AppError::MountNotFound)?;
+    let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
     
     let payload = engine.read_version(path, 0).await?;
     
@@ -74,11 +89,11 @@ async fn read_secret(
 
 async fn write_secret(
     State(state): State<AppState>,
-    Path((mount, path)): Path<(String, String)>,
+    uri: Uri,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
-    let engine = state.registry.resolve(&mount).ok_or(AppError::MountNotFound)?;
-    let path = path.trim_start_matches('/');
+    let (mount, path) = extract_mount_and_path(uri.path(), "data").ok_or(AppError::MountNotFound)?;
+    let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
     
     let mut secret_value = String::new();
     
@@ -102,21 +117,21 @@ async fn write_secret(
 
 async fn delete_latest(
     State(state): State<AppState>,
-    Path((mount, path)): Path<(String, String)>,
+    uri: Uri,
 ) -> Result<impl IntoResponse, AppError> {
-    let engine = state.registry.resolve(&mount).ok_or(AppError::MountNotFound)?;
-    let path = path.trim_start_matches('/');
+    let (mount, path) = extract_mount_and_path(uri.path(), "data").ok_or(AppError::MountNotFound)?;
+    let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
     engine.soft_delete(path, 0).await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
 async fn soft_delete_versions(
     State(state): State<AppState>,
-    Path((mount, path)): Path<(String, String)>,
+    uri: Uri,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
-    let engine = state.registry.resolve(&mount).ok_or(AppError::MountNotFound)?;
-    let path = path.trim_start_matches('/');
+    let (mount, path) = extract_mount_and_path(uri.path(), "delete").ok_or(AppError::MountNotFound)?;
+    let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
     
     let versions = parse_versions_list(&body);
     for version in versions {
@@ -127,11 +142,11 @@ async fn soft_delete_versions(
 
 async fn undelete_versions(
     State(state): State<AppState>,
-    Path((mount, path)): Path<(String, String)>,
+    uri: Uri,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
-    let engine = state.registry.resolve(&mount).ok_or(AppError::MountNotFound)?;
-    let path = path.trim_start_matches('/');
+    let (mount, path) = extract_mount_and_path(uri.path(), "undelete").ok_or(AppError::MountNotFound)?;
+    let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
     
     let versions = parse_versions_list(&body);
     for version in versions {
@@ -142,11 +157,11 @@ async fn undelete_versions(
 
 async fn destroy_versions(
     State(state): State<AppState>,
-    Path((mount, path)): Path<(String, String)>,
+    uri: Uri,
     body: Bytes,
 ) -> Result<impl IntoResponse, AppError> {
-    let engine = state.registry.resolve(&mount).ok_or(AppError::MountNotFound)?;
-    let path = path.trim_start_matches('/');
+    let (mount, path) = extract_mount_and_path(uri.path(), "destroy").ok_or(AppError::MountNotFound)?;
+    let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
     
     let versions = parse_versions_list(&body);
     for version in versions {
@@ -157,10 +172,10 @@ async fn destroy_versions(
 
 async fn read_metadata(
     State(state): State<AppState>,
-    Path((mount, path)): Path<(String, String)>,
+    uri: Uri,
 ) -> Result<impl IntoResponse, AppError> {
-    let engine = state.registry.resolve(&mount).ok_or(AppError::MountNotFound)?;
-    let path = path.trim_start_matches('/');
+    let (mount, path) = extract_mount_and_path(uri.path(), "metadata").ok_or(AppError::MountNotFound)?;
+    let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
     let metadata = engine.read_metadata(path).await?;
     
     let response = format!(
@@ -242,6 +257,30 @@ mod tests {
         async fn list_keys(&self, _prefix: &str) -> Result<Vec<String>, EngineError> { Ok(vec![]) }
         fn engine_type(&self) -> &'static str { "mock" }
         async fn force_flush(&self) -> Result<(), EngineError> { Ok(()) }
+    }
+
+    #[test]
+    fn test_extract_mount_and_path() {
+        // Normal scenarios
+        let (mount, path) = extract_mount_and_path("/v1/secret/data/my/key", "data").unwrap();
+        assert_eq!(mount, "secret");
+        assert_eq!(path, "my/key");
+
+        let (mount, path) = extract_mount_and_path("/v1/kv2/metadata/deep/path/key", "metadata").unwrap();
+        assert_eq!(mount, "kv2");
+        assert_eq!(path, "deep/path/key");
+
+        // Action mismatch
+        assert!(extract_mount_and_path("/v1/secret/delete/key", "data").is_none());
+
+        // Invalid prefixes
+        assert!(extract_mount_and_path("/v2/secret/data/key", "data").is_none());
+        assert!(extract_mount_and_path("v1/secret/data/key", "data").is_none());
+        assert!(extract_mount_and_path("/v1/secret", "data").is_none());
+
+        // Boundary cases (missing path or missing action)
+        assert!(extract_mount_and_path("/v1/secret/data", "data").is_none());
+        assert!(extract_mount_and_path("/v1/", "data").is_none());
     }
 
     fn setup_app() -> (Router, Arc<AtomicBool>, Arc<AtomicBool>) {
