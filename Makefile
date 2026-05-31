@@ -75,9 +75,10 @@ build-server:
 # Benchmarks (Server — HTTP wrk)
 # ------------------------------
 
-bench-server: clean build-server
+bench-server:
 	@bash benchmarks/server/run_server_bench.sh
 
+full-bench-server: clean build-server bench-server
 
 # Documentation
 # Naughtian Kallisto has a fully implemented Hugo Hextra site inside `/docs`.

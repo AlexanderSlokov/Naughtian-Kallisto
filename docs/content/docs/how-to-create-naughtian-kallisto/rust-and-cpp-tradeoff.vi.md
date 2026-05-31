@@ -533,7 +533,7 @@ pub trait SecretEngine: Send + Sync {
 
 **Impact:** Loại bỏ 1 heap allocation per engine call. Với 2 calls per GET (read_metadata + read_version), tiết kiệm ~100-200ns/request.
 
-#### B. Thay bincode bằng manual serialization
+#### B. Thay bincode bằng manual serialization (❌ Không áp dụng)
 
 ```rust
 // Payload: [u64 ttl][u64 len][bytes value]
@@ -548,7 +548,14 @@ fn serialize_payload_fast(payload: &SecretPayload, buf: &mut Vec<u8>) {
 
 **Impact:** Loại bỏ serde overhead, giống hệt C++ memcpy approach nhưng vẫn safe. Tiết kiệm ~30-70ns/serialize.
 
-#### C. Dùng `Bytes` thay `String` cho path extraction
+> [!WARNING]
+> **Rationale (Từ chối áp dụng):**
+> Kallisto là một Universal Secret Data Plane phân phối secret cho hàng trăm nghìn containers. Việc tự xử lý byte thủ công (Manual Serialization) tiềm ẩn rủi ro cực lớn về **Backward Compatibility**.
+> Nếu sau này `SecretPayload` cần thêm các trường như `encryption_algo`, `created_by`, `nonce`, code thủ công sẽ rất khó quản lý versioning, dễ sinh lỗi đọc sai byte offset dẫn đến hỏng vĩnh viễn dữ liệu bí mật (Data Corruption) hoặc gây Panic server (DoS).
+> 
+> **Giải pháp thay thế:** Nếu thực sự muốn loại bỏ Serde/Allocation overhead của `bincode`, nên chuyển sang sử dụng **`rkyv`** (Zero-copy Deserialization Framework). Nó giúp giữ nguyên tốc độ truy cập byte trực tiếp mà vẫn được Compiler bảo vệ và hỗ trợ Versioning qua derive macros.
+
+#### C. Dùng `Bytes` thay `String` cho path extraction (✅ Đã thực hiện)
 
 Axum hỗ trợ custom extractors. Thay vì allocate `String` cho mount và path, dùng `&str` borrowed từ request URI:
 
@@ -583,7 +590,7 @@ thread_local! {
 
 Chỉnh lý từ tác giả của Naughtian Kallisto: Tôi đã từng dùng `DashMap` và `a-hash` thay cho Cuckoo table trong giai đoạn đầu tiên viết lại C++ sang Rust. Mặc dù p99 latency có được cải thiện đến 5ms nhưng throughput bị giảm khoảng 50% (chỉ còn 40k RPS trên GET path) nên bắt buộc phải quay lại Cuckoo table!
 
-#### F. Sử dụng `jemalloc` làm global allocator
+#### F. Sử dụng `jemalloc` làm global allocator (✅ Đã thực hiện)
 
 ```rust
 // cmd/kallisto-server/src/main.rs
