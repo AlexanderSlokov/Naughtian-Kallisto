@@ -1,6 +1,6 @@
 # Configuration for Kallisto Technical Documentation (Hextra Theme)
 baseURL: "/"
-title: "Kallisto Docs"
+title: "Naughtian Labs"
 defaultContentLanguage: "en"
 
 languages:
@@ -41,7 +41,7 @@ menu:
       identifier: roadmap
       pageRef: /docs/roadmap-todo
       weight: 2
-    - name: "Whitepaper"
+    - name: "Whitepapers"
       identifier: whitepaper
       pageRef: /docs/architecture-whitepaper
       weight: 3
@@ -52,14 +52,14 @@ menu:
         icon: github
 
 params:
-  description: "Technical documentation and system design of Naughtian Kallisto - High-Performance Hybrid Secret Engine"
+  description: "Technical documentation and system design of Naughtian Kallisto - Universal Secret Data Plane"
   author:
-    name: "Alexander Slokov / Naughtian Labs"
+    name: "Alexander Slokov a.k.a Alexander .S Naughtian / Naughtian Labs"
     email: "aleksandr@naughtianlabs.io"
 
   navbar:
     displayTitle: true
-    displayLogo: true
+    displayLogo: false
     logo:
       # If you have a logo, you can set it here
       path: kallisto_logo.webp

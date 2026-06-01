@@ -1,6 +1,6 @@
 ---
 title: "Why use Naughtian Kallisto?"
-weight: 2
+weight: 1
 ---
 
 ### Use Cases

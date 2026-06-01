@@ -9,3 +9,4 @@ naughtian-kallisto = { path = "../.." }
 tokio = { workspace = true }
 axum = { workspace = true }
 control_plane = { path = "../../components/kallisto_cluster" }
+tikv-jemallocator = "0.6"

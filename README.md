@@ -1,12 +1,9 @@
 # Naughtian Kallisto - A High-Performance Operational Secret Engine
 
 <p align="center">
-  <img src="https://img.shields.io/badge/C%2B%2B-20-blue.svg?style=for-the-badge&logo=c%2B%2B" alt="C++20">
-  <img src="https://img.shields.io/badge/Rust-FFI-orange.svg?style=for-the-badge&logo=rust" alt="Rust FFI">
+  <img src="https://img.shields.io/badge/C%2B%2B-20-blue.svg?style=for-the-badge&logo=c%2B%2B" alt="Rust 2024 edition">
   <img src="https://img.shields.io/badge/License-AGPLv3-red.svg?style=for-the-badge" alt="License">
 </p>
-
-*Fast like Redis. API requests? Just like Vault. Sounds like it uses RocksDB? Hell yes! And architecturally, it's the lovely daughter of Envoy Proxy.*
 
 <p align="center">
   <img src="docs/kallisto_logo.webp" alt="Kallisto Logo" width="300">
@@ -14,17 +11,19 @@
 
 Kallisto is a High-Performance Operational Secret Engine built with C++20 and Rust FFI. It provides a secure and efficient way to store and retrieve operational secrets with a focus on performance and scalability.
 
+# Announcements
+
+BIG BANG REWRITE! Naughtian Kallisto will shift into 100% Rust, and currently all new features will be freezed up.
+
 # IMPORTANT NOTICES
 
-1. Be advised, `Naughtian Kallisto` from version `1.0.0` to `2.5.0` is not offically released as the production-ready application. We will not take any accountability for application security, compliance or stability if you use `Naughtian Kallisto` in your production environment, directly or indirectly, and causing damages for your own businesses. Use as your own consents.
+1. Be advised, `Naughtian Kallisto` from version `1.0.0` to `2.0.0` is not offically released as the production-ready application. We will not take any accountability for application security, compliance or stability if you use `Naughtian Kallisto` in your production environment, directly or indirectly, and causing damages for your own businesses. Use as your own consents.
 
-2. Start from version 2.0.0, `Naughtian Kallisto` will begin to use many Rust components through Foreign Function Interface (FFI). Breaking changes must happen and will affect application's stability. We strongly advice you to use `Naughtian Kallisto` start from 2.5.0 version (tagged `2.5.0-lts`) as this will be the offical release of production-ready version.
+2. Start from version 1.0.0, `Naughtian Kallisto` will begin to be rewrited in Rust. Breaking changes must happen and will affect application's stability. We strongly advice you to use `Naughtian Kallisto` start from 2.0.0 version (tagged `2.0.0-lts`) as this will be the offical release of production-ready version.
 
 3. `Naughtian Kallisto` is protected under `AGPLv3` license. Custom "Commercial" or "Enterprise" License can be discussed.
 
 4. DO NOT use `Naughtian Kallisto` as a drop-in replacement directly for your current `OpenBao`/`Hashicorp Vault` infrastructure! `Naughtian Kallisto` itself, while developed with high attention to security and provides similar API interface/contracts of `Vault`/`OpenBao`, can not and should not be used to replace them as an upstream secret management platform. 
-
-5. To justify, `Naughtian Kallisto` is still a C++ project with not enough "pair of eyes" to audit or eliminate all security weaknesses. It will not meet the safety and compliance of OpenBao/Vault, and it WAS NOT designed to be a "Vault killer" at all. We will not hold any accountability or legal problems if you ignored this warning and act as your own consents. You are advised.
 
 # Use Cases — What Should (and Should NOT) Live in Kallisto
 
