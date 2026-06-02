@@ -23,7 +23,7 @@ The main purposes of Naughtian Kallisto are:
 
 - **Supports pluggable storage backends**: RocksDB for the reference implementation. We are planning to add support for SQLite, and some other key/value storage systems in the future.
 
-- **Key-Encryption-Key, Policies and Revocation controlled by your Roots of Trust**: your secrets management platforms control Naughtian Kallisto, everything, from keys, policies, to revocations.
+- **A Dataplane every Roots of Trust want:** serve secrets in a fast, scalable and secure way, right at the node level without DDoS-ing your own centralized secret Controlplane.
 
 # Announcements
 
@@ -147,7 +147,7 @@ Or with custom options:
 | `--db-path=PATH`   | `/kallisto/data` | RocksDB data directory                   |
 | `--help`, `-h`     | —                | Show help                                |
 
-> Admin API runs automatically on port **8202** Rust/Tokio.
+> Admin API runs automatically on port 8202.
 
 ## API Documentation
 
