@@ -129,26 +129,45 @@ impl KvEngine {
     }
 
     fn serialize_payload(payload: &SecretPayload) -> Result<Vec<u8>, EngineError> {
-        bincode::serialize(payload).map_err(|e| {
+        let bytes = rkyv::to_bytes::<_, 256>(payload).map_err(|e| {
             EngineError::StorageError(format!("Payload serialization failed: {}", e))
-        })
+        })?;
+        Ok(bytes.into_vec())
     }
 
     fn deserialize_payload(data: &[u8]) -> Result<SecretPayload, EngineError> {
-        bincode::deserialize(data).map_err(|e| {
-            EngineError::StorageError(format!("Payload deserialization failed: {}", e))
+        let archived = unsafe { rkyv::archived_root::<SecretPayload>(data) };
+        Ok(SecretPayload {
+            value: archived.value.as_str().to_string(),
+            ttl: archived.ttl,
         })
     }
 
     fn serialize_metadata(meta: &KeyMetadata) -> Result<Vec<u8>, EngineError> {
-        bincode::serialize(meta).map_err(|e| {
+        let bytes = rkyv::to_bytes::<_, 256>(meta).map_err(|e| {
             EngineError::StorageError(format!("Metadata serialization failed: {}", e))
-        })
+        })?;
+        Ok(bytes.into_vec())
     }
 
     fn deserialize_metadata(data: &[u8]) -> Result<KeyMetadata, EngineError> {
-        bincode::deserialize(data).map_err(|e| {
-            EngineError::StorageError(format!("Metadata deserialization failed: {}", e))
+        // Full deserialization is still needed for mutation paths (put, delete, etc)
+        let archived = unsafe { rkyv::archived_root::<KeyMetadata>(data) };
+        let mut versions = Vec::with_capacity(archived.versions.len());
+        for v in archived.versions.iter() {
+            versions.push(crate::engine::traits::VersionState {
+                created_time_ms: v.created_time_ms,
+                deletion_time_ms: v.deletion_time_ms,
+                version_id: v.version_id,
+                destroyed: v.destroyed,
+            });
+        }
+        Ok(KeyMetadata {
+            current_version: archived.current_version,
+            max_versions: archived.max_versions,
+            cas_required: archived.cas_required,
+            delete_version_after_ms: archived.delete_version_after_ms,
+            versions,
         })
     }
 
@@ -184,34 +203,49 @@ impl SecretEngine for KvEngine {
     }
 
     async fn read_version(&self, path: &str, version: u32) -> Result<SecretPayload, EngineError> {
-        let meta = self.read_metadata(path).await?;
-        let target_version = if version == 0 {
-            meta.current_version
-        } else {
-            version
-        };
+        let mkey = Self::build_meta_key(path);
+        
+        // Zero-copy Metadata extraction (No Vec<VersionState> heap allocation)
+        // SAFETY: Bytes come directly from RocksDB or CuckooCache which we wrote ourselves using rkyv.
+        let (target_version, is_destroyed, is_deleted) = self.read_raw_optimistic(&mkey, |bytes| {
+            let archived_meta = unsafe { rkyv::archived_root::<KeyMetadata>(bytes) };
+            let target = if version == 0 { archived_meta.current_version } else { version };
+            
+            let mut destroyed = false;
+            let mut deleted = false;
+            for v in archived_meta.versions.iter() {
+                if v.version_id == target {
+                    destroyed = v.destroyed;
+                    deleted = v.deletion_time_ms > 0;
+                    break;
+                }
+            }
+            (target, destroyed, deleted)
+        })?.ok_or(EngineError::NotFound)?;
 
-        if target_version == 0 || target_version > meta.current_version {
+        if target_version == 0 {
             return Err(EngineError::InvalidVersion(version));
         }
 
-        let vs = meta
-            .versions
-            .iter()
-            .find(|v| v.version_id == target_version)
-            .ok_or(EngineError::InvalidVersion(version))?;
-
-        if vs.destroyed {
+        if is_destroyed {
             return Err(EngineError::Destroyed);
         }
-        if vs.deletion_time_ms > 0 {
+        if is_deleted {
             return Err(EngineError::SoftDeleted);
         }
 
         let vkey = Self::build_version_key(path, target_version);
-        let payload = self.read_raw_optimistic(&vkey, Self::deserialize_payload)?;
+        // Zero-copy Payload check (Only 1 String allocation for the payload string)
+        let payload = self.read_raw_optimistic(&vkey, |bytes| {
+            let archived_payload = unsafe { rkyv::archived_root::<SecretPayload>(bytes) };
+            SecretPayload {
+                value: archived_payload.value.as_str().to_string(), // Fast memory copy
+                ttl: archived_payload.ttl,
+            }
+        })?;
+
         if let Some(res) = payload {
-            res
+            Ok(res)
         } else {
             Err(EngineError::StorageError("Missing version payload".to_string()))
         }

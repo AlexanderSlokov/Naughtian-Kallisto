@@ -1,8 +1,9 @@
 use async_trait::async_trait;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize as SerdeDeserialize, Serialize as SerdeSerialize};
+use rkyv::{Archive, Deserialize, Serialize};
 use super::error::EngineError;
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, SerdeSerialize, SerdeDeserialize, Archive, Serialize, Deserialize, PartialEq, Eq)]
 pub struct VersionState {
     pub created_time_ms: u64,
     pub deletion_time_ms: u64, // > 0 tức là đã bị Soft-Delete
@@ -10,7 +11,7 @@ pub struct VersionState {
     pub destroyed: bool,       // true tức là Payload đã bị wipe
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, SerdeSerialize, SerdeDeserialize, Archive, Serialize, Deserialize, PartialEq, Eq, Default)]
 pub struct KeyMetadata {
     pub current_version: u32,
     pub max_versions: u32, // 0 = dùng Engine Mount Config mặc định
@@ -19,7 +20,7 @@ pub struct KeyMetadata {
     pub versions: Vec<VersionState>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, SerdeSerialize, SerdeDeserialize, Archive, Serialize, Deserialize, PartialEq, Eq)]
 pub struct SecretPayload {
     pub value: String, // Chứa dữ liệu bí mật
     pub ttl: u64,

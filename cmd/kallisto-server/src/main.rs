@@ -5,6 +5,10 @@ use std::sync::Arc;
 use std::path::PathBuf;
 use control_plane::admin_http::{start_admin_server, stop_admin_server};
 
+#[cfg(not(target_env = "msvc"))]
+#[global_allocator]
+static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
+
 fn main() {
     let db_path = PathBuf::from("/tmp/kallisto_server_bench");
     if db_path.exists() {
