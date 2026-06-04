@@ -3,7 +3,7 @@ FROM rust:slim AS builder
 WORKDIR /app
 # Install necessary build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev cmake clang \
+    pkg-config libssl-dev cmake clang make \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN cargo build --release --all
