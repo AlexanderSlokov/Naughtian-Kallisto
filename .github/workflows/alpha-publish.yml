@@ -86,6 +86,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # This saves massive time on huge C++ builds by caching the vcpkg/cmake steps
+          # This saves massive time on huge Rust builds by caching the cargo/rocksdb-sys compilation steps
           cache-from: type=gha,scope=production
           cache-to: type=gha,mode=max,scope=production
