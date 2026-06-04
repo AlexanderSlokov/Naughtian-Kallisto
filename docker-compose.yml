@@ -4,12 +4,13 @@ services:
     build:
       context: .
       target: production
-    image: ghcr.io/alexanderslokov/kallisto:latest
+    image: ghcr.io/alexanderslokov/naughtian-kallisto:latest
     container_name: kallisto-server
     ports:
-      - "8200:8200" # HTTP API
-    # volumes:
-    #   - kallisto-data:/kallisto/data
+      - "8200:8200" # Data HTTP API
+      - "8202:8202" # Admin HTTP API
+    volumes:
+      - kallisto-data:/kallisto/data
     environment:
       - WORKERS=4
       - DB_PATH=/kallisto/data
@@ -19,18 +20,18 @@ services:
       - kallisto-net
 
   # The Benchmark / Tester container
-  tester:
-    build:
-      context: .
-      target: tester
-    image: ghcr.io/alexanderslokov/kallisto-tester:latest
-    container_name: kallisto-tester
-    # We override the default entrypoint to run the benchmark script
-    # It waits for the server, seeds data, and runs wrk tests against the 'kallisto' service
-    command: bash -c "make bench-server"
-    profiles: ["bench"] # This service won't start by default unless explicitly requested
-    networks:
-      - kallisto-net
+  #  tester:
+  #    build:
+  #      context: .
+  #      target: tester
+  #    image: ghcr.io/alexanderslokov/kallisto-tester:latest
+  #    container_name: kallisto-tester
+  #    # We override the default entrypoint to run the benchmark script
+  #    # It waits for the server, seeds data, and runs wrk tests against the 'kallisto' service
+  #    command: bash -c "make bench-server"
+  #    profiles: ["bench"] # This service won't start by default unless explicitly requested
+  #    networks:
+  #      - kallisto-net
 
 volumes:
   kallisto-data:

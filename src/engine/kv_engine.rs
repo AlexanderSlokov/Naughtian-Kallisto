@@ -135,13 +135,7 @@ impl KvEngine {
         Ok(bytes.into_vec())
     }
 
-    fn deserialize_payload(data: &[u8]) -> Result<SecretPayload, EngineError> {
-        let archived = unsafe { rkyv::archived_root::<SecretPayload>(data) };
-        Ok(SecretPayload {
-            value: archived.value.as_str().to_string(),
-            ttl: archived.ttl,
-        })
-    }
+
 
     fn serialize_metadata(meta: &KeyMetadata) -> Result<Vec<u8>, EngineError> {
         let bytes = rkyv::to_bytes::<_, 256>(meta).map_err(|e| {

@@ -3,7 +3,7 @@ FROM rust:slim AS builder
 WORKDIR /app
 # Install necessary build dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    pkg-config libssl-dev cmake clang \
+    pkg-config libssl-dev cmake clang make \
     && rm -rf /var/lib/apt/lists/*
 COPY . .
 RUN cargo build --release --all
@@ -33,5 +33,5 @@ WORKDIR /app
 COPY --from=builder /app/target/release/kallisto-server /app/kallisto_server
 RUN chown kallisto:kallisto /app/kallisto_server
 USER kallisto
-EXPOSE 8200
+EXPOSE 8200 8202
 ENTRYPOINT ["/app/kallisto_server"]
