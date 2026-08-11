@@ -41,9 +41,12 @@ The main purposes of Naughtian Kallisto are:
 
 ## Prerequisites
 
+I highly recommend using `linuxbrew` to setup Linux environment, these followings are essential for Naughtian Kallisto's delevopment:
+
 - Rust 2024 stable
 - Rust compiler and tools
-- Git (optional, to clone the repository)
+- Git (optional, to clone this repository)
+- k6 (for newly added benchmarks)
 
 ## Core Build (CLI only — no external dependencies)
 
