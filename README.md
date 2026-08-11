@@ -83,11 +83,23 @@ docker run -d \
 
 ### 2. Run benchmarks
 
+TODO: Add instruction for setup `wrk2` from and build this tool from source.
+
 If you want to validate the raw performance of Naughtian Kallisto, we prepared a benchmark container with `k6` ready for you:
 
 ```bash
 # Start a detached temporary container and run benchmark script
 docker run -it --rm ghcr.io/alexanderslokov/kallisto-tester:latest make bench
+```
+
+For more "proudly" benchmarks, you need to setup `wrk2` and use provided benchmark script as such:
+
+```bash
+# Benchmark GET latency at 50% capacity (~40k req/s)
+./benchmarks/server/run_release_bench.sh 2 200 10s 40000
+
+# Benchmark PUT latency at 50% capacity (~40k req/s)
+./benchmarks/server/run_release_bench.sh 2 200 10s 40000
 ```
 
 ### 3. Development
