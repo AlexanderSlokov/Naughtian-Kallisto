@@ -72,11 +72,17 @@ docker-run:
 build-server:
 	cargo build --release -p kallisto-server
 
-# Benchmarks (Server — HTTP wrk)
+# Benchmarks (Server — HTTP k6)
 # ------------------------------
 
 bench-server:
 	@bash benchmarks/server/run_server_bench.sh
+
+# Release benchmark (wrk2 — run on a dedicated machine before tagging)
+# --------------------------------------------------------------------
+
+bench-release:
+	@bash benchmarks/server/run_release_bench.sh
 
 full-bench-server: clean build-server bench-server
 
@@ -120,7 +126,7 @@ endif
         test-main test-rocksdb test-listener test-threading test-persistence \
         benchmark-strict benchmark-batch benchmark-p99 benchmark-throughput \
         benchmark-dos test-atomic benchmark-multithread \
-        bench-server bench-http \
+        bench-server bench-release bench-http \
         docker-build docker-test docker-run coverage \
         test-asan test-tsan \
         devcontainer_cloud_build devcontainer_local_build \
@@ -142,7 +148,8 @@ help:
 	@echo "    make coverage       - Build + test + generate HTML coverage report"
 	@echo ""
 	@echo "  Benchmark:"
-	@echo "    make bench-server   - HTTP load test (wrk: GET/PUT/MIXED)"
+	@echo "    make bench-server   - HTTP load test (k6: GET/PUT/MIXED)"
+	@echo "    make bench-release  - Release benchmark (wrk2: raw throughput + latency)"
 	@echo "    cargo bench         - Run all in-process Rust Criterion benchmarks"
 	@echo ""
 	@echo "  Run:"

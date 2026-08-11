@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 #
-# Kallisto Server Load Test Suite
-# Uses k6 to stress test the HTTP API (Vault KV-v2 compatible)
+# Kallisto Release Benchmark (wrk2)
+# Measures raw throughput ceiling + coordinated-omission-corrected latency.
+# Run on a DEDICATED machine before tagging a release — not your dev laptop.
 #
-# Usage: ./benchmarks/server/run_server_bench.sh [workers] [vus] [duration]
-# Default: half-cores workers, 200 VUs, 10s duration
+# Usage: ./benchmarks/server/run_release_bench.sh [workers] [connections] [duration]
+# Default: half-cores workers, 200 connections, 10s duration
+#
+# Requires: wrk2 (brew install wrk2)
 #
 set -euo pipefail
 
@@ -21,12 +24,15 @@ if [ "$HALF_CORES" -lt 1 ]; then
 fi
 
 WORKERS=${1:-$HALF_CORES}
-VUS=${2:-200}
+CONNECTIONS=${2:-200}
 DURATION=${3:-10s}
+# wrk2 constant-rate target — set high to find the server's actual ceiling
+RATE=${4:-200000}
+THREADS=2
 HTTP_PORT=8200
 ADMIN_PORT=8202
-BENCH_DB_PATH="/tmp/kallisto_bench_data"
-BENCH_LOG="/tmp/kallisto_bench.log"
+BENCH_DB_PATH="/tmp/kallisto_release_bench_data"
+BENCH_LOG="/tmp/kallisto_release_bench.log"
 SERVER_BIN="./target/release/kallisto-server"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 WORKLOAD_DIR="$SCRIPT_DIR/workloads"
@@ -41,19 +47,22 @@ NC='\033[0m'
 
 banner() {
     echo ""
-    echo -e "${CYAN}     KALLISTO SERVER LOAD TEST (k6) ${NC}"
+    echo -e "${CYAN}     KALLISTO RELEASE BENCHMARK (wrk2) ${NC}"
+    echo -e "${CYAN}  ⚠  Run on a dedicated machine for accurate results${NC}"
+    echo ""
     printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Total Cores:" "$TOTAL_CORES"
     printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Kal Workers:" "$WORKERS"
-    printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "VUs:" "$VUS"
+    printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "wrk2 Threads:" "$THREADS"
+    printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Connections:" "$CONNECTIONS"
     printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Duration:" "$DURATION"
+    printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Target Rate:" "${RATE} req/s"
     printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Data Port:" "$HTTP_PORT"
-    printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Admin Port:" "$ADMIN_PORT"
     echo ""
 }
 
 check_prereqs() {
-    if ! command -v k6 &>/dev/null; then
-        echo -e "${RED}[ERROR] k6 not found. Install with: brew install k6${NC}"
+    if ! command -v wrk2 &>/dev/null; then
+        echo -e "${RED}[ERROR] wrk2 not found. Install with: brew install wrk2${NC}"
         exit 1
     fi
     if [ ! -f "$SERVER_BIN" ]; then
@@ -62,9 +71,8 @@ check_prereqs() {
     fi
 }
 
-# ── Start Server (Two-Port: 8200 Data + 8202 Admin) ────────────────────
 start_server() {
-    echo -e "${CYAN}[1/5] Starting Kallisto server (${WORKERS} workers)...${NC}"
+    echo -e "${CYAN}[1/4] Starting Kallisto server (${WORKERS} workers)...${NC}"
 
     pkill -f kallisto_server 2>/dev/null || true
     rm -rf "$BENCH_DB_PATH" 2>/dev/null
@@ -74,7 +82,6 @@ start_server() {
         --db-path="$BENCH_DB_PATH" &>"$BENCH_LOG" &
     SERVER_PID=$!
 
-    # Wait for server to be ready using /v1/sys/health mock
     for i in $(seq 1 30); do
         if curl -s --max-time 1 -H "Connection: close" "http://localhost:$HTTP_PORT/v1/sys/health" 2>/dev/null | grep -q "initialized"; then
             break
@@ -84,7 +91,6 @@ start_server() {
     sleep 0.5
     echo -e "${GREEN}  ✓ Server started (PID: $SERVER_PID)${NC}"
 
-    # Switch to BATCH mode via Rust Admin API (Port 8202)
     echo -e "${CYAN}  Switching to BATCH mode via Admin API...${NC}"
     BATCH_RES=$(curl -s --max-time 5 -X POST "http://localhost:$ADMIN_PORT/admin/mode/batch" 2>/dev/null || echo "FAIL")
     if echo "$BATCH_RES" | grep -q '"OK"'; then
@@ -95,12 +101,11 @@ start_server() {
 }
 
 seed_data() {
-    echo -e "${CYAN}[2/5] Seeding data with k6 (10 VUs, 3s)...${NC}"
-    k6 run --quiet --vus 10 --duration 3s \
-        --env "BASE_URL=http://localhost:$HTTP_PORT" \
-        "$WORKLOAD_DIR/seed.js" 2>/dev/null
+    echo -e "${CYAN}[2/4] Seeding data with wrk2 (3s burst)...${NC}"
+    wrk2 -t2 -c10 -d3s -R 50000 \
+        -s "$WORKLOAD_DIR/wrk2_put.lua" \
+        "http://localhost:$HTTP_PORT" 2>/dev/null | tail -1
 
-    # Verify seed data using the Vault KV-v2 response format
     VERIFY=$(curl -s --max-time 2 -H "Connection: close" "http://localhost:$HTTP_PORT/v1/secret/data/bench/s0" 2>/dev/null || echo "FAIL")
     if echo "$VERIFY" | grep -q '"data"'; then
         echo -e "${GREEN}  ✓ Data seeded and verified${NC}"
@@ -111,27 +116,20 @@ seed_data() {
 
 run_benchmarks() {
     echo ""
-    echo -e "${CYAN}[3/5] Running GET benchmark (pure read, ${DURATION})...${NC}"
+    echo -e "${CYAN}[3/4] GET throughput ceiling (${DURATION}, target ${RATE} req/s)...${NC}"
     echo "────────────────────────────────────────────────────────────────"
-    k6 run --vus "$VUS" --duration "$DURATION" \
-        --env "BASE_URL=http://localhost:$HTTP_PORT" \
-        "$WORKLOAD_DIR/get_bench.js" 2>&1
+    wrk2 -t$THREADS -c$CONNECTIONS -d$DURATION -R $RATE \
+        --latency \
+        "http://localhost:$HTTP_PORT/v1/secret/data/bench/s0" 2>&1
     sleep 1
 
     echo ""
-    echo -e "${CYAN}[4/5] Running PUT benchmark (pure write, ${DURATION})...${NC}"
+    echo -e "${CYAN}[4/4] PUT throughput ceiling (${DURATION}, target ${RATE} req/s)...${NC}"
     echo "────────────────────────────────────────────────────────────────"
-    k6 run --vus "$VUS" --duration "$DURATION" \
-        --env "BASE_URL=http://localhost:$HTTP_PORT" \
-        "$WORKLOAD_DIR/put_bench.js" 2>&1
-    sleep 1
-
-    echo ""
-    echo -e "${CYAN}[5/5] Running MIXED benchmark (95/5, ${DURATION})...${NC}"
-    echo "────────────────────────────────────────────────────────────────"
-    k6 run --vus "$VUS" --duration "$DURATION" \
-        --env "BASE_URL=http://localhost:$HTTP_PORT" \
-        "$WORKLOAD_DIR/mixed_bench.js" 2>&1
+    wrk2 -t$THREADS -c$CONNECTIONS -d$DURATION -R $RATE \
+        --latency \
+        -s "$WORKLOAD_DIR/wrk2_put.lua" \
+        "http://localhost:$HTTP_PORT" 2>&1
 }
 
 cleanup() {

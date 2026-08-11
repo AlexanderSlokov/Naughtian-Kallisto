@@ -2,6 +2,69 @@
 
 This file provides guidance to AI agents when working with code in this repository.
 
+## Clean codes principals
+
+### Code style
+
+- Functions: 4-20 lines. Split if longer.
+- Files: under 500 lines. Split by responsibility.
+- One thing per function, one responsibility per module (SRP).
+- Names: specific and unique. Avoid `data`, `handler`, `Manager`.
+  Prefer names that return <5 grep hits in the codebase.
+- Types: explicit. No `any`, no `Dict`, no untyped functions.
+- No code duplication. Extract shared logic into a function/module.
+- Early returns over nested ifs. Max 2 levels of indentation.
+- Exception messages must include the offending value and expected shape.
+
+### Comments
+
+- Keep your own comments. Don't strip them on refactor, they carry intent and provenance.
+- Write WHY, not WHAT.
+- Docstrings on public functions: intent + one usage example.
+- Reference issue numbers / commit SHAs when a line exists because of a specific bug or upstream constraint.
+
+### Tests
+
+- Tests run with a single command: `<project-specific>`.
+- Every new function gets a test. Bug fixes get a regression test.
+- Mock external I/O (API, DB, filesystem) with named fake classes,
+  not inline stubs.
+- Tests must be F.I.R.S.T: fast, independent, repeatable,
+  self-validating, timely.
+
+### Dependencies
+
+- Inject dependencies through constructor/parameter, not global/import.
+- Wrap third-party libs behind a thin interface owned by this project.
+
+### Structure
+
+- Follow the framework's convention (Rails, Django, Next.js, etc.).
+- Prefer small focused modules over god files.
+- Predictable paths: controller/model/view, src/lib/test, etc.
+
+### Formatting
+
+- Use the language default formatter (`cargo fmt`, `gofmt`, `prettier`,
+  `black`, `rubocop -A`). Don't discuss style beyond that.
+
+### Logging
+
+- Structured JSON when logging for debugging / observability.
+- Plain text only for user-facing CLI output.
+
+
+## Performance Critical Path 
+
+There're files whose functions are in the critical path of read or write requests. They're so important to the overall performance that any regression will directly impact user experience. A comment `#[PerformanceCriticalPath]` is place inside them to highlight that fact. Please note that this is the best-effort work and some files in critical path may not be marked. But if a file is marked, please pay special attention when you change its code.
+
+Here're some typical mistakes that should be avoided in the `#[PerformanceCriticalPath]` files:
+
+* Unnecessary synchronous I/O. Here 'unnecessary' means it's not a MUST for serving the current user request. For example, on_gc_snap() in peers.rs should spin off its I/O related work to background thread.
+* Verbose logging with info or above log level.
+* Global lock.
+* Long tasks that do not have to be synchronous (Could be done in background thread instead).
+
 ## Developing Environment Tips
 
 ### Unsafe Rust Philosophy & Guidelines
@@ -14,7 +77,6 @@ We encourage the use of `unsafe` when it is genuinely the most appropriate solut
 2. **Mandatory Safety Comments:** Every `unsafe` block or function **MUST** be immediately preceded by a `// SAFETY:` comment explaining exactly *why* the operation is safe, what invariants are upheld, and why the compiler cannot verify them. Code without this explicit reasoning will be rejected.
 3. **Strict Encapsulation:** Keep `unsafe` blocks as minimal and isolated as possible. You must wrap your `unsafe` logic behind a safe, well-tested API boundary so the rest of the application doesn't have to worry about the underlying memory management.
 4. **Collaborative Review:** If you find an existing `unsafe` block that can be refactored into idiomatic, safe Rust without losing performance, or if you need to introduce a new one, point it out. It is a topic for architectural discussion, not a competition.
-
 
 ### Prerequisites
 
@@ -45,7 +107,7 @@ We encourage the use of `unsafe` when it is genuinely the most appropriate solut
 - `/tests/` - Integration tests
 - `/fuzz/` - Fuzzing targets (For future use, not implemented yet)
 
-#### KV Engine (Pre-Rust rewrite)
+### KV Engine (Pre-Rust rewrite)
 
 ```
 include/kallisto/engine/

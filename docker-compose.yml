@@ -27,7 +27,7 @@ services:
   #    image: ghcr.io/alexanderslokov/kallisto-tester:latest
   #    container_name: kallisto-tester
   #    # We override the default entrypoint to run the benchmark script
-  #    # It waits for the server, seeds data, and runs wrk tests against the 'kallisto' service
+  #    # It waits for the server, seeds data, and runs k6 tests against the 'kallisto' service
   #    command: bash -c "make bench-server"
   #    profiles: ["bench"] # This service won't start by default unless explicitly requested
   #    networks:
