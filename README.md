@@ -5,29 +5,21 @@
   <img src="https://img.shields.io/badge/License-AGPLv3-red.svg?style=for-the-badge" alt="License">
 </p>
 
-<p align="center">
-  <img src="docs/kallisto_logo.webp" alt="Kallisto Logo" width="300">
-</p>
-
-Naughtian Kallisto is a High-Performance Secret Dataplane built with Rust.
+Naughtian Kallisto is a High-Performance Secret Dataplane built with Rust, designed for high-throughput and low-latency (armortized 1 millisecond) reads.
 
 It provides a secure and efficient way to store and retrieve secrets for micro-services, while can withstand a massive amount of RPS for Roots of Trusts.
 
-Naughtian Kallisto can not run by itself and should be integrated into existing secret management platforms (that is, Hashicorp Vault, Infisical, Conjur, etc). This is and intentional design decision to avoid unnecessary complexity and overhead, while providing as highest throughput as possible.
+Please keep in mind that Naughtian Kallisto can not run by itself and should be integrated into existing secret management systems (that is, Hashicorp Vault, Infisical, Conjur, etc). This is an intentional design decision to avoid unnecessary complexity and overhead about security concerns, while providing as highest throughput as possible.
+
+## Use cases
 
 The main purposes of Naughtian Kallisto are:
 
-- **Secure Secret Storage**: Kallisto can store key/value pairs while encrypts data before writing it to persistent storage, so your system can use it as a DaemonSet stay on each node, serving secrets locally and securely.
+- **A Dataplane every Roots of Trust want:** serve secrets in a fast, scalable and secure way, right at the node level without self DDoS-ing your precious Vault cluster.
 
-- **Designed for High-Performance**: Kallisto is designed for high-throughput and low-latency (armortized 2 millisecond) reads.
+- **Secure Secret Storage**: Naughtian Kallisto by itself can work in standalone mode to store key/value pairs while encrypts data before writing it to persistent storage, so your system can use it as a DaemonSet stay on each node, store and use secrets locally and securely.
 
-- **Supports pluggable storage backends**: RocksDB for the reference implementation. We are planning to add support for SQLite, and some other key/value storage systems in the future.
-
-- **A Dataplane every Roots of Trust want:** serve secrets in a fast, scalable and secure way, right at the node level without DDoS-ing your own centralized secret Controlplane.
-
-# Announcements
-
-BIG BANG REWRITE! Naughtian Kallisto will shift into 100% Rust, and currently all new features will be freezed up.
+- **Secure edge config server**: Naughtian Kallisto can be use as a secure config server at edge, providing shared TLS certificates, API keys,... for your API gateway, LB fleet,...
 
 # IMPORTANT NOTICES
 
@@ -37,7 +29,13 @@ BIG BANG REWRITE! Naughtian Kallisto will shift into 100% Rust, and currently al
 
 3. `Naughtian Kallisto` is protected under `AGPLv3` license. Custom "Commercial" or "Enterprise" License can be discussed.
 
-4. DO NOT use `Naughtian Kallisto` as a drop-in replacement directly for your current `OpenBao`/`Hashicorp Vault` infrastructure! `Naughtian Kallisto` itself, while developed with high attention to security and provides similar API interface/contracts of `Vault`/`OpenBao`, can not and should not be used to replace them as an upstream secret management platform. 
+4. DO NOT use `Naughtian Kallisto` as a drop-in replacement directly for your current `OpenBao`/`Hashicorp Vault` infrastructure! `Naughtian Kallisto` itself, while developed with high attention to security and provides similar API interface/contracts of `Vault`/`OpenBao`, can not and should not be used to replace them as an upstream secret management platform.
+
+## Future plans
+
+- **Supports pluggable storage backends**: RocksDB for the reference implementation. We are planning to add support for SQLite, and some other key/value storage systems in the future.
+
+- **Docker Engine secret storage support**: For storing your Docker PAT safely. 
 
 # Build it by yourself
 
@@ -61,15 +59,15 @@ First time compiling, `cargo` will download and install dependencies. It's fast 
 make build-server
 ```
 
-# HOW TO USE
+# How to use
 
-Kallisto provides **two interfaces**: a **CLI (Command Line Interface)** for interactive local usage, and a **Server mode** with HTTP APIs for production deployment.
+Kallisto provides two interfaces: a **Command Line Interface** for interactive local usage, and a **Server** with HTTP APIs for production deployment.
 
 ## Docker
 
 ### 1. Run the Server
 
-Pull the image and run the Naughtian Kallisto server, remember to mount a volume for data persistence. For instance:
+Pull the image and run the `Naughtian Kallisto` server, remember to mount a volume for data persistence. For instance:
 
 ```bash
 docker run -d \
@@ -94,16 +92,23 @@ docker run -it --rm ghcr.io/alexanderslokov/kallisto-tester:latest make bench
 If you contribute for `Naughtian Kallisto` source code and want to build the Docker image locally:
 
 ```bash
-docker build -t kallisto-server:latest -f Dockerfile .
-# Or using Makefile: make docker-build
+docker build . \
+-t kallisto-server:latest 
+-f Dockerfile
 ```
 
-## Admin API (Port 8202 — Rust Control Plane)
+Or using this Make target: 
+
+```bash
+make docker-build
+```
+
+## Ports
 
 Kallisto uses two ports:
 
-- **Port 8200** — C++ Data Plane (high-performance KV read/write)
-- **Port 8202** — Rust Admin Server (sync mode, flush, telemetry)
+- 8200: Data Plane (premounted a KV engine)
+- 8202: Control Plane (administration, provisioning, sync mode, flush, telemetry)
 
 ```bash
 # Switch to BATCH mode
@@ -124,7 +129,7 @@ curl -X POST http://localhost:8202/admin/flush
 
 ## Server Mode
 
-The server uses an **Envoy-style SO_REUSEPORT** architecture with a thread-per-core model. So it is the best when each worker thread binds its own listener socket. The kernel distributes connections so technically there is no central bottleneck at all.
+Naughtian Kallisto uses an **Envoy-style SO_REUSEPORT** architecture with a thread-per-core model. So it is the best when each worker thread binds its own listener socket. The kernel distributes connections so technically there is no central bottleneck at all.
 
 ### Starting the Server
 
@@ -147,7 +152,7 @@ Or with custom options:
 | `--db-path=PATH`   | `/kallisto/data` | RocksDB data directory                   |
 | `--help`, `-h`     | —                | Show help                                |
 
-> Admin API runs automatically on port 8202.
+Note: The Admin API runs automatically on port 8202.
 
 ## API Documentation
 

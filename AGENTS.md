@@ -2,6 +2,17 @@
 
 This file provides guidance to AI agents when working with code in this repository.
 
+## Performance Critical Path 
+
+There're files whose functions are in the critical path of read or write requests. They're so important to the overall performance that any regression will directly impact user experience. A comment `#[PerformanceCriticalPath]` is place inside them to highlight that fact. Please note that this is the best-effort work and some files in critical path may not be marked. But if a file is marked, please pay special attention when you change its code.
+
+Here're some typical mistakes that should be avoided in the `#[PerformanceCriticalPath]` files:
+
+* Unnecessary synchronous I/O. Here 'unnecessary' means it's not a MUST for serving the current user request. For example, on_gc_snap() in peers.rs should spin off its I/O related work to background thread.
+* Verbose logging with info or above log level.
+* Global lock.
+* Long tasks that do not have to be synchronous (Could be done in background thread instead).
+
 ## Developing Environment Tips
 
 ### Unsafe Rust Philosophy & Guidelines
@@ -14,7 +25,6 @@ We encourage the use of `unsafe` when it is genuinely the most appropriate solut
 2. **Mandatory Safety Comments:** Every `unsafe` block or function **MUST** be immediately preceded by a `// SAFETY:` comment explaining exactly *why* the operation is safe, what invariants are upheld, and why the compiler cannot verify them. Code without this explicit reasoning will be rejected.
 3. **Strict Encapsulation:** Keep `unsafe` blocks as minimal and isolated as possible. You must wrap your `unsafe` logic behind a safe, well-tested API boundary so the rest of the application doesn't have to worry about the underlying memory management.
 4. **Collaborative Review:** If you find an existing `unsafe` block that can be refactored into idiomatic, safe Rust without losing performance, or if you need to introduce a new one, point it out. It is a topic for architectural discussion, not a competition.
-
 
 ### Prerequisites
 
@@ -45,7 +55,7 @@ We encourage the use of `unsafe` when it is genuinely the most appropriate solut
 - `/tests/` - Integration tests
 - `/fuzz/` - Fuzzing targets (For future use, not implemented yet)
 
-#### KV Engine (Pre-Rust rewrite)
+### KV Engine (Pre-Rust rewrite)
 
 ```
 include/kallisto/engine/
