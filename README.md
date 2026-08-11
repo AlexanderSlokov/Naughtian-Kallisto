@@ -83,7 +83,7 @@ docker run -d \
 
 ### 2. Run benchmarks
 
-If you want to validate the raw performance of Naughtian Kallisto, we prepared a benchmark container with `wrk` ready for you:
+If you want to validate the raw performance of Naughtian Kallisto, we prepared a benchmark container with `k6` ready for you:
 
 ```bash
 # Start a detached temporary container and run benchmark script

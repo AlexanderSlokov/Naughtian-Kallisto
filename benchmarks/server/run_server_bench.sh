@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
 # Kallisto Server Load Test Suite
-# Uses wrk to stress test the HTTP API (Vault KV-v2 compatible)
+# Uses k6 to stress test the HTTP API (Vault KV-v2 compatible)
 #
-# Usage: ./benchmarks/server/run_server_bench.sh [threads] [connections] [duration]
-# Default: half-cores threads, half-cores workers, 200 connections, 10s duration
+# Usage: ./benchmarks/server/run_server_bench.sh [workers] [vus] [duration]
+# Default: half-cores workers, 200 VUs, 10s duration
 #
 set -euo pipefail
 
@@ -20,10 +20,9 @@ if [ "$HALF_CORES" -lt 1 ]; then
     HALF_CORES=1
 fi
 
-THREADS=${1:-$HALF_CORES}
-WORKERS=${2:-$HALF_CORES}
-CONNECTIONS=${3:-200}
-DURATION=${4:-10s}
+WORKERS=${1:-$HALF_CORES}
+VUS=${2:-200}
+DURATION=${3:-10s}
 HTTP_PORT=8200
 ADMIN_PORT=8202
 BENCH_DB_PATH="/tmp/kallisto_bench_data"
@@ -42,11 +41,10 @@ NC='\033[0m'
 
 banner() {
     echo ""
-    echo -e "${CYAN}     KALLISTO SERVER LOAD TEST (wrk) ${NC}"
+    echo -e "${CYAN}     KALLISTO SERVER LOAD TEST (k6) ${NC}"
     printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Total Cores:" "$TOTAL_CORES"
-    printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "wrk Threads:" "$THREADS"
     printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Kal Workers:" "$WORKERS"
-    printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Connections:" "$CONNECTIONS"
+    printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "VUs:" "$VUS"
     printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Duration:" "$DURATION"
     printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Data Port:" "$HTTP_PORT"
     printf "${CYAN}  %-14s ${YELLOW}%-40s${NC}\n" "Admin Port:" "$ADMIN_PORT"
@@ -54,8 +52,8 @@ banner() {
 }
 
 check_prereqs() {
-    if ! command -v wrk &>/dev/null; then
-        echo -e "${RED}[ERROR] wrk not found. Install with: sudo apt-get install wrk${NC}"
+    if ! command -v k6 &>/dev/null; then
+        echo -e "${RED}[ERROR] k6 not found. Install with: brew install k6${NC}"
         exit 1
     fi
     if [ ! -f "$SERVER_BIN" ]; then
@@ -97,10 +95,12 @@ start_server() {
 }
 
 seed_data() {
-    echo -e "${CYAN}[2/5] Seeding data with wrk in 3 seconds...${NC}"
-    wrk -t2 -c10 -d3s -s "$WORKLOAD_DIR/wrk_seed.lua" "http://localhost:$HTTP_PORT" 2>/dev/null
+    echo -e "${CYAN}[2/5] Seeding data with k6 (10 VUs, 3s)...${NC}"
+    k6 run --quiet --vus 10 --duration 3s \
+        --env "BASE_URL=http://localhost:$HTTP_PORT" \
+        "$WORKLOAD_DIR/seed.js" 2>/dev/null
 
-    # Verify seed data using the new Vault KV-v2 response format
+    # Verify seed data using the Vault KV-v2 response format
     VERIFY=$(curl -s --max-time 2 -H "Connection: close" "http://localhost:$HTTP_PORT/v1/secret/data/bench/s0" 2>/dev/null || echo "FAIL")
     if echo "$VERIFY" | grep -q '"data"'; then
         echo -e "${GREEN}  ✓ Data seeded and verified${NC}"
@@ -113,19 +113,25 @@ run_benchmarks() {
     echo ""
     echo -e "${CYAN}[3/5] Running GET benchmark (pure read, ${DURATION})...${NC}"
     echo "────────────────────────────────────────────────────────────────"
-    wrk -t$THREADS -c$CONNECTIONS -d$DURATION -s "$WORKLOAD_DIR/wrk_get.lua" "http://localhost:$HTTP_PORT" 2>&1
+    k6 run --vus "$VUS" --duration "$DURATION" \
+        --env "BASE_URL=http://localhost:$HTTP_PORT" \
+        "$WORKLOAD_DIR/get_bench.js" 2>&1
     sleep 1
 
     echo ""
     echo -e "${CYAN}[4/5] Running PUT benchmark (pure write, ${DURATION})...${NC}"
     echo "────────────────────────────────────────────────────────────────"
-    wrk -t$THREADS -c$CONNECTIONS -d$DURATION -s "$WORKLOAD_DIR/wrk_put.lua" "http://localhost:$HTTP_PORT" 2>&1
+    k6 run --vus "$VUS" --duration "$DURATION" \
+        --env "BASE_URL=http://localhost:$HTTP_PORT" \
+        "$WORKLOAD_DIR/put_bench.js" 2>&1
     sleep 1
 
     echo ""
     echo -e "${CYAN}[5/5] Running MIXED benchmark (95/5, ${DURATION})...${NC}"
     echo "────────────────────────────────────────────────────────────────"
-    wrk -t$THREADS -c$CONNECTIONS -d$DURATION -s "$WORKLOAD_DIR/wrk_mixed.lua" "http://localhost:$HTTP_PORT" 2>&1
+    k6 run --vus "$VUS" --duration "$DURATION" \
+        --env "BASE_URL=http://localhost:$HTTP_PORT" \
+        "$WORKLOAD_DIR/mixed_bench.js" 2>&1
 }
 
 cleanup() {

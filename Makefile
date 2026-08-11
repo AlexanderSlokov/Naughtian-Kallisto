@@ -72,7 +72,7 @@ docker-run:
 build-server:
 	cargo build --release -p kallisto-server
 
-# Benchmarks (Server — HTTP wrk)
+# Benchmarks (Server — HTTP k6)
 # ------------------------------
 
 bench-server:
@@ -142,7 +142,7 @@ help:
 	@echo "    make coverage       - Build + test + generate HTML coverage report"
 	@echo ""
 	@echo "  Benchmark:"
-	@echo "    make bench-server   - HTTP load test (wrk: GET/PUT/MIXED)"
+	@echo "    make bench-server   - HTTP load test (k6: GET/PUT/MIXED)"
 	@echo "    cargo bench         - Run all in-process Rust Criterion benchmarks"
 	@echo ""
 	@echo "  Run:"
