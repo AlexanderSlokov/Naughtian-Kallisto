@@ -12,6 +12,7 @@ use crate::engine::engine_registry::EngineRegistry;
 use crate::engine::error::EngineError;
 use crate::engine::traits::SecretPayload;
 use super::sys_handler;
+use sonic_rs::JsonValueMutTrait;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -163,14 +164,14 @@ fn json_merge_patch(target: &mut sonic_rs::Value, patch: &sonic_rs::Value) {
     
     for (key, value) in patch_obj.iter() {
         if value.is_null() {
-            target_obj.remove(key);
+            target_obj.remove(&key);
         } else {
             // Note: entry() and or_insert() are not available on sonic_rs::Object directly like this,
             // we have to check if it exists.
-            if !target_obj.contains_key(key) {
-                target_obj.insert(key, sonic_rs::json!({}));
+            if !target_obj.contains_key(&key) {
+                target_obj.insert(&key, sonic_rs::json!({}));
             }
-            json_merge_patch(target_obj.get_mut(key).unwrap(), value);
+            json_merge_patch(target_obj.get_mut(&key).unwrap(), value);
         }
     }
 }
