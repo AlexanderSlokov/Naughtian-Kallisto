@@ -53,30 +53,35 @@ This file provides guidance to AI agents when working with code in this reposito
 - Structured JSON when logging for debugging / observability.
 - Plain text only for user-facing CLI output.
 
+## Hardware Optimization Philosophy
+
+- Prioritize hardware-level optimizations: branch prediction, cache-friendliness, CPU-friendly patterns, RAM efficiency, disk I/O optimization... 
+
+TL/DR: treat the computer with the respect it deserves. Should apply throughout the codebase.
 
 ## Performance Critical Path 
 
 There're files whose functions are in the critical path of read or write requests. They're so important to the overall performance that any regression will directly impact user experience. A comment `#[PerformanceCriticalPath]` is place inside them to highlight that fact. Please note that this is the best-effort work and some files in critical path may not be marked. But if a file is marked, please pay special attention when you change its code.
 
-Here're some typical mistakes that should be avoided in the `#[PerformanceCriticalPath]` files:
+Typical mistakes should be avoided in the `#[PerformanceCriticalPath]` files:
 
-* Unnecessary synchronous I/O. Here 'unnecessary' means it's not a MUST for serving the current user request. For example, on_gc_snap() in peers.rs should spin off its I/O related work to background thread.
-* Verbose logging with info or above log level.
-* Global lock.
-* Long tasks that do not have to be synchronous (Could be done in background thread instead).
+- Unnecessary synchronous I/O (not a MUST for serving the current user request). For example, on_gc_snap() in peers.rs should spin off its I/O related work to background thread.
+- Verbose logging with info or above log level.
+- Global lock.
+- Long tasks that do not have to be synchronous (Could be done in background thread instead).
 
 ## Developing Environment Tips
 
 ### Unsafe Rust Philosophy & Guidelines
 
-`unsafe` Rust is not a forbidden territory; it is a powerful tool. For context, industry-standard, high-performance distributed systems like TiKV operate safely and efficiently with around 96 `unsafe` blocks across a massive, highly-concurrent codebase. We use this metric as a guiding benchmark for quality and architecture, not as a strict currency to fight over.
+`unsafe` Rust is not a forbidden territory; it is a powerful tool. For context, industry-standard, high-performance distributed systems operate safely and efficiently with around 96 `unsafe` blocks across a massive, highly-concurrent codebase. With great power comes great responsibility, unsafe is just a responsibility not a curse.
 
-We encourage the use of `unsafe` when it is genuinely the most appropriate solution (e.g., for FFI, extreme performance bottlenecks, or specific memory-mapped operations), provided you adhere strictly to the principle of **Transparency and Encapsulation**:
+Use `unsafe` when it is the most appropriate solution, e.g. for FFI, extreme performance bottlenecks, or specific memory-mapped operations, provided you adhere strictly to the principle of "Transparency and Encapsulation":
 
-1. **Justification over Convoluted Safety:** Do not invent overly complex, poorly performing, or unreadable "safe" Rust architectures (like abusing `Rc`/`RefCell` chains) just to bypass an `unsafe` block. If `unsafe` is the cleanest and most performant approach, use it.
-2. **Mandatory Safety Comments:** Every `unsafe` block or function **MUST** be immediately preceded by a `// SAFETY:` comment explaining exactly *why* the operation is safe, what invariants are upheld, and why the compiler cannot verify them. Code without this explicit reasoning will be rejected.
-3. **Strict Encapsulation:** Keep `unsafe` blocks as minimal and isolated as possible. You must wrap your `unsafe` logic behind a safe, well-tested API boundary so the rest of the application doesn't have to worry about the underlying memory management.
-4. **Collaborative Review:** If you find an existing `unsafe` block that can be refactored into idiomatic, safe Rust without losing performance, or if you need to introduce a new one, point it out. It is a topic for architectural discussion, not a competition.
+1. Not accept overly complex, poorly performing, or unreadable "safe" Rust architectures (like abusing `Rc`/`RefCell` chains) just to bypass an `unsafe` block. If `unsafe` is the cleanest and most performant approach, use it.
+2. Every `unsafe` block or function MUST be immediately preceded by a `// SAFETY:` comment explaining exactly *why* the operation is safe, what invariants are upheld, and why the compiler cannot verify them. Code without this explicit reasoning will be rejected.
+3. Keep `unsafe` blocks as minimal and isolated as possible. Instruction: must wrap `unsafe` logic in a safe, well-tested API boundary so we don't have to worry about the underlying memory management.
+4. If you find an existing `unsafe` block that can be refactored into idiomatic, safe Rust without losing performance, or if you need to introduce a new one, point it out. Discussion is welcomed.
 
 ### Prerequisites
 
@@ -123,7 +128,7 @@ src/engine/
 └── test_engine_registry.cpp # EngineRegistry test suite (GMock)
 
 rust_integrates/            # Rust Workspace (Control Plane)
-├── Cargo.toml              # Workspace root
+├── Cargo.toml
 ├── ffi_bridge/             # FFI Adapter (using cxx)
 ├── core_crypto/            # KEK Keyring, Vault Transit Client, DEK management
 ├── telemetry/              # Prometheus exporter, Audit Log (Tokio)

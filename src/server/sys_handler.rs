@@ -7,6 +7,7 @@ pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
         .route("/health", get(health_check))
         .route("/mounts", get(get_mounts))
         .route("/seal-status", get(seal_status))
+        .route("/internal/ui/mounts/*path", get(get_internal_ui_mounts))
 }
 
 async fn health_check() -> Json<Value> {
@@ -42,6 +43,16 @@ async fn get_mounts() -> Json<Value> {
             "type": "kv",
             "uuid": "mock-uuid"
         }
+    }))
+}
+
+async fn get_internal_ui_mounts() -> Json<Value> {
+    Json(json!({
+        "options": {
+            "version": "2"
+        },
+        "path": "secret/",
+        "type": "kv"
     }))
 }
 

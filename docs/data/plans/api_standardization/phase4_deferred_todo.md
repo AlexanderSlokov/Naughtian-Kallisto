@@ -31,52 +31,42 @@
 
 ### P1 — High Priority
 
-#### 1. `PATCH /v1/:mount/data/:path` — JSON Merge Patch
+#### 1. `PATCH /v1/:mount/data/:path` — JSON Merge Patch ✅ (Implemented in Rust `http_handler.rs`)
 - **Vault Spec:** [RFC 7396](https://datatracker.ietf.org/doc/html/draft-ietf-appsawg-json-merge-patch-07)
 - **Requires:** `Content-Type: application/merge-patch+json` header check
 - **Behavior:** Read current version's data, merge with patch payload, create new version
 - **Implementation Notes:**
-  - Need JSON merge logic: null values delete keys, nested objects merge recursively
-  - Consider using `nlohmann_json` (already in vcpkg) for proper merge semantics
-  - Should respect CAS via `options.cas` in payload
-- **Files to modify:** [http_handler.cpp](file:///home/stella/workspace/kallisto/src/server/http_handler.cpp), add `handlePatchSecret()`
+  - Implemented manually on `sonic_rs::Value` for SIMD zero-alloc performance.
 
-#### 2. `GET /v1/:mount/subkeys/:path` — Read Secret Subkeys
+#### 2. `GET /v1/:mount/subkeys/:path` — Read Secret Subkeys ✅ (Implemented in Rust `http_handler.rs`)
 - **Vault Spec:** Returns key structure with values replaced by `null`
 - **Query params:** `?version=N`, `?depth=N`
 - **Behavior:** Strip leaf values, preserve key hierarchy, respect depth limit
 - **Implementation Notes:**
-  - Requires JSON parsing of stored secret value to extract key structure
-  - `depth=0` means no limit; `depth=N` treats keys at depth N as leaves
-- **Files to modify:** [http_handler.cpp](file:///home/stella/workspace/kallisto/src/server/http_handler.cpp), add `handleReadSubkeys()`
+  - Implemented via `strip_to_subkeys` on `sonic_rs::Value`.
 
-#### 3. `LIST /v1/:mount/metadata/:path` — List Keys (HTTP LIST method)
+#### 3. `LIST /v1/:mount/metadata/:path` — List Keys (HTTP LIST method) ✅ (Implemented in Rust `http_handler.rs`)
 - **Status:** Handler exists but LIST is non-standard HTTP method
 - **Current issue:** Most HTTP clients send `GET` with `?list=true` instead
 - **TODO:** Add support for `GET /v1/:mount/metadata/:path?list=true` as alternative
-- **Files to modify:** [http_handler.cpp](file:///home/stella/workspace/kallisto/src/server/http_handler.cpp) `handleRequest()` routing
+- **Implementation Notes:**
+  - `read_metadata` now intercepts `?list=true` and calls `BTreeIndex` via `list_keys()`.
 
 ### P2 — Medium Priority
 
-#### 4. `custom_metadata` Field Support
+#### 4. `custom_metadata` Field Support ✅ (Implemented in Rust `traits.rs`)
 - **Vault Spec:** `map<string, string>` user-provided metadata per key
-- **Current state:** `KeyMetadata` struct doesn't have this field
 - **Implementation Notes:**
-  - Add `std::unordered_map<std::string, std::string> custom_metadata` to `KeyMetadata`
-  - Update serialization/deserialization in `kv_engine.cpp`
-  - Include in GET/POST metadata response JSON
-- **Files to modify:**
-  - [i_secret_engine.hpp](file:///home/stella/workspace/kallisto/include/kallisto/engine/i_secret_engine.hpp) — `KeyMetadata` struct
-  - [kv_engine.cpp](file:///home/stella/workspace/kallisto/src/engine/kv_engine.cpp) — serialize/deserialize
+  - Added `custom_metadata: HashMap<String, String>` to `KeyMetadata` with `#[serde(default)]`.
 
-#### 5. `?depth=N` Query Parameter for Subkeys
+#### 5. `?depth=N` Query Parameter for Subkeys ✅ (Implemented in Rust `http_handler.rs`)
 - **Depends on:** Item #2 (subkeys endpoint)
-- **Already parsed:** Query params are parsed in `parseRoute()` — just need to read them
+- **Implementation Notes:** Zero-alloc `extract_depth_param` added.
 
-#### 6. ISO 8601 Duration Format for `delete_version_after`
+#### 6. ISO 8601 Duration Format for `delete_version_after` ✅ (Implemented in Rust `time_format.rs`)
 - **Vault uses:** `"3h25m19s"` format
 - **Current:** Stored as `uint64_t` milliseconds, displayed as `"Nms"`
-- **TODO:** Parse/format Go-style duration strings
+- **Implementation Notes:** Implemented zero-dependency `time_format.rs` arithmetic parsers.
 
 ### P3 — Low Priority (Admin/Control Plane — Port 8202)
 

@@ -61,8 +61,10 @@ control_plane = { path = "components/kallisto_cluster" }
 
 [[benchmarks.storage]]
 name = "storage_bench"
+path = "benchmarks/storage/storage_bench.rs"
 harness = false
 
 [[benchmarks.security]]
 name = "security_bench"
+path = "benchmarks/security/security_bench.rs"
 harness = false

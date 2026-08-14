@@ -63,7 +63,7 @@ mod tests {
 
     #[async_trait]
     impl SecretEngine for MockEngine {
-        async fn read_version(&self, _path: &str, _version: u32) -> Result<SecretPayload, EngineError> {
+        async fn read_version(&self, _path: &str, _version: u32) -> Result<(SecretPayload, crate::engine::traits::VersionState), EngineError> {
             Err(EngineError::NotFound)
         }
         async fn read_metadata(&self, _path: &str) -> Result<KeyMetadata, EngineError> {
