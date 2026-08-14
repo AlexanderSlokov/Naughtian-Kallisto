@@ -202,7 +202,7 @@ impl SecretEngine for KvEngine {
         
         // Zero-copy Metadata extraction (No Vec<VersionState> heap allocation)
         // SAFETY: Bytes come directly from RocksDB or CuckooCache which we wrote ourselves using rkyv.
-        let (target_version, is_destroyed, is_deleted, created_time_ms, deletion_time_ms) = self.read_raw_optimistic(&mkey, |bytes| {
+        let (target_version, is_destroyed, is_deleted, created_time_ms, deletion_time_ms, found) = self.read_raw_optimistic(&mkey, |bytes| {
             let archived_meta = unsafe { rkyv::archived_root::<KeyMetadata>(bytes) };
             let target = if version == 0 { archived_meta.current_version } else { version };
             
@@ -210,19 +210,21 @@ impl SecretEngine for KvEngine {
             let mut deleted = false;
             let mut created = 0;
             let mut deletion_time = 0;
+            let mut found = false;
             for v in archived_meta.versions.iter() {
                 if v.version_id == target {
                     destroyed = v.destroyed;
                     deleted = v.deletion_time_ms > 0;
                     created = v.created_time_ms;
                     deletion_time = v.deletion_time_ms;
+                    found = true;
                     break;
                 }
             }
-            (target, destroyed, deleted, created, deletion_time)
+            (target, destroyed, deleted, created, deletion_time, found)
         })?.ok_or(EngineError::NotFound)?;
 
-        if target_version == 0 {
+        if target_version == 0 || !found {
             return Err(EngineError::InvalidVersion(version));
         }
 

@@ -453,7 +453,7 @@ impl IntoResponse for AppError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::engine::traits::{KeyMetadata, SecretEngine};
+    use crate::engine::traits::{KeyMetadata, SecretEngine, VersionState};
     use async_trait::async_trait;
     use axum::{body::Body, http::Request};
     use std::sync::atomic::{AtomicBool, Ordering};
