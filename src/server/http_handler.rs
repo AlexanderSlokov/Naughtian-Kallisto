@@ -2,7 +2,7 @@ use axum::{
     extract::State,
     http::{StatusCode, header, Uri},
     response::IntoResponse,
-    routing::{get, post, put},
+    routing::{get, post, put, patch},
     Router,
 };
 use std::sync::Arc;
@@ -20,7 +20,8 @@ pub struct AppState {
 
 pub fn vault_kv_router(state: AppState) -> Router {
     Router::new()
-        .route("/v1/:mount/data/*path", get(read_secret).post(write_secret).delete(delete_latest))
+        .route("/v1/:mount/data/*path", get(read_secret).post(write_secret).delete(delete_latest).patch(patch_secret))
+        .route("/v1/:mount/subkeys/*path", get(read_subkeys))
         .route("/v1/:mount/delete/*path", post(soft_delete_versions))
         .route("/v1/:mount/undelete/*path", post(undelete_versions))
         .route("/v1/:mount/destroy/*path", put(destroy_versions))
@@ -69,6 +70,44 @@ fn extract_mount_and_path<'a>(uri_path: &'a str, expected_action: &str) -> Optio
     Some((mount, secret_path))
 }
 
+/// Extract ?version=N from URI query string without allocating a HashMap
+#[inline]
+fn extract_version_param(uri: &Uri) -> u32 {
+    uri.query()
+        .and_then(|q| {
+            q.find("version=")
+                .map(|i| &q[i + 8..])
+                .and_then(|s| {
+                    let end = s.find('&').unwrap_or(s.len());
+                    s[..end].parse::<u32>().ok()
+                })
+        })
+        .unwrap_or(0)
+}
+
+/// Extract ?depth=N from URI query string without allocating a HashMap
+#[inline]
+fn extract_depth_param(uri: &Uri) -> u32 {
+    uri.query()
+        .and_then(|q| {
+            q.find("depth=")
+                .map(|i| &q[i + 6..])
+                .and_then(|s| {
+                    let end = s.find('&').unwrap_or(s.len());
+                    s[..end].parse::<u32>().ok()
+                })
+        })
+        .unwrap_or(0)
+}
+
+/// Extract ?list=true from URI query string
+#[inline]
+fn extract_list_param(uri: &Uri) -> bool {
+    uri.query()
+        .map(|q| q.contains("list=true"))
+        .unwrap_or(false)
+}
+
 async fn read_secret(
     State(state): State<AppState>,
     uri: Uri,
@@ -76,13 +115,153 @@ async fn read_secret(
     let (mount, path) = extract_mount_and_path(uri.path(), "data").ok_or(AppError::MountNotFound)?;
     let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
     
-    let payload = engine.read_version(path, 0).await?;
+    let version = extract_version_param(&uri);
+    let (payload, meta) = engine.read_version(path, version).await?;
     
-    // Zero-allocation response construction (No serde_json::Value overhead)
-    let mut response = String::with_capacity(128 + payload.value.len());
-    response.push_str("{\"data\":{\"data\":");
+    let created_time = crate::server::time_format::epoch_ms_to_rfc3339(meta.created_time_ms);
+    let deletion_time = if meta.deletion_time_ms > 0 {
+        format!("\"{}\"", crate::server::time_format::epoch_ms_to_rfc3339(meta.deletion_time_ms))
+    } else {
+        "\"\"".to_string()
+    };
+    let destroyed = if meta.destroyed { "true" } else { "false" };
+    
+    // Zero-allocation response construction
+    let mut response = String::with_capacity(256 + payload.value.len());
+    response.push_str(r#"{"data":{"data":"#);
     response.push_str(&payload.value);
-    response.push_str(",\"metadata\":{\"version\":1,\"created_time\":\"2023-01-01T00:00:00Z\"}}}");
+    response.push_str(r#","metadata":{"version":"#);
+    
+    use std::fmt::Write;
+    let _ = write!(&mut response, "{}", meta.version_id);
+    
+    response.push_str(r#","created_time":""#);
+    response.push_str(&created_time);
+    response.push_str(r#"","deletion_time":"#);
+    response.push_str(&deletion_time);
+    response.push_str(r#","destroyed":"#);
+    response.push_str(destroyed);
+    response.push_str(r#"}}}"#);
+    
+    Ok((StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], response))
+}
+
+/// RFC 7396 JSON Merge Patch — in-place on sonic_rs::Value
+#[inline]
+fn json_merge_patch(target: &mut sonic_rs::Value, patch: &sonic_rs::Value) {
+    if !patch.is_object() {
+        *target = patch.clone();
+        return; 
+    }
+    
+    if !target.is_object() {
+        *target = sonic_rs::json!({});
+    }
+    
+    let patch_obj = patch.as_object().unwrap();
+    let target_obj = target.as_object_mut().unwrap();
+    
+    for (key, value) in patch_obj.iter() {
+        if value.is_null() {
+            target_obj.remove(key);
+        } else {
+            // Note: entry() and or_insert() are not available on sonic_rs::Object directly like this,
+            // we have to check if it exists.
+            if !target_obj.contains_key(key) {
+                target_obj.insert(key, sonic_rs::json!({}));
+            }
+            json_merge_patch(target_obj.get_mut(key).unwrap(), value);
+        }
+    }
+}
+
+async fn patch_secret(
+    State(state): State<AppState>,
+    uri: Uri,
+    body: Bytes,
+) -> Result<impl IntoResponse, AppError> {
+    let (mount, path) = extract_mount_and_path(uri.path(), "data").ok_or(AppError::MountNotFound)?;
+    let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
+    
+    let (current_payload, meta) = engine.read_version(path, 0).await?;
+    
+    let mut current_value = sonic_rs::from_str::<sonic_rs::Value>(&current_payload.value).unwrap_or_else(|_| sonic_rs::json!({}));
+    
+    let patch_body = sonic_rs::from_slice::<sonic_rs::Value>(body.as_ref())
+        .map_err(|_| AppError::Engine(EngineError::StorageError("Invalid patch JSON".to_string())))?;
+        
+    let patch_data = patch_body.pointer(sonic_rs::pointer!["data"])
+        .unwrap_or(&patch_body);
+        
+    json_merge_patch(&mut current_value, patch_data);
+    
+    let mut options_cas = None;
+    if let Some(opts) = patch_body.pointer(sonic_rs::pointer!["options"]) {
+        if let Some(cas) = opts.pointer(sonic_rs::pointer!["cas"]).and_then(|v| v.as_u64()) {
+            options_cas = Some(cas as u32);
+        }
+    }
+    
+    let new_payload = SecretPayload {
+        value: sonic_rs::to_string(&current_value).unwrap(),
+        ttl: current_payload.ttl,
+    };
+    
+    engine.put_version(path, &new_payload, options_cas).await?;
+    
+    // In Vault KV v2, PATCH returns the newly created version's metadata. 
+    // We can just read the latest metadata to construct a valid response.
+    let meta_after = engine.read_metadata(path).await?;
+    let latest_vs = meta_after.versions.last().unwrap();
+    let created_time = crate::server::time_format::epoch_ms_to_rfc3339(latest_vs.created_time_ms);
+    
+    let response = format!(
+        r#"{{"data":{{"version":{},"created_time":"{}","deletion_time":"","destroyed":false}}}}"#,
+        latest_vs.version_id, created_time
+    );
+    
+    Ok((StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], response))
+}
+
+fn strip_to_subkeys(value: &mut sonic_rs::Value, current_depth: u32, max_depth: u32) {
+    if max_depth > 0 && current_depth >= max_depth {
+        *value = sonic_rs::Value::Null; 
+        return;
+    }
+    if let Some(obj) = value.as_object_mut() {
+        for (_key, val) in obj.iter_mut() {
+            if val.is_object() {
+                strip_to_subkeys(val, current_depth + 1, max_depth);
+            } else {
+                *val = sonic_rs::Value::Null;
+            }
+        }
+    } else {
+        *value = sonic_rs::Value::Null;
+    }
+}
+
+async fn read_subkeys(
+    State(state): State<AppState>,
+    uri: Uri,
+) -> Result<impl IntoResponse, AppError> {
+    let (mount, path) = extract_mount_and_path(uri.path(), "subkeys").ok_or(AppError::MountNotFound)?;
+    let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
+    
+    let version = extract_version_param(&uri);
+    let depth = extract_depth_param(&uri);
+    
+    let (payload, _meta) = engine.read_version(path, version).await?;
+    
+    let mut value = sonic_rs::from_str::<sonic_rs::Value>(&payload.value)
+        .unwrap_or_else(|_| sonic_rs::json!({}));
+        
+    strip_to_subkeys(&mut value, 0, depth);
+    
+    let mut response = String::with_capacity(128 + payload.value.len());
+    response.push_str(r#"{"data":{"subkeys":"#);
+    response.push_str(&sonic_rs::to_string(&value).unwrap());
+    response.push_str(r#"}}"#);
     
     Ok((StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], response))
 }
@@ -176,12 +355,56 @@ async fn read_metadata(
 ) -> Result<impl IntoResponse, AppError> {
     let (mount, path) = extract_mount_and_path(uri.path(), "metadata").ok_or(AppError::MountNotFound)?;
     let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
+    
+    if extract_list_param(&uri) {
+        let keys = engine.list_keys(path).await?;
+        let mut response = String::with_capacity(64 + keys.len() * 20);
+        response.push_str(r#"{"data":{"keys":["#);
+        for (i, key) in keys.iter().enumerate() {
+            if i > 0 {
+                response.push(',');
+            }
+            response.push('"');
+            response.push_str(key);
+            response.push('"');
+        }
+        response.push_str(r#"]}}"#);
+        return Ok((StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], response));
+    }
+    
     let metadata = engine.read_metadata(path).await?;
     
-    let response = format!(
-        "{{\"data\":{{\"cas_required\":{},\"current_version\":{},\"max_versions\":{},\"delete_version_after\":\"{}ms\"}}}}",
-        metadata.cas_required, metadata.current_version, metadata.max_versions, metadata.delete_version_after_ms
-    );
+    let mut response = String::with_capacity(512);
+    response.push_str(r#"{"data":{"cas_required":"#);
+    response.push_str(if metadata.cas_required { "true" } else { "false" });
+    response.push_str(r#","current_version":"#);
+    use std::fmt::Write;
+    let _ = write!(&mut response, "{}", metadata.current_version);
+    response.push_str(r#","max_versions":"#);
+    let _ = write!(&mut response, "{}", metadata.max_versions);
+    response.push_str(r#","delete_version_after":""#);
+    response.push_str(&crate::server::time_format::ms_to_vault_duration(metadata.delete_version_after_ms));
+    response.push_str(r#"","custom_metadata":"#);
+    response.push_str(&sonic_rs::to_string(&metadata.custom_metadata).unwrap());
+    response.push_str(r#","versions":{"#);
+    
+    for (i, v) in metadata.versions.iter().enumerate() {
+        if i > 0 {
+            response.push(',');
+        }
+        let _ = write!(&mut response, r#""{}":{{"#, v.version_id);
+        response.push_str(r#""created_time":""#);
+        response.push_str(&crate::server::time_format::epoch_ms_to_rfc3339(v.created_time_ms));
+        response.push_str(r#"","deletion_time":"#);
+        if v.deletion_time_ms > 0 {
+            response.push_str(&crate::server::time_format::epoch_ms_to_rfc3339(v.deletion_time_ms));
+        }
+        response.push_str(r#"","destroyed":"#);
+        response.push_str(if v.destroyed { "true" } else { "false" });
+        response.push('}');
+    }
+    
+    response.push_str(r#"}}}"#);
     
     Ok((StatusCode::OK, [(header::CONTENT_TYPE, "application/json")], response))
 }
@@ -202,6 +425,8 @@ impl From<EngineError> for AppError {
 }
 
 impl IntoResponse for AppError {
+    #[inline(never)]
+    #[cold]
     fn into_response(self) -> axum::response::Response {
         let (status, err_msg) = match self {
             AppError::MountNotFound => (StatusCode::NOT_FOUND, "Mount path not found".to_string()),
@@ -216,7 +441,10 @@ impl IntoResponse for AppError {
             },
         };
         
-        let body = format!("{{\"errors\":[\"{}\"]}}", err_msg);
+        let mut body = String::with_capacity(32 + err_msg.len());
+        body.push_str(r#"{"errors":[""#);
+        body.push_str(&err_msg);
+        body.push_str(r#"]}"#);
         (status, [(header::CONTENT_TYPE, "application/json")], body).into_response()
     }
 }
@@ -237,12 +465,20 @@ mod tests {
 
     #[async_trait]
     impl SecretEngine for MockEngine {
-        async fn read_version(&self, _path: &str, _version: u32) -> Result<SecretPayload, EngineError> {
+        async fn read_version(&self, _path: &str, _version: u32) -> Result<(SecretPayload, VersionState), EngineError> {
             self.read_called.store(true, Ordering::Relaxed);
-            Ok(SecretPayload {
-                value: "mocked_value".to_string(),
-                ttl: 0,
-            })
+            Ok((
+                SecretPayload {
+                    value: "mocked_value".to_string(),
+                    ttl: 0,
+                },
+                crate::engine::traits::VersionState {
+                    created_time_ms: 0,
+                    deletion_time_ms: 0,
+                    version_id: 1,
+                    destroyed: false,
+                }
+            ))
         }
         async fn read_metadata(&self, _path: &str) -> Result<KeyMetadata, EngineError> {
             Ok(KeyMetadata::default())

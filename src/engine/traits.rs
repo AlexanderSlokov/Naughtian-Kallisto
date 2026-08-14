@@ -17,6 +17,8 @@ pub struct KeyMetadata {
     pub max_versions: u32, // 0 = dùng Engine Mount Config mặc định
     pub cas_required: bool,
     pub delete_version_after_ms: u64, // TTL per version
+    #[serde(default)]
+    pub custom_metadata: std::collections::HashMap<String, String>,
     pub versions: Vec<VersionState>,
 }
 
@@ -28,7 +30,7 @@ pub struct SecretPayload {
 
 #[async_trait]
 pub trait SecretEngine: Send + Sync {
-    async fn read_version(&self, path: &str, version: u32) -> Result<SecretPayload, EngineError>;
+    async fn read_version(&self, path: &str, version: u32) -> Result<(SecretPayload, VersionState), EngineError>;
     async fn read_metadata(&self, path: &str) -> Result<KeyMetadata, EngineError>;
     async fn put_version(&self, path: &str, payload: &SecretPayload, cas: Option<u32>) -> Result<(), EngineError>;
     async fn soft_delete(&self, path: &str, version: u32) -> Result<(), EngineError>;

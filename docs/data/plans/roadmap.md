@@ -18,15 +18,15 @@ weight: 10
     - [x] `POST   /v1/secret/destroy/:path` — Permanently destroy versions
     - [x] `GET    /v1/secret/metadata/:path` — Read metadata
 - [ ] Vault KV v2 API Compliance (Deferred / Advanced):
-    - [ ] `PATCH  /v1/secret/data/:path` — JSON Merge Patch (RFC 7396)
-    - [ ] `GET    /v1/secret/subkeys/:path` — Read Secret Subkeys (with ?depth=N)
-    - [ ] `LIST   /v1/secret/metadata/:path` — List keys (HTTP LIST or GET ?list=true)
+    - [x] `PATCH  /v1/secret/data/:path` — JSON Merge Patch (RFC 7396)
+    - [x] `GET    /v1/secret/subkeys/:path` — Read Secret Subkeys (with ?depth=N)
+    - [x] `LIST   /v1/secret/metadata/:path` — List keys (HTTP LIST or GET ?list=true)
     - [ ] `POST   /v1/secret/metadata/:path` — Update metadata (custom_metadata, max_versions, cas_required)
     - [ ] `PATCH  /v1/secret/metadata/:path` — Patch metadata
     - [ ] `DELETE /v1/secret/metadata/:path` — Delete all versions + metadata
     - [ ] `POST   /v1/secret/config` — Configure Engine
-    - [ ] Thêm support `custom_metadata` field
-    - [ ] Parse/format ISO 8601 duration cho `delete_version_after` (vd: "3h25m19s")
+    - [x] Thêm support `custom_metadata` field
+    - [x] Parse/format ISO 8601 duration cho `delete_version_after` (vd: "3h25m19s")
 
 - [x] `/v1/sys/*` System Endpoints (Mock):
   - [x] `GET /v1/sys/health` — Health check

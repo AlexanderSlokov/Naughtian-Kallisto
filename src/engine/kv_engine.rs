@@ -196,25 +196,29 @@ impl SecretEngine for KvEngine {
         }
     }
 
-    async fn read_version(&self, path: &str, version: u32) -> Result<SecretPayload, EngineError> {
+    async fn read_version(&self, path: &str, version: u32) -> Result<(SecretPayload, VersionState), EngineError> {
         let mkey = Self::build_meta_key(path);
         
         // Zero-copy Metadata extraction (No Vec<VersionState> heap allocation)
         // SAFETY: Bytes come directly from RocksDB or CuckooCache which we wrote ourselves using rkyv.
-        let (target_version, is_destroyed, is_deleted) = self.read_raw_optimistic(&mkey, |bytes| {
+        let (target_version, is_destroyed, is_deleted, created_time_ms, deletion_time_ms) = self.read_raw_optimistic(&mkey, |bytes| {
             let archived_meta = unsafe { rkyv::archived_root::<KeyMetadata>(bytes) };
             let target = if version == 0 { archived_meta.current_version } else { version };
             
             let mut destroyed = false;
             let mut deleted = false;
+            let mut created = 0;
+            let mut deletion_time = 0;
             for v in archived_meta.versions.iter() {
                 if v.version_id == target {
                     destroyed = v.destroyed;
                     deleted = v.deletion_time_ms > 0;
+                    created = v.created_time_ms;
+                    deletion_time = v.deletion_time_ms;
                     break;
                 }
             }
-            (target, destroyed, deleted)
+            (target, destroyed, deleted, created, deletion_time)
         })?.ok_or(EngineError::NotFound)?;
 
         if target_version == 0 {
@@ -239,7 +243,13 @@ impl SecretEngine for KvEngine {
         })?;
 
         if let Some(res) = payload {
-            Ok(res)
+            let version_state = VersionState {
+                created_time_ms,
+                deletion_time_ms,
+                version_id: target_version,
+                destroyed: is_destroyed,
+            };
+            Ok((res, version_state))
         } else {
             Err(EngineError::StorageError("Missing version payload".to_string()))
         }
@@ -524,7 +534,7 @@ mod tests {
         engine.put_version("app/db", &p1, None).await.unwrap();
 
         // Read version 1
-        let res_read = engine.read_version("app/db", 1).await.unwrap();
+        let (res_read, _meta) = engine.read_version("app/db", 1).await.unwrap();
         assert_eq!(res_read.value, "my_secret_pass");
         assert_eq!(res_read.ttl, 3600);
 
@@ -620,7 +630,7 @@ mod tests {
         engine.put_version("", &entry, None).await.unwrap();
 
         // read_version(path, 0) should return latest version
-        let retrieved = engine.read_version("", 0).await.unwrap();
+        let (retrieved, _) = engine.read_version("", 0).await.unwrap();
         assert_eq!(retrieved.value, "");
         assert_eq!(retrieved.ttl, 0);
     }
@@ -645,7 +655,7 @@ mod tests {
         let engine_restarted = KvEngine::open(db_path).unwrap();
 
         // Cache miss will happen here. It must pull from RocksDB.
-        let retrieved = engine_restarted.read_version("sys/admin", 1).await.unwrap();
+        let (retrieved, _) = engine_restarted.read_version("sys/admin", 1).await.unwrap();
         assert_eq!(retrieved.value, "crash_proof");
     }
 

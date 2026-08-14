@@ -1,0 +1,22 @@
+services:
+  kallisto:
+    build:
+      context: ../..
+      target: production
+    ports:
+      - "18200:8200"
+    environment:
+      - WORKERS=1
+      - DB_PATH=/tmp/e2e_test
+    # Using tmpfs for faster testing without disk persistence
+    tmpfs:
+      - /tmp/e2e_test
+
+  vault-cli:
+    image: hashicorp/vault:latest
+    entrypoint: ["sh", "-c", "sleep infinity"]
+    environment:
+      - VAULT_ADDR=http://kallisto:8200
+      - VAULT_TOKEN=root
+    depends_on:
+      - kallisto

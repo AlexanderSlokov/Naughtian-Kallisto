@@ -193,6 +193,9 @@ test-threading: build
 test-persistence: build-server
 	@bash tests/integration/test_persistence.sh
 
+e2e:
+	cargo test --test e2e_vault_compat -- --ignored
+
 coverage: clean
 	@echo "Building with coverage enabled..."
 	@$(CMAKE) -B $(BUILD_DIR) -S . $(CMAKE_FLAGS) -DENABLE_COVERAGE=ON
