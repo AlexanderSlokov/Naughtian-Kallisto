@@ -24,7 +24,7 @@ The two sides communicate through a high-performance **FFI (Foreign Function Int
 | **`EngineRegistry` uses `shared_ptr`** | Engines are mounted at startup and shared across threads. `shared_ptr` provides safe co-ownership. |
 | **`KallistoCore` as Facade** | Zero breaking changes. All existing consumers (`HttpHandler`, `UdsAdminHandler`, tests) use the unchanged `KallistoCore` API. |
 | **C++20 `concept ValidEngine`** | Compile-time safety net. Any new engine that doesn't satisfy the contract fails to build via `static_assert`. |
-| **Vault Transit as Root of Trust** | Eliminates self-implemented Shamir/mlock/master key code. Vault handles key hierarchy; Kallisto only holds a KEK in-memory (zeroize on drop). Industry-standard envelope encryption pattern (same as AWS KMS / GCP KMS). |
+| **Dual-Mode Unseal (Vault Transit + Shamir)** | Primary mode: Vault Transit auto-unseal for production (KEK in-memory, zeroize on drop). Secondary mode: standalone Shamir manual unseal for edge/air-gapped/testing. Industry-standard envelope encryption pattern (same as AWS KMS / GCP KMS). |
 
 ## Core Components
 

@@ -183,14 +183,19 @@ Nhìn vào code: `kallisto_crypto/src/` có `master_key.rs`, `shamir.rs`,
 Shamir rất chi tiết (GF(2^8), Lagrange interpolation, constant-time ops).
 Nhưng roadmap lại ghi:
 
-> *~~Shamir's Secret Sharing~~: **ĐÃ HỦY** — Ủy quyền cho Vault Transit.*
+> *~~Shamir's Secret Sharing~~: ~~**ĐÃ HỦY**~~ → **KHÔI PHỤC (14/08/2026)** — Sẽ implement cả hai mode: Vault Transit (auto-unseal) + Standalone Shamir (manual unseal).*
 
-**Mâu thuẫn.** Đặc tả Shamir vẫn nằm đó, code rỗng, roadmap nói đã hủy.
-Cần quyết dứt khoát. Đây là hai con đường:
+~~**Mâu thuẫn.** Đặc tả Shamir vẫn nằm đó, code rỗng, roadmap nói đã hủy.~~
+**Đã giải quyết (14/08/2026).** Quyết định: implement cả hai con đường.
+Vault Transit trước (Phase 3a), Shamir sau (Phase 3b). Lý do bổ sung:
+có unseal key standalone thì test encrypt barrier dễ hơn gấp bội so với
+phải dựng Vault instance mỗi lần chạy test.
+
+Đây là hai con đường:
 
 ---
 
-**Con đường A: Kallisto tự giữ Master Key (Standalone Sovereign)**
+**Con đường A: Kallisto tự giữ Master Key (Standalone Sovereign)** → *SẼ LÀM (Phase 3b)*
 
 ```
 Lúc init:
@@ -211,16 +216,16 @@ Lúc restart:
 - Chạy độc lập hoàn toàn, không cần Vault
 - Phù hợp edge deployment, air-gapped, hoặc dev/staging
 - Giống UX của Vault, người dùng quen thuộc
+- **Test encrypt barrier không cần external dependency**
 
 **Nhược điểm:**
 - Phải tự implement Shamir đúng (constant-time, GF(2^8), zeroize)
 - Manual unseal mỗi lần restart → chậm, cần người trực
 - Nếu mất 3/5 unseal keys → mất hết data, không recover được
-- Bạn đã tự nói: *"thư viện Rust xuống cấp, không đủ audit capacity"*
 
 ---
 
-**Con đường B: Delegate cho Vault Transit (Current Roadmap)**
+**Con đường B: Delegate cho Vault Transit (Current Roadmap)** → *LÀM TRƯỚC (Phase 3a)*
 
 ```
 Lúc startup:
@@ -245,20 +250,21 @@ Không cần Shamir. Không cần manual unseal.
 
 ---
 
-**Khuyến nghị: Làm cả hai, nhưng theo thứ tự.**
+**~~Khuyến nghị~~ Quyết định (14/08/2026): Làm cả hai, theo thứ tự.**
 
-1. **Phase 1 — Vault Transit (auto-unseal):** Implement trước vì đây là roadmap
-   hiện tại, ít code hơn, và phù hợp production use case chính (Kallisto as
-   dataplane cho Vault). Đây là `vault_client.rs` + `keyring.rs` + `dek.rs`.
+1. **Phase 3a — Vault Transit (auto-unseal):** Implement trước vì ít code hơn,
+   và phù hợp production use case chính (Kallisto as dataplane cho Vault).
+   Đây là `vault_client.rs` + `keyring.rs` + `dek.rs`.
 
-2. **Phase 2 — Standalone Shamir (manual unseal):** Implement sau khi Vault Transit
-   đã hoạt động và được test. Dùng cho edge/standalone deployment. Lúc này bạn đã
+2. **Phase 3b — Standalone Shamir (manual unseal):** Implement sau khi Vault Transit
+   đã hoạt động và được test. Dùng cho edge/standalone deployment. Lúc này đã
    có Keyring + DEK logic hoạt động, chỉ cần thay source của Master Key từ Vault
-   sang Shamir combine.
+   sang Shamir combine. **Bonus: có unseal key cứng để cắm vào integration test.**
 
 3. **Đừng giết con Vault nào cả.** Ý tưởng "dựng Vault tạm, init 5 Shamir keys,
    rồi giết Vault xấu số" là over-engineering. Nếu muốn standalone thì Kallisto
    tự sinh Master Key + Shamir, không cần Vault trung gian.
+
 
 ### 3. Chơi với Consul, Nacos? Chi?
 
