@@ -82,6 +82,13 @@ bench-server:
 bench-release:
 	@bash benchmarks/server/run_release_bench.sh
 
+# Laptop benchmark (wrk2 — tailored for mid-range DEV machines)
+# Target rate 30k RPS. Expected result: ~1.5ms avg latency for both GET and PUT.
+# --------------------------------------------------------------------
+
+bench-laptop:
+	@bash benchmarks/server/run_release_bench.sh 4 100 10s 30000
+
 full-bench-server: clean build-server bench-server
 
 # Documentation
@@ -98,7 +105,7 @@ docs-build:
 .PHONY: all build build-server run run-server clean help logs test \
         e2e benchmark-strict benchmark-batch benchmark-p99 benchmark-throughput \
         benchmark-dos test-atomic benchmark-multithread \
-        bench-server bench-release bench-http \
+        bench-server bench-release bench-laptop bench-http \
         docker-build docker-test docker-run \
         devcontainer_cloud_build devcontainer_local_build \
         docs-serve docs-build
@@ -119,6 +126,7 @@ help:
 	@echo "  Benchmark:"
 	@echo "    make bench-server   - HTTP load test (k6: GET/PUT/MIXED)"
 	@echo "    make bench-release  - Release benchmark (wrk2: raw throughput + latency)"
+	@echo "    make bench-laptop   - Laptop benchmark (wrk2: 30k req/s, expected latency ~1.5ms avg)"
 	@echo "    cargo bench         - Run all in-process Rust Criterion benchmarks"
 	@echo ""
 	@echo "  Run:"
