@@ -2,7 +2,7 @@ use axum::{
     extract::State,
     http::{StatusCode, header, Uri},
     response::IntoResponse,
-    routing::{get, post, put, patch},
+    routing::{get, post, put},
     Router,
 };
 use std::sync::Arc;
