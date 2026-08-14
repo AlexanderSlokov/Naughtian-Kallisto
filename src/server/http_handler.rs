@@ -21,7 +21,7 @@ pub struct AppState {
 
 pub fn vault_kv_router(state: AppState) -> Router {
     Router::new()
-        .route("/v1/:mount/data/*path", get(read_secret).post(write_secret).delete(delete_latest).patch(patch_secret))
+        .route("/v1/:mount/data/*path", get(read_secret).post(write_secret).put(write_secret).delete(delete_latest).patch(patch_secret))
         .route("/v1/:mount/subkeys/*path", get(read_subkeys))
         .route("/v1/:mount/delete/*path", post(soft_delete_versions))
         .route("/v1/:mount/undelete/*path", post(undelete_versions))
