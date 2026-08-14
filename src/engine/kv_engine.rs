@@ -161,6 +161,7 @@ impl KvEngine {
             max_versions: archived.max_versions,
             cas_required: archived.cas_required,
             delete_version_after_ms: archived.delete_version_after_ms,
+            custom_metadata: std::collections::HashMap::new(),
             versions,
         })
     }

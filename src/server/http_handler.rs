@@ -183,7 +183,7 @@ async fn patch_secret(
     let (mount, path) = extract_mount_and_path(uri.path(), "data").ok_or(AppError::MountNotFound)?;
     let engine = state.registry.resolve(mount).ok_or(AppError::MountNotFound)?;
     
-    let (current_payload, meta) = engine.read_version(path, 0).await?;
+    let (current_payload, _meta) = engine.read_version(path, 0).await?;
     
     let mut current_value = sonic_rs::from_str::<sonic_rs::Value>(&current_payload.value).unwrap_or_else(|_| sonic_rs::json!({}));
     
@@ -225,7 +225,7 @@ async fn patch_secret(
 
 fn strip_to_subkeys(value: &mut sonic_rs::Value, current_depth: u32, max_depth: u32) {
     if max_depth > 0 && current_depth >= max_depth {
-        *value = sonic_rs::Value::Null; 
+        *value = sonic_rs::json!(null); 
         return;
     }
     if let Some(obj) = value.as_object_mut() {
@@ -233,11 +233,11 @@ fn strip_to_subkeys(value: &mut sonic_rs::Value, current_depth: u32, max_depth: 
             if val.is_object() {
                 strip_to_subkeys(val, current_depth + 1, max_depth);
             } else {
-                *val = sonic_rs::Value::Null;
+                *val = sonic_rs::json!(null);
             }
         }
     } else {
-        *value = sonic_rs::Value::Null;
+        *value = sonic_rs::json!(null);
     }
 }
 
