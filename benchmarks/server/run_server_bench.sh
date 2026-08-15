@@ -95,8 +95,8 @@ start_server() {
 }
 
 seed_data() {
-    echo -e "${CYAN}[2/5] Seeding data with k6 (10 VUs, 3s)...${NC}"
-    k6 run --quiet --vus 10 --duration 3s \
+    echo -e "${CYAN}[2/5] Seeding data with k6 (50 VUs, 256,000 iterations)...${NC}"
+    k6 run --quiet --vus 50 --iterations 256000 \
         --env "BASE_URL=http://localhost:$HTTP_PORT" \
         "$WORKLOAD_DIR/seed.js" 2>/dev/null
 

@@ -10,7 +10,7 @@ wrk.headers["Content-Type"] = "application/json"
 
 request = function()
     counter = counter + 1
-    local id = counter % 1000
+    local id = counter % 256000
     local path = "/v1/secret/data/bench/s" .. id
     local body = '{"data":{"value":"bench-' .. id .. '"}}'
     return wrk.format("POST", path, nil, body)
