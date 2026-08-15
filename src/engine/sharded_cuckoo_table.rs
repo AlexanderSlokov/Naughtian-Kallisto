@@ -79,4 +79,11 @@ impl ShardedCuckooTable {
         }
         total
     }
+    pub fn get_shard_stats(&self) -> Vec<MemoryStats> {
+        let mut shard_stats = Vec::with_capacity(Self::NUM_SHARDS);
+        for shard in &self.shards {
+            shard_stats.push(shard.get_memory_stats());
+        }
+        shard_stats
+    }
 }

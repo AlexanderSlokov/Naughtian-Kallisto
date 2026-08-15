@@ -116,7 +116,7 @@ impl KvEngine {
                 SecretEntry {
                     key: key.to_string(),
                     payload: disk.clone(),
-                    inserted_at_ms: now_ms(),
+                    referenced: std::sync::atomic::AtomicBool::new(true),
                 },
             );
             return Ok(Some(f(&disk)));
@@ -329,7 +329,7 @@ impl SecretEngine for KvEngine {
             SecretEntry {
                 key: vkey.clone(),
                 payload: serialized_payload,
-                inserted_at_ms: now_ms(),
+                referenced: std::sync::atomic::AtomicBool::new(true),
             },
         );
 
@@ -343,7 +343,7 @@ impl SecretEngine for KvEngine {
             SecretEntry {
                 key: mkey.clone(),
                 payload: serialized_meta,
-                inserted_at_ms: now_ms(),
+                referenced: std::sync::atomic::AtomicBool::new(true),
             },
         );
 
@@ -379,7 +379,7 @@ impl SecretEngine for KvEngine {
             SecretEntry {
                 key: mkey.clone(),
                 payload: serialized_meta,
-                inserted_at_ms: now_ms(),
+                referenced: std::sync::atomic::AtomicBool::new(true),
             },
         );
 
@@ -416,7 +416,7 @@ impl SecretEngine for KvEngine {
             SecretEntry {
                 key: mkey.clone(),
                 payload: serialized_meta,
-                inserted_at_ms: now_ms(),
+                referenced: std::sync::atomic::AtomicBool::new(true),
             },
         );
 
@@ -454,7 +454,7 @@ impl SecretEngine for KvEngine {
             SecretEntry {
                 key: mkey.clone(),
                 payload: serialized_meta,
-                inserted_at_ms: now_ms(),
+                referenced: std::sync::atomic::AtomicBool::new(true),
             },
         );
 

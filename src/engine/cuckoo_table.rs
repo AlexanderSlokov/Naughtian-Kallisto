@@ -7,11 +7,31 @@ use std::{
 
 use siphasher::sip::SipHasher24;
 
-#[derive(Clone, Default, Debug)]
+#[derive(Debug)]
 pub struct SecretEntry {
     pub key: String,
     pub payload: Vec<u8>,
-    pub inserted_at_ms: u64,
+    pub referenced: std::sync::atomic::AtomicBool,
+}
+
+impl Clone for SecretEntry {
+    fn clone(&self) -> Self {
+        Self {
+            key: self.key.clone(),
+            payload: self.payload.clone(),
+            referenced: std::sync::atomic::AtomicBool::new(self.referenced.load(Ordering::Relaxed)),
+        }
+    }
+}
+
+impl Default for SecretEntry {
+    fn default() -> Self {
+        Self {
+            key: String::new(),
+            payload: Vec::new(),
+            referenced: std::sync::atomic::AtomicBool::new(true),
+        }
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -60,7 +80,7 @@ struct UnsafeCuckoo {
     free_list_capacity: usize,
     free_list_size: usize,
 
-    prng_seed: u64,
+    clock_hand: usize,
 }
 
 // 2. PingCAP explicitly implements Send/Sync for thread-safety
@@ -98,7 +118,7 @@ impl UnsafeCuckoo {
                 free_list,
                 free_list_capacity: free_list_cap,
                 free_list_size: 0,
-                prng_seed: 0xDEADBEEF_CAFEBABE,
+                clock_hand: 0,
             }
         }
     }
@@ -186,7 +206,7 @@ impl CuckooTable {
                         *se = SecretEntry {
                             key: key.to_string(),
                             payload: entry.payload.clone(),
-                            inserted_at_ms: entry.inserted_at_ms,
+                            referenced: std::sync::atomic::AtomicBool::new(true),
                         };
                         return true;
                     }
@@ -204,7 +224,7 @@ impl CuckooTable {
                         *se = SecretEntry {
                             key: key.to_string(),
                             payload: entry.payload.clone(),
-                            inserted_at_ms: entry.inserted_at_ms,
+                            referenced: std::sync::atomic::AtomicBool::new(true),
                         };
                         return true;
                     }
@@ -222,7 +242,7 @@ impl CuckooTable {
                 *se = SecretEntry {
                     key: key.to_string(),
                     payload: entry.payload.clone(),
-                    inserted_at_ms: entry.inserted_at_ms,
+                    referenced: std::sync::atomic::AtomicBool::new(true),
                 };
             } else if state.storage_size < state.max_capacity {
                 new_storage_idx = state.storage_size as u32;
@@ -235,49 +255,68 @@ impl CuckooTable {
                     SecretEntry {
                         key: key.to_string(),
                         payload: entry.payload.clone(),
-                        inserted_at_ms: entry.inserted_at_ms,
+                        referenced: std::sync::atomic::AtomicBool::new(true),
                     },
                 );
             } else {
-                let mut oldest_ms = u64::MAX;
                 let mut victim_idx = u32::MAX;
-                let mut victim_slot_ptr: *mut Slot = ptr::null_mut();
 
-                for _ in 0..5 {
-                    state.prng_seed = state
-                        .prng_seed
-                        .wrapping_mul(6364136223846793005)
-                        .wrapping_add(1);
-                    let rand_bucket = (state.prng_seed as usize) % state.capacity;
-                    let table = if (state.prng_seed >> 32) % 2 == 0 {
-                        state.table_1
+                // 3. CLOCK Eviction Algorithm
+                for _ in 0..state.max_capacity * 2 {
+                    if state.clock_hand >= state.max_capacity {
+                        state.clock_hand = 0;
+                    }
+                    let idx = state.clock_hand;
+                    state.clock_hand += 1;
+
+                    let entry_ptr = state.storage.add(idx);
+                    if (*entry_ptr).referenced.load(Ordering::Relaxed) {
+                        (*entry_ptr).referenced.store(false, Ordering::Relaxed);
                     } else {
-                        state.table_2
-                    };
-                    let bucket = table.add(rand_bucket);
-
-                    for j in 0..8 {
-                        let slot = &mut (*bucket).slots[j];
-                        if slot.index != u32::MAX {
-                            let entry_ptr = state.storage.add(slot.index as usize);
-                            if (*entry_ptr).inserted_at_ms < oldest_ms {
-                                oldest_ms = (*entry_ptr).inserted_at_ms;
-                                victim_idx = slot.index;
-                                victim_slot_ptr = slot;
-                            }
-                        }
+                        victim_idx = idx as u32;
+                        break;
                     }
                 }
 
                 if victim_idx != u32::MAX {
                     let se = &mut *state.storage.add(victim_idx as usize);
+                    let victim_key = &se.key;
+                    let h1_raw = Self::hash1_full(victim_key);
+                    let b1 = (h1_raw as usize) % state.capacity;
+                    let h2_raw = Self::hash2_full(victim_key);
+                    let b2 = (h2_raw as usize) % state.capacity;
+
+                    let mut victim_slot_ptr: *mut Slot = ptr::null_mut();
+                    let bucket1 = state.table_1.add(b1);
+                    for j in 0..8 {
+                        if (*bucket1).slots[j].index == victim_idx {
+                            victim_slot_ptr = &mut (*bucket1).slots[j];
+                            break;
+                        }
+                    }
+                    if victim_slot_ptr.is_null() {
+                        let bucket2 = state.table_2.add(b2);
+                        for j in 0..8 {
+                            if (*bucket2).slots[j].index == victim_idx {
+                                victim_slot_ptr = &mut (*bucket2).slots[j];
+                                break;
+                            }
+                        }
+                    }
+
+                    if !victim_slot_ptr.is_null() {
+                        // 1. ABA Safety Invariant: An toàn phụ thuộc vào việc toàn bộ evict + reuse
+                        // nằm trong một critical section (write lock), và bucket được xoá trước khi
+                        // storage bị ghi đè.
+                        (*victim_slot_ptr).index = u32::MAX;
+                        (*victim_slot_ptr).tag = 0;
+                    }
+
                     *se = SecretEntry {
                         key: key.to_string(),
                         payload: entry.payload.clone(),
-                        inserted_at_ms: entry.inserted_at_ms,
+                        referenced: std::sync::atomic::AtomicBool::new(true),
                     };
-                    (*victim_slot_ptr).index = u32::MAX;
-                    (*victim_slot_ptr).tag = 0;
                     new_storage_idx = victim_idx;
                 } else {
                     eprintln!(
@@ -363,6 +402,7 @@ impl CuckooTable {
                 if slot.index != u32::MAX && slot.tag == tag {
                     let se = &*state.storage.add(slot.index as usize);
                     if se.key == key {
+                        se.referenced.store(true, Ordering::Relaxed);
                         return Some(f(se));
                     }
                 }
@@ -376,6 +416,7 @@ impl CuckooTable {
                 if slot.index != u32::MAX && slot.tag == tag {
                     let se = &*state.storage.add(slot.index as usize);
                     if se.key == key {
+                        se.referenced.store(true, Ordering::Relaxed);
                         return Some(f(se));
                     }
                 }
@@ -499,7 +540,7 @@ mod tests {
                 SecretEntry {
                     key: format!("key{}", i),
                     payload: vec![i as u8],
-                    inserted_at_ms: i as u64, // oldest will be 0
+                    referenced: std::sync::atomic::AtomicBool::new(true),
                 },
             );
             assert!(inserted);
@@ -515,7 +556,7 @@ mod tests {
             SecretEntry {
                 key: "key100".to_string(),
                 payload: vec![100],
-                inserted_at_ms: 100,
+                referenced: std::sync::atomic::AtomicBool::new(true),
             },
         );
         assert!(inserted);
@@ -537,7 +578,7 @@ mod tests {
                 SecretEntry {
                     key: format!("key{}", i),
                     payload: vec![255],
-                    inserted_at_ms: i as u64,
+                    referenced: std::sync::atomic::AtomicBool::new(true),
                 },
             );
         }
@@ -545,5 +586,66 @@ mod tests {
         stats = table.get_memory_stats();
         assert_eq!(stats.storage_capacity, 100);
         assert_eq!(stats.storage_used, 100);
+    }
+
+    #[test]
+    fn test_concurrent_insert_and_read() {
+        use std::{
+            sync::Arc,
+            thread,
+            time::{Duration, Instant},
+        };
+
+        // Size 10 => Max capacity 144
+        let table = Arc::new(CuckooTable::new(10, 100));
+        let num_threads = 4;
+        let mut handles = vec![];
+
+        let start_time = Instant::now();
+        let duration = Duration::from_secs(2);
+
+        // Readers
+        for i in 0..num_threads {
+            let table_clone = Arc::clone(&table);
+            handles.push(thread::spawn(move || {
+                let mut read_count = 0;
+                while start_time.elapsed() < duration {
+                    let key = format!("concurrent_key_{}", read_count % 200); // 200 keys > capacity 100
+                    if let Some(entry) = table_clone.lookup(&key) {
+                        // Ensure that we didn't read garbage or a mismatched key due to an ABA bug
+                        assert_eq!(entry.key, key, "Read a mismatched key! ABA bug detected!");
+                    }
+                    read_count += 1;
+                }
+            }));
+        }
+
+        // Writers
+        for i in 0..num_threads {
+            let table_clone = Arc::clone(&table);
+            handles.push(thread::spawn(move || {
+                let mut write_count = 0;
+                while start_time.elapsed() < duration {
+                    let key = format!("concurrent_key_{}", write_count % 200);
+                    table_clone.insert(
+                        &key,
+                        SecretEntry {
+                            key: key.clone(),
+                            payload: vec![1, 2, 3],
+                            referenced: std::sync::atomic::AtomicBool::new(true),
+                        },
+                    );
+                    write_count += 1;
+                }
+            }));
+        }
+
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let stats = table.get_memory_stats();
+        // Should not exceed max capacity
+        assert!(stats.storage_used <= 100);
     }
 }
