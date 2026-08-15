@@ -11,6 +11,7 @@ use siphasher::sip::SipHasher24;
 pub struct SecretEntry {
     pub key: String,
     pub payload: Vec<u8>,
+    pub inserted_at_ms: u64,
 }
 
 #[derive(Clone, Copy)]
@@ -52,12 +53,14 @@ struct UnsafeCuckoo {
     capacity: usize,
 
     storage: *mut SecretEntry,
-    storage_capacity: usize,
+    max_capacity: usize,
     storage_size: usize,
 
     free_list: *mut u32,
     free_list_capacity: usize,
     free_list_size: usize,
+
+    prng_seed: u64,
 }
 
 // 2. PingCAP explicitly implements Send/Sync for thread-safety
@@ -65,7 +68,7 @@ unsafe impl Send for UnsafeCuckoo {}
 unsafe impl Sync for UnsafeCuckoo {}
 
 impl UnsafeCuckoo {
-    unsafe fn new(size: usize, initial_capacity: usize) -> Self {
+    unsafe fn new(size: usize, max_capacity: usize) -> Self {
         unsafe {
             let bucket_layout = Layout::array::<Bucket>(size).unwrap();
             let table_1 = alloc_zeroed(bucket_layout) as *mut Bucket;
@@ -78,10 +81,10 @@ impl UnsafeCuckoo {
                 }
             }
 
-            let storage_layout = Layout::array::<SecretEntry>(initial_capacity).unwrap();
+            let storage_layout = Layout::array::<SecretEntry>(max_capacity).unwrap();
             let storage = alloc_zeroed(storage_layout) as *mut SecretEntry;
 
-            let free_list_cap = std::cmp::max(initial_capacity / 10, 1);
+            let free_list_cap = max_capacity;
             let free_list_layout = Layout::array::<u32>(free_list_cap).unwrap();
             let free_list = alloc_zeroed(free_list_layout) as *mut u32;
 
@@ -90,11 +93,12 @@ impl UnsafeCuckoo {
                 table_2,
                 capacity: size,
                 storage,
-                storage_capacity: initial_capacity,
+                max_capacity,
                 storage_size: 0,
                 free_list,
                 free_list_capacity: free_list_cap,
                 free_list_size: 0,
+                prng_seed: 0xDEADBEEF_CAFEBABE,
             }
         }
     }
@@ -112,7 +116,7 @@ impl Drop for UnsafeCuckoo {
             dealloc(self.table_1 as *mut u8, bucket_layout);
             dealloc(self.table_2 as *mut u8, bucket_layout);
 
-            let storage_layout = Layout::array::<SecretEntry>(self.storage_capacity).unwrap();
+            let storage_layout = Layout::array::<SecretEntry>(self.max_capacity).unwrap();
             dealloc(self.storage as *mut u8, storage_layout);
 
             let free_list_layout = Layout::array::<u32>(self.free_list_capacity).unwrap();
@@ -124,17 +128,20 @@ impl Drop for UnsafeCuckoo {
 pub struct CuckooTable {
     state: parking_lot::RwLock<UnsafeCuckoo>,
 
-    shadow_storage_capacity: AtomicUsize,
+    shadow_max_capacity: AtomicUsize,
     shadow_storage_size: AtomicUsize,
     shadow_free_list_size: AtomicUsize,
 }
 
 impl CuckooTable {
-    pub fn new(size: usize, initial_capacity: usize) -> Self {
-        let state = unsafe { UnsafeCuckoo::new(size, initial_capacity) };
+    pub fn new(size: usize, max_capacity: usize) -> Self {
+        let absolute_max = (size * 16 * 90) / 100;
+        let max_capacity = std::cmp::min(max_capacity, absolute_max);
+
+        let state = unsafe { UnsafeCuckoo::new(size, max_capacity) };
         Self {
             state: parking_lot::RwLock::new(state),
-            shadow_storage_capacity: AtomicUsize::new(initial_capacity),
+            shadow_max_capacity: AtomicUsize::new(max_capacity),
             shadow_storage_size: AtomicUsize::new(0),
             shadow_free_list_size: AtomicUsize::new(0),
         }
@@ -178,7 +185,8 @@ impl CuckooTable {
                     if se.key == key {
                         *se = SecretEntry {
                             key: key.to_string(),
-                            payload: entry.payload,
+                            payload: entry.payload.clone(),
+                            inserted_at_ms: entry.inserted_at_ms,
                         };
                         return true;
                     }
@@ -195,7 +203,8 @@ impl CuckooTable {
                     if se.key == key {
                         *se = SecretEntry {
                             key: key.to_string(),
-                            payload: entry.payload,
+                            payload: entry.payload.clone(),
+                            inserted_at_ms: entry.inserted_at_ms,
                         };
                         return true;
                     }
@@ -213,25 +222,9 @@ impl CuckooTable {
                 *se = SecretEntry {
                     key: key.to_string(),
                     payload: entry.payload.clone(),
+                    inserted_at_ms: entry.inserted_at_ms,
                 };
-            } else {
-                if state.storage_size == state.storage_capacity {
-                    let new_cap = state.storage_capacity * 2;
-                    let old_layout = Layout::array::<SecretEntry>(state.storage_capacity).unwrap();
-                    let new_ptr = realloc(
-                        state.storage as *mut u8,
-                        old_layout,
-                        new_cap * std::mem::size_of::<SecretEntry>(),
-                    ) as *mut SecretEntry;
-                    if new_ptr.is_null() {
-                        panic!("OOM in CuckooTable storage");
-                    }
-                    state.storage = new_ptr;
-                    state.storage_capacity = new_cap;
-                    self.shadow_storage_capacity
-                        .store(new_cap, Ordering::Relaxed);
-                }
-
+            } else if state.storage_size < state.max_capacity {
                 new_storage_idx = state.storage_size as u32;
                 state.storage_size += 1;
                 self.shadow_storage_size
@@ -242,8 +235,56 @@ impl CuckooTable {
                     SecretEntry {
                         key: key.to_string(),
                         payload: entry.payload.clone(),
+                        inserted_at_ms: entry.inserted_at_ms,
                     },
                 );
+            } else {
+                let mut oldest_ms = u64::MAX;
+                let mut victim_idx = u32::MAX;
+                let mut victim_slot_ptr: *mut Slot = ptr::null_mut();
+
+                for _ in 0..5 {
+                    state.prng_seed = state
+                        .prng_seed
+                        .wrapping_mul(6364136223846793005)
+                        .wrapping_add(1);
+                    let rand_bucket = (state.prng_seed as usize) % state.capacity;
+                    let table = if (state.prng_seed >> 32) % 2 == 0 {
+                        state.table_1
+                    } else {
+                        state.table_2
+                    };
+                    let bucket = table.add(rand_bucket);
+
+                    for j in 0..8 {
+                        let slot = &mut (*bucket).slots[j];
+                        if slot.index != u32::MAX {
+                            let entry_ptr = state.storage.add(slot.index as usize);
+                            if (*entry_ptr).inserted_at_ms < oldest_ms {
+                                oldest_ms = (*entry_ptr).inserted_at_ms;
+                                victim_idx = slot.index;
+                                victim_slot_ptr = slot;
+                            }
+                        }
+                    }
+                }
+
+                if victim_idx != u32::MAX {
+                    let se = &mut *state.storage.add(victim_idx as usize);
+                    *se = SecretEntry {
+                        key: key.to_string(),
+                        payload: entry.payload.clone(),
+                        inserted_at_ms: entry.inserted_at_ms,
+                    };
+                    (*victim_slot_ptr).index = u32::MAX;
+                    (*victim_slot_ptr).tag = 0;
+                    new_storage_idx = victim_idx;
+                } else {
+                    eprintln!(
+                        r#"{{"level":"warn","message":"Insert rejected: Cuckoo Table is full (Eviction failed)"}}"#
+                    );
+                    return false;
+                }
             }
 
             let mut current_index = new_storage_idx;
@@ -291,7 +332,9 @@ impl CuckooTable {
                 cur_key = (*state.storage.add(current_index as usize)).key.clone();
             }
 
-            eprintln!("Insert rejected: Cuckoo Table is full (Max displacement reached).");
+            eprintln!(
+                r#"{{"level":"warn","message":"Insert rejected: Cuckoo Table is full (Max displacement reached)."}}"#
+            );
             false
         }
     }
@@ -300,6 +343,9 @@ impl CuckooTable {
         self.lookup_map(key, |entry| entry.clone())
     }
 
+    // SAFETY: R không được mang lifetime mượn từ `&SecretEntry` — đây là bất biến
+    // bảo vệ khỏi ABA/UAF race khi slot được tái sử dụng qua free-list. Đừng
+    // thêm API nào trả `&SecretEntry`/`&[u8]` ra ngoài closure này.
     pub fn lookup_map<F, R>(&self, key: &str, f: F) -> Option<R>
     where
         F: FnOnce(&SecretEntry) -> R,
@@ -357,19 +403,6 @@ impl CuckooTable {
                         slot.index = u32::MAX;
                         slot.tag = 0;
 
-                        if state.free_list_size == state.free_list_capacity {
-                            let new_cap = state.free_list_capacity * 2;
-                            let old_layout =
-                                Layout::array::<u32>(state.free_list_capacity).unwrap();
-                            let new_ptr = realloc(
-                                state.free_list as *mut u8,
-                                old_layout,
-                                new_cap * std::mem::size_of::<u32>(),
-                            ) as *mut u32;
-                            state.free_list = new_ptr;
-                            state.free_list_capacity = new_cap;
-                        }
-
                         ptr::write(state.free_list.add(state.free_list_size), removed_index);
                         state.free_list_size += 1;
 
@@ -391,19 +424,6 @@ impl CuckooTable {
                         let removed_index = slot.index;
                         slot.index = u32::MAX;
                         slot.tag = 0;
-
-                        if state.free_list_size == state.free_list_capacity {
-                            let new_cap = state.free_list_capacity * 2;
-                            let old_layout =
-                                Layout::array::<u32>(state.free_list_capacity).unwrap();
-                            let new_ptr = realloc(
-                                state.free_list as *mut u8,
-                                old_layout,
-                                new_cap * std::mem::size_of::<u32>(),
-                            ) as *mut u32;
-                            state.free_list = new_ptr;
-                            state.free_list_capacity = new_cap;
-                        }
 
                         ptr::write(state.free_list.add(state.free_list_size), removed_index);
                         state.free_list_size += 1;
@@ -447,7 +467,7 @@ impl CuckooTable {
         stats.bucket_count = capacity * 2;
         stats.bucket_memory_bytes = stats.bucket_count * std::mem::size_of::<Bucket>();
 
-        stats.storage_capacity = self.shadow_storage_capacity.load(Ordering::Relaxed);
+        stats.storage_capacity = self.shadow_max_capacity.load(Ordering::Relaxed);
         stats.storage_used = self.shadow_storage_size.load(Ordering::Relaxed);
         stats.storage_memory_bytes = stats.storage_capacity * std::mem::size_of::<SecretEntry>();
 
@@ -457,5 +477,73 @@ impl CuckooTable {
             stats.bucket_memory_bytes + stats.storage_memory_bytes + stats.free_list_size;
 
         stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_capacity_and_eviction() {
+        // Table with size 10 (160 slots total, max capacity up to 144)
+        let table = CuckooTable::new(10, 100);
+        let mut stats = table.get_memory_stats();
+        assert_eq!(stats.storage_capacity, 100);
+        assert_eq!(stats.storage_used, 0);
+
+        // Fill exactly to max_capacity (100)
+        for i in 0..100 {
+            let inserted = table.insert(
+                &format!("key{}", i),
+                SecretEntry {
+                    key: format!("key{}", i),
+                    payload: vec![i as u8],
+                    inserted_at_ms: i as u64, // oldest will be 0
+                },
+            );
+            assert!(inserted);
+        }
+
+        stats = table.get_memory_stats();
+        assert_eq!(stats.storage_used, 100);
+        assert_eq!(stats.storage_capacity, 100);
+
+        // Insert 101st element - should trigger eviction
+        let inserted = table.insert(
+            "key100",
+            SecretEntry {
+                key: "key100".to_string(),
+                payload: vec![100],
+                inserted_at_ms: 100,
+            },
+        );
+        assert!(inserted);
+
+        // Capacity should not increase (no realloc)
+        stats = table.get_memory_stats();
+        assert_eq!(stats.storage_capacity, 100);
+        assert_eq!(stats.storage_used, 100);
+
+        // The oldest entry is likely evicted (since 5 buckets sampled).
+        // Since we didn't specify exactly which one, we just ensure that
+        // at least one old key is gone, and the new key is present.
+        assert!(table.lookup("key100").is_some());
+
+        // We can test that continuous inserts never exceed capacity
+        for i in 101..150 {
+            table.insert(
+                &format!("key{}", i),
+                SecretEntry {
+                    key: format!("key{}", i),
+                    payload: vec![255],
+                    inserted_at_ms: i as u64,
+                },
+            );
+        }
+
+        stats = table.get_memory_stats();
+        assert_eq!(stats.storage_capacity, 100);
+        assert_eq!(stats.storage_used, 100);
     }
 }

@@ -51,7 +51,7 @@ impl KvEngine {
                 EngineError::StorageError(format!("Failed to open RocksDB: {}", e))
             })?);
 
-        let cache = Arc::new(ShardedCuckooTable::new(1024 * 1024));
+        let cache = Arc::new(ShardedCuckooTable::new(256 * 1024));
         let path_index = Arc::new(TlsBTreeManager::new(3));
         let sync_mode = AtomicU8::new(SyncMode::Batch as u8); // Default: Batch
 
@@ -116,6 +116,7 @@ impl KvEngine {
                 SecretEntry {
                     key: key.to_string(),
                     payload: disk.clone(),
+                    inserted_at_ms: now_ms(),
                 },
             );
             return Ok(Some(f(&disk)));
@@ -328,6 +329,7 @@ impl SecretEngine for KvEngine {
             SecretEntry {
                 key: vkey.clone(),
                 payload: serialized_payload,
+                inserted_at_ms: now_ms(),
             },
         );
 
@@ -341,6 +343,7 @@ impl SecretEngine for KvEngine {
             SecretEntry {
                 key: mkey.clone(),
                 payload: serialized_meta,
+                inserted_at_ms: now_ms(),
             },
         );
 
@@ -376,6 +379,7 @@ impl SecretEngine for KvEngine {
             SecretEntry {
                 key: mkey.clone(),
                 payload: serialized_meta,
+                inserted_at_ms: now_ms(),
             },
         );
 
@@ -412,6 +416,7 @@ impl SecretEngine for KvEngine {
             SecretEntry {
                 key: mkey.clone(),
                 payload: serialized_meta,
+                inserted_at_ms: now_ms(),
             },
         );
 
@@ -449,6 +454,7 @@ impl SecretEngine for KvEngine {
             SecretEntry {
                 key: mkey.clone(),
                 payload: serialized_meta,
+                inserted_at_ms: now_ms(),
             },
         );
 
