@@ -83,7 +83,7 @@ bench-release:
 	@bash benchmarks/server/run_release_bench.sh
 
 # Laptop benchmark (wrk2 — tailored for mid-range DEV machines)
-# Target rate 30k RPS. Expected result: ~1.5ms avg latency for both GET and PUT.
+# Target rate 30k RPS. Expected result: ~1.39ms (median of 3) avg latency for both GET and PUT. (sampled on AMD Ryzen 5 3550H, 15th Aug 2026). 
 # --------------------------------------------------------------------
 
 bench-laptop:
