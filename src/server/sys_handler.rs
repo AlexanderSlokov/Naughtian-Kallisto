@@ -1,5 +1,5 @@
-use axum::{routing::get, Json, Router};
-use serde_json::{json, Value};
+use axum::{Json, Router, routing::get};
+use serde_json::{Value, json};
 
 /// Mock system endpoints representing Vault's sys/ api
 pub fn router<S: Clone + Send + Sync + 'static>() -> Router<S> {
@@ -75,22 +75,30 @@ async fn seal_status() -> Json<Value> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_health_check() {
         let app = router();
         let response = app
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), 200);
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: Value = serde_json::from_slice(&body_bytes).unwrap();
-        
+
         assert_eq!(body["initialized"], true);
         assert_eq!(body["sealed"], false);
         assert_eq!(body["standby"], false);
@@ -100,14 +108,21 @@ mod tests {
     async fn test_mounts() {
         let app = router();
         let response = app
-            .oneshot(Request::builder().uri("/mounts").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/mounts")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), 200);
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: Value = serde_json::from_slice(&body_bytes).unwrap();
-        
+
         assert_eq!(body["secret/"]["type"], "kv");
     }
 
@@ -115,14 +130,21 @@ mod tests {
     async fn test_seal_status() {
         let app = router();
         let response = app
-            .oneshot(Request::builder().uri("/seal-status").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/seal-status")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
 
         assert_eq!(response.status(), 200);
-        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
         let body: Value = serde_json::from_slice(&body_bytes).unwrap();
-        
+
         assert_eq!(body["type"], "shamir");
         assert_eq!(body["sealed"], false);
     }

@@ -59,12 +59,12 @@ tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", features = ["json"] }
 control_plane = { path = "components/kallisto_cluster" }
 
-[[benchmarks.storage]]
+[[bench]]
 name = "storage_bench"
 path = "benchmarks/storage/storage_bench.rs"
 harness = false
 
-[[benchmarks.security]]
+[[bench]]
 name = "security_bench"
 path = "benchmarks/security/security_bench.rs"
 harness = false

@@ -1,1 +1,3 @@
-pub fn hello() { println!("Hello from Telemetry"); }
+pub fn hello() {
+    println!("Hello from Telemetry");
+}

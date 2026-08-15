@@ -1,6 +1,8 @@
-use crate::engine::cuckoo_table::{CuckooTable, MemoryStats, SecretEntry};
-use siphasher::sip::SipHasher24;
 use std::hash::{Hash, Hasher};
+
+use siphasher::sip::SipHasher24;
+
+use crate::engine::cuckoo_table::{CuckooTable, MemoryStats, SecretEntry};
 
 pub struct ShardedCuckooTable {
     shards: Vec<CuckooTable>,

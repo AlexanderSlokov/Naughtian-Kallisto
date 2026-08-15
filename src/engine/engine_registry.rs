@@ -1,6 +1,7 @@
+use std::{collections::HashMap, sync::Arc};
+
 use arc_swap::ArcSwap;
-use std::collections::HashMap;
-use std::sync::Arc;
+
 use super::traits::SecretEngine;
 
 pub struct EngineRegistry {
@@ -50,11 +51,15 @@ impl EngineRegistry {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::engine::error::EngineError;
-    use crate::engine::traits::{KeyMetadata, SecretPayload};
-    use async_trait::async_trait;
     use std::sync::atomic::{AtomicBool, Ordering};
+
+    use async_trait::async_trait;
+
+    use super::*;
+    use crate::engine::{
+        error::EngineError,
+        traits::{KeyMetadata, SecretPayload},
+    };
 
     struct MockEngine {
         engine_type_str: &'static str,
@@ -63,13 +68,22 @@ mod tests {
 
     #[async_trait]
     impl SecretEngine for MockEngine {
-        async fn read_version(&self, _path: &str, _version: u32) -> Result<(SecretPayload, crate::engine::traits::VersionState), EngineError> {
+        async fn read_version(
+            &self,
+            _path: &str,
+            _version: u32,
+        ) -> Result<(SecretPayload, crate::engine::traits::VersionState), EngineError> {
             Err(EngineError::NotFound)
         }
         async fn read_metadata(&self, _path: &str) -> Result<KeyMetadata, EngineError> {
             Err(EngineError::NotFound)
         }
-        async fn put_version(&self, _path: &str, _payload: &SecretPayload, _cas: Option<u32>) -> Result<(), EngineError> {
+        async fn put_version(
+            &self,
+            _path: &str,
+            _payload: &SecretPayload,
+            _cas: Option<u32>,
+        ) -> Result<(), EngineError> {
             Ok(())
         }
         async fn soft_delete(&self, _path: &str, _version: u32) -> Result<(), EngineError> {
@@ -166,4 +180,3 @@ mod tests {
         assert_eq!(prefixes.len(), 1);
     }
 }
-

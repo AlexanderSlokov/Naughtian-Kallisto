@@ -1,7 +1,9 @@
-use crate::engine::btree_index::BTreeIndex;
 use parking_lot::RwLock;
 
-/// TlsBTreeManager manages synchronization for the BTreeIndex across multiple threads.
+use crate::engine::btree_index::BTreeIndex;
+
+/// TlsBTreeManager manages synchronization for the BTreeIndex across multiple
+/// threads.
 pub struct TlsBTreeManager {
     master_btree: RwLock<BTreeIndex>,
 }

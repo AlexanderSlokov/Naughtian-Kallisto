@@ -1,6 +1,8 @@
-use std::mem::MaybeUninit;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::ptr;
+use std::{
+    mem::MaybeUninit,
+    ptr,
+    sync::atomic::{AtomicUsize, Ordering},
+};
 
 /// Dmitry Vyukov's MPMC Lock-Free Queue.
 /// Provides ultra-low latency lock-free message passing.
@@ -29,7 +31,8 @@ pub struct LockFreeQueue<T> {
 }
 
 // Manual thread-safety guarantees as per PingCAP/TiKV unsafe philosophy.
-// Since the queue is inherently safe for concurrent access via atomics, we can declare it Send/Sync.
+// Since the queue is inherently safe for concurrent access via atomics, we can
+// declare it Send/Sync.
 unsafe impl<T: Send> Send for LockFreeQueue<T> {}
 unsafe impl<T: Send> Sync for LockFreeQueue<T> {}
 
@@ -43,7 +46,7 @@ impl<T> LockFreeQueue<T> {
                 data: MaybeUninit::uninit(),
             });
         }
-        
+
         Self {
             buffer: buffer.into_boxed_slice(),
             enqueue_pos: CachePadded(AtomicUsize::new(0)),
@@ -55,18 +58,22 @@ impl<T> LockFreeQueue<T> {
         let capacity = self.buffer.len();
         let mask = capacity - 1;
         let mut pos = self.enqueue_pos.0.load(Ordering::Relaxed);
-        
+
         loop {
             let cell = &self.buffer[pos & mask];
             let seq = cell.sequence.load(Ordering::Acquire);
-            
+
             let dif = (seq as isize) - (pos as isize);
             if dif == 0 {
-                if self.enqueue_pos.0.compare_exchange_weak(
-                    pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed
-                ).is_ok() {
+                if self
+                    .enqueue_pos
+                    .0
+                    .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
                     unsafe {
-                        // 1. Unsafe Block: Direct memory write, bypassing borrow checker for zero-cost queueing
+                        // 1. Unsafe Block: Direct memory write, bypassing borrow checker for
+                        //    zero-cost queueing
                         ptr::write(cell.data.as_ptr() as *mut T, data);
                     }
                     cell.sequence.store(pos + 1, Ordering::Release);
@@ -84,16 +91,19 @@ impl<T> LockFreeQueue<T> {
         let capacity = self.buffer.len();
         let mask = capacity - 1;
         let mut pos = self.dequeue_pos.0.load(Ordering::Relaxed);
-        
+
         loop {
             let cell = &self.buffer[pos & mask];
             let seq = cell.sequence.load(Ordering::Acquire);
-            
+
             let dif = (seq as isize) - ((pos + 1) as isize);
             if dif == 0 {
-                if self.dequeue_pos.0.compare_exchange_weak(
-                    pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed
-                ).is_ok() {
+                if self
+                    .dequeue_pos
+                    .0
+                    .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
+                    .is_ok()
+                {
                     let data = unsafe {
                         // 2. Unsafe Block: Direct memory read, extracting ownership without cloning
                         ptr::read(cell.data.as_ptr())
