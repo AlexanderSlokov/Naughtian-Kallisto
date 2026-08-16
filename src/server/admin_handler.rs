@@ -1,5 +1,7 @@
-use axum::{routing::post, Router, response::IntoResponse, Json};
 use std::sync::Arc;
+
+use axum::{Json, Router, response::IntoResponse, routing::post};
+
 use crate::engine::engine_registry::EngineRegistry;
 
 #[derive(Clone)]
@@ -15,7 +17,7 @@ pub fn router(state: AdminState) -> Router {
 }
 
 // In the Rust port, KvEngine defaults to Batch mode and the async worker loop
-// handles batching automatically. The admin endpoints are primarily for 
+// handles batching automatically. The admin endpoints are primarily for
 // benchmark script compatibility and future operational toggles.
 
 async fn set_batch_mode() -> impl IntoResponse {

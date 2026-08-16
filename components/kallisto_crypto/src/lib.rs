@@ -1,1 +1,3 @@
-pub fn hello() { println!("Hello from Core Crypto"); }
+pub fn hello() {
+    println!("Hello from Core Crypto");
+}

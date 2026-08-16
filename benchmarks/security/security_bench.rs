@@ -1,19 +1,22 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
-use naughtian_kallisto::engine::btree_index::BTreeIndex;
-use naughtian_kallisto::engine::sharded_cuckoo_table::ShardedCuckooTable;
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use naughtian_kallisto::engine::{
+    btree_index::BTreeIndex, sharded_cuckoo_table::ShardedCuckooTable,
+};
 
 fn bench_hash_flooding(c: &mut Criterion) {
     let mut group = c.benchmark_group("security_hash_flooding");
 
-    // Generate keys that would collide if only the first 8 bytes were hashed (simulating hash flooding attack)
+    // Generate keys that would collide if only the first 8 bytes were hashed
+    // (simulating hash flooding attack)
     let attack_keys: Vec<String> = (0..5000).map(|i| format!("COLLISION_{}", i)).collect();
 
     group.bench_function("siphash_cuckoo_insert", |b| {
         b.iter(|| {
             let table = ShardedCuckooTable::new(16384);
             for key in &attack_keys {
-                // We just simulate insertion by doing a lookup to test hash distribution under attack
-                // because actual insertion requires SecretEntry in Kallisto Rust.
+                // We just simulate insertion by doing a lookup to test hash distribution under
+                // attack because actual insertion requires SecretEntry in
+                // Kallisto Rust.
                 let _ = black_box(table.lookup_map(black_box(key), |entry| entry.key.clone()));
             }
         });
@@ -47,9 +50,5 @@ fn bench_btree_gate(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
-    benches,
-    bench_hash_flooding,
-    bench_btree_gate,
-);
+criterion_group!(benches, bench_hash_flooding, bench_btree_gate,);
 criterion_main!(benches);

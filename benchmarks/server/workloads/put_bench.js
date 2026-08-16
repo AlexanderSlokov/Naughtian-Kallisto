@@ -9,10 +9,10 @@ import { SharedArray } from 'k6/data';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8200';
 
-// Pre-generate 10000 write payloads to match the original wrk_put.lua key space
+// Pre-generate 256000 write payloads to match the original wrk_put.lua key space
 const payloads = new SharedArray('put_payloads', function () {
   const items = [];
-  for (let i = 0; i < 10000; i++) {
+  for (let i = 0; i < 256000; i++) {
     items.push({
       path: `/v1/secret/data/bench/w${i}`,
       body: JSON.stringify({ data: { value: `bench-val-${i}` } }),

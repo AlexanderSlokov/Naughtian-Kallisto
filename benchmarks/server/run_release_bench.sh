@@ -101,8 +101,8 @@ start_server() {
 }
 
 seed_data() {
-    echo -e "${CYAN}[2/4] Seeding data with wrk2 (3s burst)...${NC}"
-    wrk2 -t2 -c10 -d3s -R 50000 \
+    echo -e "${CYAN}[2/4] Seeding data with wrk2 (6s burst)...${NC}"
+    wrk2 -t2 -c10 -d6s -R 50000 \
         -s "$WORKLOAD_DIR/wrk2_put.lua" \
         "http://localhost:$HTTP_PORT" 2>/dev/null | tail -1
 

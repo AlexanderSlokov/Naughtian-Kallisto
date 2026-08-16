@@ -54,13 +54,13 @@ impl BTreeIndex {
     pub fn validate_path(&self, path: &str) -> bool {
         self.contains_path_recursive(&self.root_node, path)
     }
-    
+
     pub fn get_all_paths(&self) -> Vec<String> {
         let mut paths = Vec::new();
         self.collect_paths_recursive(&self.root_node, &mut paths);
         paths
     }
-    
+
     fn collect_paths_recursive(&self, node: &Node, paths: &mut Vec<String>) {
         if node.is_leaf_node {
             for key in &node.path_keys {
@@ -77,7 +77,9 @@ impl BTreeIndex {
 
     fn contains_path_recursive(&self, current_node: &Node, path_key: &str) -> bool {
         let mut index = 0;
-        while index < current_node.path_keys.len() && path_key > current_node.path_keys[index].as_str() {
+        while index < current_node.path_keys.len()
+            && path_key > current_node.path_keys[index].as_str()
+        {
             index += 1;
         }
 
@@ -92,13 +94,18 @@ impl BTreeIndex {
         self.contains_path_recursive(&current_node.child_nodes[index], path_key)
     }
 
-    fn insert_into_non_full_node_static(min_degree: usize, current_node: &mut Node, path_key: &str) {
+    fn insert_into_non_full_node_static(
+        min_degree: usize,
+        current_node: &mut Node,
+        path_key: &str,
+    ) {
         let mut index = current_node.path_keys.len() as isize - 1;
 
         if current_node.is_leaf_node {
             current_node.path_keys.push(String::new());
             while index >= 0 && path_key < current_node.path_keys[index as usize].as_str() {
-                current_node.path_keys[(index + 1) as usize] = current_node.path_keys[index as usize].clone();
+                current_node.path_keys[(index + 1) as usize] =
+                    current_node.path_keys[index as usize].clone();
                 index -= 1;
             }
             current_node.path_keys[(index + 1) as usize] = path_key.to_string();
@@ -107,7 +114,7 @@ impl BTreeIndex {
                 index -= 1;
             }
             index += 1;
-            
+
             let u_index = index as usize;
             if current_node.child_nodes[u_index].path_keys.len() == 2 * min_degree - 1 {
                 Self::split_child_node_static(min_degree, current_node, u_index);
@@ -115,7 +122,11 @@ impl BTreeIndex {
                     index += 1;
                 }
             }
-            Self::insert_into_non_full_node_static(min_degree, &mut current_node.child_nodes[index as usize], path_key);
+            Self::insert_into_non_full_node_static(
+                min_degree,
+                &mut current_node.child_nodes[index as usize],
+                path_key,
+            );
         }
     }
 
@@ -124,19 +135,25 @@ impl BTreeIndex {
         let mut new_sibling_node = Node::new(child_node.is_leaf_node);
 
         for _ in 0..(min_degree - 1) {
-            new_sibling_node.path_keys.push(child_node.path_keys[min_degree].clone());
+            new_sibling_node
+                .path_keys
+                .push(child_node.path_keys[min_degree].clone());
             child_node.path_keys.remove(min_degree);
         }
 
         if !child_node.is_leaf_node {
             for _ in 0..min_degree {
-                new_sibling_node.child_nodes.push(child_node.child_nodes.remove(min_degree));
+                new_sibling_node
+                    .child_nodes
+                    .push(child_node.child_nodes.remove(min_degree));
             }
         }
 
         let middle_key = child_node.path_keys.remove(min_degree - 1);
 
-        parent_node.child_nodes.insert(child_index + 1, new_sibling_node);
+        parent_node
+            .child_nodes
+            .insert(child_index + 1, new_sibling_node);
         parent_node.path_keys.insert(child_index, middle_key);
     }
 }

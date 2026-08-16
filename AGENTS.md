@@ -61,7 +61,7 @@ TL/DR: treat the computer with the respect it deserves. Should apply throughout 
 
 ## Performance Critical Path 
 
-There're files whose functions are in the critical path of read or write requests. They're so important to the overall performance that any regression will directly impact user experience. A comment `#[PerformanceCriticalPath]` is place inside them to highlight that fact. Please note that this is the best-effort work and some files in critical path may not be marked. But if a file is marked, please pay special attention when you change its code.
+There are files whose functions are in the critical path of read or write requests. They're so important to the overall performance that any regression will directly impact user experience. A comment `#[PerformanceCriticalPath]` is place inside them to highlight that fact. Please note that this is the best-effort work and some files in critical path may not be marked. But if a file is marked, please pay special attention when you change its code.
 
 Typical mistakes should be avoided in the `#[PerformanceCriticalPath]` files:
 
@@ -92,27 +92,48 @@ Use `unsafe` when it is the most appropriate solution, e.g. for FFI, extreme per
 
 ### Code Organization
 
-- `/cmd/` - Binary entry points
+- `/cmd/` - Binary entry points only, no business logic
     - `/cmd/kallisto-ctl/` - Kallisto control utility
-    - `/cmd/kallisto-server/` - Main Kallisto server binary
+    - `/cmd/kallisto-server/` - Main Kallisto server binary; wires up `KallistoCore`, the data-plane `WorkerPool`, and the admin server
 
-- `/src/` - Main Kallisto server source code
-    - `/src/engine/` - Engines implementation (migrated from C++ to Rust)
-	- `/src/event/` - Event handling and processing (migrated from C++ to Rust)
+- `/src/` - The `naughtian_kallisto` library crate (all engine/storage/server logic)
+    - `/src/engine/` - Secret engine trait, registry, and the `KvEngine` implementation (cache, path index, RocksDB backend, lock-free async flush queue)
+	- `/src/event/worker.rs` - Data-plane `WorkerPool`: thread-per-core, SO_REUSEPORT
 	- `/src/engine/lock_free_queue.rs` - Async flusher using Dmitry Vyukov's MPMC Lock-Free Queue
-	- `/src/server/` - Server implementation (migrated from C++ to Rust)
-	- `/src/thread_local/` - Thread-local data structure (migrated from C++ to Rust)
+	- `/src/server/` - Axum HTTP handlers (Vault KV-v2 compatible routes), listener, admin handler
+	- `/src/storage/` - RocksDB backend, in-memory cache, async flusher
+	- `/src/net/`, `/src/thread_local/` - currently empty/reserved, no implementation yet
 
 - `/components/` - Modular components and libraries (Rust Workspace)
-    - `components/kallisto_cluster` - Gossip cluster membership (`foca`) & administration
+    - `components/kallisto_cluster` - Gossip cluster membership (`foca`) & the **admin HTTP server** (port 8202, `admin_http.rs`)
     - `components/kallisto_telemetry` - Prometheus metrics exporter & async Audit logging
     - `components/kallisto_crypto` - Vault transit KMS client, KEK keyring, and DEK manager
     - `components/kallisto_policy` - Engine ACL policy matching and validation
-	
-- `/tests/` - Integration tests
-- `/fuzz/` - Fuzzing targets (For future use, not implemented yet)
+    - Several of these are currently stubs (`pub fn hello()` only) — check the file before assuming a feature is implemented.
 
-### KV Engine (Pre-Rust rewrite)
+- `/tests/` - Integration tests (`tests/e2e_vault_compat.rs` for Vault API compat, run via `make e2e`; `tests/integration/test_persistence.sh` shell-driven persistence check)
+- `/fuzz/` - Fuzzing targets (For future use, not implemented yet)
+- `/docs/` - Full Hugo (Hextra theme) documentation site, unrelated to Rust build tooling (`make docs-serve` / `make docs-build`)
+
+### Architecture
+
+**Two-plane network model.** The server binds two ports with two independent Tokio setups — don't merge them:
+- **Data plane (`:8200`)** — `src/event/worker.rs::WorkerPool` spawns one thread per worker, pinned to a CPU core (`core_affinity`), each running its own single-threaded (`new_current_thread`) Tokio runtime, all binding the same port via `SO_REUSEPORT` (`src/server/listener.rs`). Envoy-style thread-per-core, chosen deliberately to avoid work-stealing and cross-core cache traffic.
+- **Control/admin plane (`:8202`)** — `components/kallisto_cluster/src/admin_http.rs::start_admin_server` runs on its own dedicated thread/runtime. Handles `/admin/flush`, `/admin/mode/{batch,immediate}`, `/admin/status`.
+
+**Engine layer (`src/engine/`).**
+- `traits::SecretEngine` — async port interface every secret engine backend implements (`read_version`, `put_version`, `soft_delete`, `list_keys`, `force_flush`, ...). Vault KV-v2 semantics: versioned values, soft-delete vs destroy, CAS on write.
+- `engine_registry::EngineRegistry` — routes a URL mount prefix (e.g. `"secret"`) to an `Arc<dyn SecretEngine>`. Uses `ArcSwap` + a write-side `Mutex` for lock-free reads and copy-on-write mounts.
+- `kv_engine::KvEngine` — the concrete `SecretEngine` and the hot path: `ShardedCuckooTable` (in-memory read cache) + `TlsBTreeManager` (thread-local B-tree path index, rebuilt from RocksDB keys on startup) + `RocksDbBackend` (durable storage) + `LockFreeQueue`-fed background flusher. `SyncMode::Immediate` (sync durability per write) vs `Batch` (async queued flush) is toggled live via the admin API.
+- `KallistoCore` (`src/lib.rs`) is the top-level handle tying `EngineRegistry` + the default `KvEngine` (mounted at `"secret"`) together; both the data-plane `AppState` and the admin server hold an `Arc` to it.
+
+**HTTP surface.** `src/server/http_handler.rs::vault_kv_router` mounts `/v1/:mount/data/*path` (GET/POST/PUT/PATCH/DELETE), `/v1/:mount/subkeys/*path`, `/v1/:mount/{delete,undelete,destroy}/*path`, `/v1/:mount/metadata/*path`. `:mount` resolves through `EngineRegistry`.
+
+**Tests.** Unit tests live inline (`#[cfg(test)] mod tests`) next to the code, e.g. `src/engine/engine_registry.rs` mocks `SecretEngine` with a handwritten `MockEngine`, not a mocking framework.
+
+### KV Engine (Pre-Rust rewrite — historical reference only)
+
+The following C++ layout predates the Rust rewrite and is **not present in the current working tree** (no `include/`, `rust_integrates/`, or `.cpp` files exist on disk). Kept here only as historical/design context for why the current Rust module boundaries (`traits.rs`, `engine_registry.rs`, `kv_engine.rs`) look the way they do.
 
 ```
 include/kallisto/engine/
@@ -139,13 +160,16 @@ rust_integrates/            # Rust Workspace (Control Plane)
 ## Building
 
 ```bash
-# Build development version
+# Build development version (whole workspace)
 make build
 
 # Quick check without full compilation
 cargo check --all
 
-# Build release version
+# Build release server binary
+make build-server           # cargo build --release -p kallisto-server
+
+# Build release version (workspace-wide)
 # make release (not yet available - but will be soon)
 ```
 
@@ -153,23 +177,50 @@ cargo check --all
 
 ```bash
 # Run the full test suite
-make test
+make test                   # cargo test --workspace
+
+# Run Vault API E2E compatibility tests (ignored by default, needs docker env — see tests/e2e/)
+make e2e
+
+# Run a single test
+cargo test -p <crate> <test_name>   # e.g. cargo test -p kallisto_cluster gossip_
 ```
 
 ### Code Quality
 
 ```bash
 # Run formatter
-make format
+make format                 # cargo fmt (rustfmt.toml: style_edition 2024)
 
-# Run clippy linter (use this instead of cargo clippy directly)
-# make clippy (not yet available - but will be soon)
+# Run clippy linter
+cargo clippy --workspace    # `make clippy` is not wired up yet — call clippy directly
+                             # clippy.toml disallows several methods (see file) — read the reasons before working around them
 
 # Run full development checks (format + clippy + tests)
 # make dev (not yet available - but will be soon)
 ```
 
-The `make dev` command should pass before submitting a PR.
+Until `make dev` exists, run `make format`, `cargo clippy --workspace`, and `make test` individually before submitting a PR.
+
+### Running the server
+
+```bash
+make run-server                                                # data plane :8200, admin/control plane :8202
+./build/kallisto_server --http-port=8200 --workers=2 --db-path=/kallisto/data
+```
+
+### Benchmarks
+
+```bash
+cargo bench          # in-process Criterion benches (benchmarks/storage, benchmarks/security)
+make bench-server     # k6 HTTP load test
+make bench-laptop     # wrk2, tuned for dev machines (~30k rps target)
+make bench-release    # wrk2, full release benchmark
+```
+
+### Toolchain
+
+Pinned via `rust-toolchain.toml` to a **nightly** channel — don't assume stable-only features are unavailable.
 
 ## Pull Request Instructions
 

@@ -1,1 +1,3 @@
-pub fn hello() { println!("Hello from Policy Engine"); }
+pub fn hello() {
+    println!("Hello from Policy Engine");
+}

@@ -2,21 +2,21 @@
 // Criterion Micro-Benchmark Suite — Storage Layer
 //
 // Replaces the legacy C++ `bench_p99.cpp`.
-// Measures single-thread PUT/GET latency on both RocksDB and DashMap cache
-// to validate the Phase 2 target:
+// Measures single-thread PUT/GET latency on both RocksDB and the in-memory
+// ShardedCuckooTable cache to validate the Phase 2 target:
 //   "single-thread PUT/GET latency ≤ 10% so với C++"
 //
 // Run:   cargo bench --bench storage_bench
 // Report: target/criterion/report/index.html
 // =============================================================================
 
-use criterion::{black_box, criterion_group, criterion_main, Criterion, BenchmarkId, BatchSize};
+use std::{fs, sync::Arc};
 
-use naughtian_kallisto::storage::rocksdb_backend::RocksDbBackend;
-use naughtian_kallisto::storage::cache::Cache;
-
-use std::fs;
-use std::sync::Arc;
+use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use naughtian_kallisto::{
+    engine::{cuckoo_table::SecretEntry, sharded_cuckoo_table::ShardedCuckooTable},
+    storage::rocksdb_backend::RocksDbBackend,
+};
 
 /// Helper: create a temporary RocksDB for benchmarking.
 fn make_bench_db(name: &str) -> (Arc<RocksDbBackend>, String) {
@@ -40,7 +40,8 @@ fn bench_rocksdb_put(c: &mut Criterion) {
         let mut i = 0u64;
         b.iter(|| {
             let key = format!("put_key_{}", i);
-            db.put_raw(black_box(key.as_bytes()), black_box(&value)).unwrap();
+            db.put_raw(black_box(key.as_bytes()), black_box(&value))
+                .unwrap();
             i += 1;
         });
     });
@@ -51,7 +52,8 @@ fn bench_rocksdb_put(c: &mut Criterion) {
         let mut i = 0u64;
         b.iter(|| {
             let key = format!("put_1k_{}", i);
-            db.put_raw(black_box(key.as_bytes()), black_box(&value)).unwrap();
+            db.put_raw(black_box(key.as_bytes()), black_box(&value))
+                .unwrap();
             i += 1;
         });
     });
@@ -135,80 +137,27 @@ fn bench_rocksdb_batch(c: &mut Criterion) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. DashMap cache latency (replaces ShardedCuckooTable benchmark)
-// ---------------------------------------------------------------------------
-fn bench_cache_operations(c: &mut Criterion) {
-    let mut group = c.benchmark_group("dashmap_cache");
-
-    // INSERT
-    group.bench_function("insert_64B", |b| {
-        let cache = Cache::new(1_048_576);
-        let value = vec![0x42u8; 64];
-        let mut i = 0u64;
-        b.iter(|| {
-            cache.insert(black_box(format!("ck_{}", i)), black_box(value.clone()));
-            i += 1;
-        });
-    });
-
-    // LOOKUP (hit)
-    group.bench_function("lookup_hit", |b| {
-        let cache = Cache::new(1_048_576);
-        // Pre-populate
-        for i in 0..10_000 {
-            cache.insert(format!("ck_{}", i), vec![0x42u8; 64]);
-        }
-        let mut i = 0u64;
-        b.iter(|| {
-            let key = format!("ck_{}", i % 10_000);
-            let _ = black_box(cache.lookup(black_box(&key)));
-            i += 1;
-        });
-    });
-
-    // LOOKUP (miss)
-    group.bench_function("lookup_miss", |b| {
-        let cache = Cache::new(1_048_576);
-        b.iter(|| {
-            let _ = black_box(cache.lookup(black_box("nonexistent")));
-        });
-    });
-
-    // REMOVE
-    group.bench_function("remove", |b| {
-        let cache = Cache::new(1_048_576);
-        // Pre-populate and then benchmark removal (with re-insert to keep data available)
-        let mut i = 0u64;
-        b.iter_batched(
-            || {
-                let key = format!("rm_{}", i);
-                cache.insert(key.clone(), vec![0x42u8; 64]);
-                i += 1;
-                key
-            },
-            |key| {
-                black_box(cache.remove(black_box(&key)));
-            },
-            BatchSize::SmallInput,
-        );
-    });
-
-    group.finish();
-}
-
-// ---------------------------------------------------------------------------
-// 5. Mixed read/write workload (95% GET / 5% PUT — production-like)
+// 4. Mixed read/write workload (95% GET / 5% PUT — production-like)
+//
+// Uses ShardedCuckooTable, the cache actually wired into KvEngine's read
+// path (src/engine/kv_engine.rs), not a standalone cache implementation.
 // ---------------------------------------------------------------------------
 fn bench_mixed_workload(c: &mut Criterion) {
     let (db, path) = make_bench_db("mixed");
-    let cache = Cache::new(1_048_576);
+    let cache = ShardedCuckooTable::new(1_048_576);
 
     // Pre-populate both DB and cache
     for i in 0..10_000 {
         let key = format!("mixed_{}", i);
         let value = vec![0x42u8; 64];
         db.put_raw(key.as_bytes(), &value).unwrap();
-        cache.insert(key, value);
+        cache.insert(
+            &key,
+            SecretEntry {
+                key: key.clone(),
+                payload: value,
+            },
+        );
     }
     db.flush().unwrap();
 
@@ -221,8 +170,15 @@ fn bench_mixed_workload(c: &mut Criterion) {
                 // 5% PUT
                 let key = format!("mixed_new_{}", i);
                 let value = vec![0x42u8; 64];
-                db.put_raw(black_box(key.as_bytes()), black_box(&value)).unwrap();
-                cache.insert(key, value);
+                db.put_raw(black_box(key.as_bytes()), black_box(&value))
+                    .unwrap();
+                cache.insert(
+                    &key,
+                    SecretEntry {
+                        key: key.clone(),
+                        payload: value,
+                    },
+                );
             } else {
                 // 95% GET — cache-first (optimistic read path)
                 let key = format!("mixed_{}", i % 10_000);
@@ -231,7 +187,13 @@ fn bench_mixed_workload(c: &mut Criterion) {
                 } else {
                     let disk = db.get_raw(black_box(key.as_bytes())).unwrap();
                     if let Some(val) = disk {
-                        cache.insert(key, val.clone());
+                        cache.insert(
+                            &key,
+                            SecretEntry {
+                                key: key.clone(),
+                                payload: val.clone(),
+                            },
+                        );
                         black_box(val);
                     }
                 }
@@ -250,7 +212,6 @@ criterion_group!(
     bench_rocksdb_put,
     bench_rocksdb_get,
     bench_rocksdb_batch,
-    bench_cache_operations,
     bench_mixed_workload,
 );
 criterion_main!(benches);

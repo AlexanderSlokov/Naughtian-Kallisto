@@ -1,6 +1,10 @@
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
-use std::thread::JoinHandle;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread::JoinHandle,
+};
 
 use crate::storage::rocksdb_backend::{BatchOp, RocksDbBackend};
 
@@ -15,7 +19,8 @@ pub enum AsyncOp {
 pub struct AsyncFlusherConfig {
     /// Maximum number of operations to buffer before forcing a batch flush.
     pub batch_size: usize,
-    /// Maximum time (in milliseconds) between flushes, even if batch is not full.
+    /// Maximum time (in milliseconds) between flushes, even if batch is not
+    /// full.
     pub flush_interval_ms: u64,
     /// Bounded channel capacity.
     pub channel_capacity: usize,
@@ -38,8 +43,10 @@ impl Default for AsyncFlusherConfig {
 /// a dedicated OS thread for batch-draining writes to RocksDB.
 ///
 /// **Design constraints (from rewrite-in-rust.md):**
-/// - Background `std::thread` (not Tokio task) to avoid blocking the async runtime.
-/// - Drain → batch → `apply_batch()` every `batch_size` ops OR `flush_interval_ms`.
+/// - Background `std::thread` (not Tokio task) to avoid blocking the async
+///   runtime.
+/// - Drain → batch → `apply_batch()` every `batch_size` ops OR
+///   `flush_interval_ms`.
 /// - Graceful shutdown: drain all remaining ops before the worker thread exits.
 pub struct AsyncFlusher {
     sender: crossbeam_channel::Sender<AsyncOp>,
@@ -76,7 +83,8 @@ impl AsyncFlusher {
     }
 
     /// Signal the background worker to stop and wait for it to finish.
-    /// All remaining queued operations are drained and flushed before returning.
+    /// All remaining queued operations are drained and flushed before
+    /// returning.
     pub fn stop(&mut self) {
         self.running.store(false, Ordering::Relaxed);
         if let Some(worker) = self.worker.take() {
@@ -175,9 +183,9 @@ fn convert_op(op: AsyncOp) -> BatchOp {
 // =============================================================================
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::PathBuf};
+
     use super::*;
-    use std::fs;
-    use std::path::PathBuf;
 
     struct TestDb {
         path: PathBuf,
@@ -260,7 +268,10 @@ mod tests {
         flusher.stop();
 
         let result = rocksdb.get_raw(b"timeout_key").unwrap();
-        assert!(result.is_some(), "Timeout flush should have persisted the key");
+        assert!(
+            result.is_some(),
+            "Timeout flush should have persisted the key"
+        );
     }
 
     #[test]
@@ -269,7 +280,7 @@ mod tests {
         let rocksdb = Arc::new(RocksDbBackend::open(db.path_str()).unwrap());
 
         let config = AsyncFlusherConfig {
-            batch_size: 10_000, // very large — won't trigger by count
+            batch_size: 10_000,        // very large — won't trigger by count
             flush_interval_ms: 60_000, // very long — won't trigger by time
             channel_capacity: 1024,
         };
@@ -291,7 +302,11 @@ mod tests {
         for i in 0..10 {
             let key = format!("drain_{}", i);
             let result = rocksdb.get_raw(key.as_bytes()).unwrap();
-            assert!(result.is_some(), "Key '{}' should be drained on shutdown", key);
+            assert!(
+                result.is_some(),
+                "Key '{}' should be drained on shutdown",
+                key
+            );
         }
     }
 
@@ -339,18 +354,22 @@ mod tests {
         )));
 
         // We need to share the flusher sender across threads.
-        // Actually, AsyncFlusher::enqueue takes &self, so we can wrap it in Arc directly
-        // if we make the struct Send+Sync. crossbeam_channel::Sender is Send+Sync,
-        // AtomicBool is Send+Sync, and JoinHandle is Send. So AsyncFlusher is Send.
-        // But for enqueue we only need &self, so let's use Arc directly.
+        // Actually, AsyncFlusher::enqueue takes &self, so we can wrap it in Arc
+        // directly if we make the struct Send+Sync. crossbeam_channel::Sender
+        // is Send+Sync, AtomicBool is Send+Sync, and JoinHandle is Send. So
+        // AsyncFlusher is Send. But for enqueue we only need &self, so let's
+        // use Arc directly.
         drop(flusher); // drop the mutex version
 
         // Better approach: share the sender
-        let flusher = AsyncFlusher::start(rocksdb.clone(), AsyncFlusherConfig {
-            batch_size: 64,
-            flush_interval_ms: 5,
-            channel_capacity: 4096,
-        });
+        let flusher = AsyncFlusher::start(
+            rocksdb.clone(),
+            AsyncFlusherConfig {
+                batch_size: 64,
+                flush_interval_ms: 5,
+                channel_capacity: 4096,
+            },
+        );
         let flusher = Arc::new(flusher);
 
         const NUM_THREADS: usize = 4;
