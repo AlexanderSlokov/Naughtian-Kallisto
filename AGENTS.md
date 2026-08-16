@@ -72,6 +72,10 @@ Typical mistakes should be avoided in the `#[PerformanceCriticalPath]` files:
 
 ## Developing Environment Tips
 
+### Writing documents guidelines
+
+1. Reduce the use of markdown decorators, only use them when hightlighting something very important in the text, not try to make the file looks fancy in prevewing mode.
+
 ### Unsafe Rust Philosophy & Guidelines
 
 `unsafe` Rust is not a forbidden territory; it is a powerful tool. For context, industry-standard, high-performance distributed systems operate safely and efficiently with around 96 `unsafe` blocks across a massive, highly-concurrent codebase. With great power comes great responsibility, unsafe is just a responsibility not a curse.
