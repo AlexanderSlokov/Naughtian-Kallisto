@@ -2,7 +2,7 @@
 
 This file provides guidance to AI agents when working with code in this repository.
 
-## Clean codes principals
+## Coding Guidelines
 
 ### Code style
 
@@ -53,11 +53,11 @@ This file provides guidance to AI agents when working with code in this reposito
 - Structured JSON when logging for debugging / observability.
 - Plain text only for user-facing CLI output.
 
-## Hardware Optimization Philosophy
+## Hardware Optimization 
 
-- Prioritize hardware-level optimizations: branch prediction, cache-friendliness, CPU-friendly patterns, RAM efficiency, disk I/O optimization... 
+- Prioritize hardware-level optimizations: branch prediction, cache-friendliness, CPU-friendly patterns, RAM efficiency, disk I/O optimization... If the project's programming language and platform support it.
 
-TL/DR: treat the computer with the respect it deserves. Should apply throughout the codebase.
+TL/DR: treat the computer with the respect it deserves.
 
 ## Performance Critical Path 
 
@@ -83,13 +83,6 @@ Use `unsafe` when it is the most appropriate solution, e.g. for FFI, extreme per
 3. Keep `unsafe` blocks as minimal and isolated as possible. Instruction: must wrap `unsafe` logic in a safe, well-tested API boundary so we don't have to worry about the underlying memory management.
 4. If you find an existing `unsafe` block that can be refactored into idiomatic, safe Rust without losing performance, or if you need to introduce a new one, point it out. Discussion is welcomed.
 
-### Prerequisites
-
-- git - Version control
-- rustup - Rust installer and toolchain manager
-- make - Build tool (run common workflows)
-- awk - Pattern scanning/processing language
-
 ### Code Organization
 
 - `/cmd/` - Binary entry points only, no business logic
@@ -113,49 +106,27 @@ Use `unsafe` when it is the most appropriate solution, e.g. for FFI, extreme per
 
 - `/tests/` - Integration tests (`tests/e2e_vault_compat.rs` for Vault API compat, run via `make e2e`; `tests/integration/test_persistence.sh` shell-driven persistence check)
 - `/fuzz/` - Fuzzing targets (For future use, not implemented yet)
-- `/docs/` - Full Hugo (Hextra theme) documentation site, unrelated to Rust build tooling (`make docs-serve` / `make docs-build`)
+- `/docs/` - Full Hugo (Hextra theme) documentation site
 
 ### Architecture
 
-**Two-plane network model.** The server binds two ports with two independent Tokio setups — don't merge them:
-- **Data plane (`:8200`)** — `src/event/worker.rs::WorkerPool` spawns one thread per worker, pinned to a CPU core (`core_affinity`), each running its own single-threaded (`new_current_thread`) Tokio runtime, all binding the same port via `SO_REUSEPORT` (`src/server/listener.rs`). Envoy-style thread-per-core, chosen deliberately to avoid work-stealing and cross-core cache traffic.
-- **Control/admin plane (`:8202`)** — `components/kallisto_cluster/src/admin_http.rs::start_admin_server` runs on its own dedicated thread/runtime. Handles `/admin/flush`, `/admin/mode/{batch,immediate}`, `/admin/status`.
+Naughtian Kallisto uses two independent Tokio setups on separate ports:
 
-**Engine layer (`src/engine/`).**
-- `traits::SecretEngine` — async port interface every secret engine backend implements (`read_version`, `put_version`, `soft_delete`, `list_keys`, `force_flush`, ...). Vault KV-v2 semantics: versioned values, soft-delete vs destroy, CAS on write.
-- `engine_registry::EngineRegistry` — routes a URL mount prefix (e.g. `"secret"`) to an `Arc<dyn SecretEngine>`. Uses `ArcSwap` + a write-side `Mutex` for lock-free reads and copy-on-write mounts.
-- `kv_engine::KvEngine` — the concrete `SecretEngine` and the hot path: `ShardedCuckooTable` (in-memory read cache) + `TlsBTreeManager` (thread-local B-tree path index, rebuilt from RocksDB keys on startup) + `RocksDbBackend` (durable storage) + `LockFreeQueue`-fed background flusher. `SyncMode::Immediate` (sync durability per write) vs `Batch` (async queued flush) is toggled live via the admin API.
-- `KallistoCore` (`src/lib.rs`) is the top-level handle tying `EngineRegistry` + the default `KvEngine` (mounted at `"secret"`) together; both the data-plane `AppState` and the admin server hold an `Arc` to it.
+- Data Plane (port 8200): Single-threaded Tokio runtime per CPU core (thread-per-core pinned with core_affinity, using SO_REUSEPORT in src/server/listener.rs and src/event/worker.rs). Avoids work-stealing and cross-core cache traffic.
+- Admin Plane (port 8202): Runs on a dedicated thread in components/kallisto_cluster/src/admin_http.rs. Handles /admin/flush, /admin/mode/{batch,immediate}, and /admin/status.
 
-**HTTP surface.** `src/server/http_handler.rs::vault_kv_router` mounts `/v1/:mount/data/*path` (GET/POST/PUT/PATCH/DELETE), `/v1/:mount/subkeys/*path`, `/v1/:mount/{delete,undelete,destroy}/*path`, `/v1/:mount/metadata/*path`. `:mount` resolves through `EngineRegistry`.
+Engine Layer (src/engine/):
+- traits::SecretEngine: Async port interface implementing Vault KV-v2 semantics (versioning, CAS, soft-delete, destroy).
+- engine_registry::EngineRegistry: Maps URL mount prefixes to Arc<dyn SecretEngine> using ArcSwap and write-side Mutex.
+- kv_engine::KvEngine: Main implementation combining ShardedCuckooTable (cache), TlsBTreeManager (thread-local path index), RocksDbBackend (storage), and LockFreeQueue (background flusher). Live sync modes (Immediate vs Batch) are controlled via admin API.
+- KallistoCore (src/lib.rs): Top-level handle tying EngineRegistry and default KvEngine together, shared between Data Plane and Admin Server.
 
-**Tests.** Unit tests live inline (`#[cfg(test)] mod tests`) next to the code, e.g. `src/engine/engine_registry.rs` mocks `SecretEngine` with a handwritten `MockEngine`, not a mocking framework.
+HTTP Routes:
+- Vault KV-v2 compatible endpoints mounted under /v1/:mount/ via src/server/http_handler.rs (data, subkeys, metadata, delete/undelete/destroy).
 
-### KV Engine (Pre-Rust rewrite — historical reference only)
+Tests:
+- Inline unit tests (mod tests) using handwritten mocks (e.g. MockEngine in src/engine/engine_registry.rs) instead of mocking frameworks.
 
-The following C++ layout predates the Rust rewrite and is **not present in the current working tree** (no `include/`, `rust_integrates/`, or `.cpp` files exist on disk). Kept here only as historical/design context for why the current Rust module boundaries (`traits.rs`, `engine_registry.rs`, `kv_engine.rs`) look the way they do.
-
-```
-include/kallisto/engine/
-├── engine_concept.hpp      # C++20 concept ValidEngine
-├── i_secret_engine.hpp     # Port interface (abstract base)
-├── engine_registry.hpp     # Router: prefix → engine mapping
-└── kv_engine.hpp           # KV engine (first concrete impl)
-
-src/engine/
-├── kv_engine.cpp           # KV engine implementation
-├── engine_registry.cpp     # Registry implementation
-├── test_kv_engine.cpp      # KvEngine test suite
-└── test_engine_registry.cpp # EngineRegistry test suite (GMock)
-
-rust_integrates/            # Rust Workspace (Control Plane)
-├── Cargo.toml
-├── ffi_bridge/             # FFI Adapter (using cxx)
-├── core_crypto/            # KEK Keyring, Vault Transit Client, DEK management
-├── telemetry/              # Prometheus exporter, Audit Log (Tokio)
-├── control_plane/          # Gossip (foca), Configuration
-└── kallisto_tui/           # Admin Terminal UI (ratatui)
-```
 
 ## Building
 
