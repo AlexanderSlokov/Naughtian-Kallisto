@@ -1,5 +1,5 @@
 <!--
-Thank you for contributing to Kallisto!
+Thank you for contributing to Naughtian Kallisto!
 
 PR Title Format:
 1. module [, module2, module3]: what's changed
@@ -24,7 +24,7 @@ What's Changed:
 
 ### Related changes
 
-- [ ] PR to update `pingcap/docs`/`pingcap/docs-cn`:
+- [ ] PR to update `main/docs-en`/`main/docs-vn`:
 - [ ] Need to cherry-pick to the release branch
 
 ### Check List

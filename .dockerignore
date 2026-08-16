@@ -1,33 +1,12 @@
-# Git
-.git
-.gitignore
-.gitattributes
+# Drop everything out
+*
 
-# IDEs & Editor
-.vscode
-.devcontainer
-.clang-format
-
-# Build directories & Dependencies
-build/
-target/
-.cache/
-vcpkg_installed/
-
-# Logs & Data
-logs/
-kallisto/
-*.log
-
-# Docs & Meta
-docs/
-README.md
-TODO.md
-WHITEPAPER.md
-
-# OS generated files
-.DS_Store
-Thumbs.db
-
-# Other unneeded files for build
-ghz-web
+# Then only hand-pick nessessary things
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!src/
+!cmd/
+!components/
+!tests/
+!benchmarks/

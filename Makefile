@@ -6,6 +6,7 @@ SHELL := bash
 # Docker
 REGISTRY ?= docker.io/thanhzeus2016
 DEVCONTAINER_IMAGE ?= naughtain-kallisto-devcontainer
+CONTAINER_IMAGE ?= naughtain-kallisto
 DEVCONTAINER_TAG ?= 1.0.0
 CLOUD_BUILDER ?= cloud-thanhzeus2016-aleksandr-slokov-cloud-builder
 TARGET = kallisto
@@ -50,15 +51,15 @@ devcontainer_local_build:
 		--build-arg GIT_BRANCH=${KALLISTO_BUILD_GIT_BRANCH}
 
 docker-build:
-	@docker build -t $(REGISTRY)/$(DEVCONTAINER_IMAGE):latest .
+	@docker build -t $(REGISTRY)/$(CONTAINER_IMAGE):latest .
 
 docker-test:
-	@docker build --target tester -t $(REGISTRY)/$(DEVCONTAINER_IMAGE):latest .
-	@docker run --rm $(REGISTRY)/$(DEVCONTAINER_IMAGE):latest make test
+	@docker build --target tester -t $(REGISTRY)/$(CONTAINER_IMAGE):latest .
+	@docker run --rm $(REGISTRY)/$(CONTAINER_IMAGE):latest make test
 
 docker-run:
 	@docker run -d --name kallisto -p 8200:8200 -p 8202:8202 \
-	  -v my-kallisto-data:/kallisto/data $(REGISTRY)/$(DEVCONTAINER_IMAGE):latest
+	  -v my-kallisto-data:/kallisto/data $(REGISTRY)/$(CONTAINER_IMAGE):latest
 
 
 # Build System
@@ -82,10 +83,11 @@ bench-server:
 bench-release:
 	@bash benchmarks/server/run_release_bench.sh
 
-# Laptop benchmark (wrk2 — tailored for mid-range DEV machines)
-# Target rate 30k RPS. Expected result: ~1.39ms (median of 3) avg latency for both GET and PUT. (sampled on AMD Ryzen 5 3550H, 15th Aug 2026). 
+# This benchmark is solely tailored for my machine.
+# Target throughput = 30k RPS.
+# Expected result: ~1.39ms (median of 3) avg latency for both GET and PUT.
+# (Sampled on AMD Ryzen 5 3550H, 15th Aug 2026).
 # --------------------------------------------------------------------
-
 bench-laptop:
 	@bash benchmarks/server/run_release_bench.sh 4 100 10s 30000
 
