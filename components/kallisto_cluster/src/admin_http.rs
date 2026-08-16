@@ -1,14 +1,14 @@
+use std::{sync::Arc, thread};
+
 use axum::{
-    routing::{get, post},
-    Router, Json, http::StatusCode,
+    Json, Router,
     extract::State,
+    http::StatusCode,
+    routing::{get, post},
 };
-use serde_json::{json, Value};
+use naughtian_kallisto::{KallistoCore, engine::kv_engine::SyncMode};
+use serde_json::{Value, json};
 use tokio::sync::oneshot;
-use std::thread;
-use std::sync::Arc;
-use naughtian_kallisto::KallistoCore;
-use naughtian_kallisto::engine::kv_engine::SyncMode;
 
 pub struct AdminServer {
     shutdown_tx: oneshot::Sender<()>,
@@ -20,14 +20,9 @@ pub struct AppState {
     pub core: Arc<KallistoCore>,
 }
 
-pub fn start_admin_server(
-    core: Arc<KallistoCore>,
-    port: u16,
-) -> AdminServer {
+pub fn start_admin_server(core: Arc<KallistoCore>, port: u16) -> AdminServer {
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let state = AppState {
-        core,
-    };
+    let state = AppState { core };
 
     let thread_handle = thread::spawn(move || {
         let rt = tokio::runtime::Builder::new_current_thread()
@@ -54,11 +49,10 @@ pub fn start_admin_server(
                 }
             };
 
-            let server = axum::serve(listener, app)
-                .with_graceful_shutdown(async move {
-                    let _ = shutdown_rx.await;
-                    println!("[Rust Admin Server] Shutdown signal received.");
-                });
+            let server = axum::serve(listener, app).with_graceful_shutdown(async move {
+                let _ = shutdown_rx.await;
+                println!("[Rust Admin Server] Shutdown signal received.");
+            });
 
             if let Err(e) = server.await {
                 eprintln!("[Rust Admin Server] Server error: {}", e);
@@ -81,26 +75,38 @@ pub fn stop_admin_server(server: AdminServer) {
 
 async fn handle_save(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     state.core.force_flush().await;
-    (StatusCode::OK, Json(json!({"status": "OK", "message": "Database flushed to disk."})))
+    (
+        StatusCode::OK,
+        Json(json!({"status": "OK", "message": "Database flushed to disk."})),
+    )
 }
 
 async fn handle_mode_batch(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     state.core.change_sync_mode(SyncMode::Batch);
-    (StatusCode::OK, Json(json!({"status": "OK", "message": "Mode changed to BATCH."})))
+    (
+        StatusCode::OK,
+        Json(json!({"status": "OK", "message": "Mode changed to BATCH."})),
+    )
 }
 
 async fn handle_mode_immediate(State(state): State<AppState>) -> (StatusCode, Json<Value>) {
     state.core.change_sync_mode(SyncMode::Immediate);
-    (StatusCode::OK, Json(json!({"status": "OK", "message": "Mode changed to IMMEDIATE."})))
+    (
+        StatusCode::OK,
+        Json(json!({"status": "OK", "message": "Mode changed to IMMEDIATE."})),
+    )
 }
 
 async fn handle_status() -> (StatusCode, Json<Value>) {
-    (StatusCode::OK, Json(json!({
-        "status": "OK",
-        "version": env!("CARGO_PKG_VERSION"),
-        "features": {
-            "control_plane_port": 8202,
-            "data_plane_port": 8200
-        }
-    })))
+    (
+        StatusCode::OK,
+        Json(json!({
+            "status": "OK",
+            "version": env!("CARGO_PKG_VERSION"),
+            "features": {
+                "control_plane_port": 8202,
+                "data_plane_port": 8200
+            }
+        })),
+    )
 }

@@ -1,27 +1,25 @@
 # Naughtian Kallisto - A High-Performance Operational Secret Engine
 
 <p align="center">
-  <img src="https://img.shields.io/badge/C%2B%2B-20-blue.svg?style=for-the-badge&logo=c%2B%2B" alt="Rust 2024 edition">
+  <img src="https://img.shields.io/badge/Rust-2024-blue.svg?style=for-the-badge&logo=rust" alt="Rust 2024 edition">
   <img src="https://img.shields.io/badge/License-AGPLv3-red.svg?style=for-the-badge" alt="License">
 </p>
 
-Naughtian Kallisto is a High-Performance Secret Dataplane built with Rust, designed for high-throughput and low-latency (armortized 1 millisecond) reads.
+Naughtian Kallisto is a high performance, universal secret engine built with Rust, designed for high-throughput and low-latency (< 5ms). It provides a secure and efficient way to store and distribute secrets for micro-services, while can withstand a massive amount of GET requests per second for Roots of Trusts.
 
-It provides a secure and efficient way to store and retrieve secrets for micro-services, while can withstand a massive amount of RPS for Roots of Trusts.
-
-Please keep in mind that Naughtian Kallisto can not run by itself and should be integrated into existing secret management systems (that is, Hashicorp Vault, Infisical, Conjur, etc). This is an intentional design decision to avoid unnecessary complexity and overhead about security concerns, while providing as highest throughput as possible.
+Please keep in mind that Naughtian Kallisto should be integrated into existing secret management systems (that is, Hashicorp Vault, Infisical, Conjur, etc). This is an intentional design decision to avoid unnecessary complexity and overhead about security concerns, while providing as highest throughput as possible.
 
 ## Use cases
 
 The main purposes of Naughtian Kallisto are:
 
-- **A Dataplane every Roots of Trust want:** serve secrets in a fast, scalable and secure way, right at the node level without self DDoS-ing your precious Vault cluster.
+- **A Dataplane every Root-of-Trust wants:** serve secrets from upstream secret management systems in a fast, scalable and secure way, right at the node level without self DDoS-ing your own infrastructure.
 
-- **Secure Secret Storage**: Naughtian Kallisto by itself can work in standalone mode to store key/value pairs while encrypts data before writing it to persistent storage, so your system can use it as a DaemonSet stay on each node, store and use secrets locally and securely.
+- **Secure secret storage**: Naughtian Kallisto by itself can work in standalone mode to store key/value pairs while encrypts data before writing it to persistent storage, so your system can use secrets without letting `.env` files lying around.
 
-- **Secure edge config server**: Naughtian Kallisto can be use as a secure config server at edge, providing shared TLS certificates, API keys,... for your API gateway, LB fleet,...
+- **Secure edge config server**: Naughtian Kallisto can be use as a secure config server at edge, providing shared TLS certificates, API keys,... for your API gateway, LB fleet,....
 
-# IMPORTANT NOTICES
+## IMPORTANT NOTICES
 
 1. Be advised, `Naughtian Kallisto` from version `1.0.0` to `2.0.0` is not offically released as the production-ready application. We will not take any accountability for application security, compliance or stability if you use `Naughtian Kallisto` in your production environment, directly or indirectly, and causing damages for your own businesses. Use as your own consents.
 

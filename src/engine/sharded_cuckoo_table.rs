@@ -1,6 +1,8 @@
-use crate::engine::cuckoo_table::{CuckooTable, MemoryStats, SecretEntry};
-use siphasher::sip::SipHasher24;
 use std::hash::{Hash, Hasher};
+
+use siphasher::sip::SipHasher24;
+
+use crate::engine::cuckoo_table::{CuckooTable, MemoryStats, SecretEntry};
 
 pub struct ShardedCuckooTable {
     shards: Vec<CuckooTable>,
@@ -76,5 +78,12 @@ impl ShardedCuckooTable {
             total.total_memory_allocated += stats.total_memory_allocated;
         }
         total
+    }
+    pub fn get_shard_stats(&self) -> Vec<MemoryStats> {
+        let mut shard_stats = Vec::with_capacity(Self::NUM_SHARDS);
+        for shard in &self.shards {
+            shard_stats.push(shard.get_memory_stats());
+        }
+        shard_stats
     }
 }

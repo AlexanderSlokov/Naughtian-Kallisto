@@ -1,16 +1,27 @@
-use async_trait::async_trait;
-use std::collections::BTreeSet;
-use crate::engine::sharded_cuckoo_table::ShardedCuckooTable;
-use crate::engine::tls_btree_manager::TlsBTreeManager;
-use crate::engine::cuckoo_table::SecretEntry;
-use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
-use std::sync::Arc;
-use std::thread::JoinHandle;
-use crate::engine::lock_free_queue::{LockFreeQueue, QueueError};
+use std::{
+    collections::BTreeSet,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU8, Ordering},
+    },
+    thread::JoinHandle,
+};
 
-use crate::storage::rocksdb_backend::{BatchOp, RocksDbBackend};
-use super::error::EngineError;
-use super::traits::{KeyMetadata, SecretEngine, SecretPayload, VersionState};
+use async_trait::async_trait;
+
+use super::{
+    error::EngineError,
+    traits::{KeyMetadata, SecretEngine, SecretPayload, VersionState},
+};
+use crate::{
+    engine::{
+        cuckoo_table::SecretEntry,
+        lock_free_queue::{LockFreeQueue, QueueError},
+        sharded_cuckoo_table::ShardedCuckooTable,
+        tls_btree_manager::TlsBTreeManager,
+    },
+    storage::rocksdb_backend::{BatchOp, RocksDbBackend},
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SyncMode {
@@ -35,11 +46,12 @@ pub struct KvEngine {
 
 impl KvEngine {
     pub fn open(db_path: &str) -> Result<Self, EngineError> {
-        let rocksdb = Arc::new(RocksDbBackend::open(db_path).map_err(|e| {
-            EngineError::StorageError(format!("Failed to open RocksDB: {}", e))
-        })?);
+        let rocksdb =
+            Arc::new(RocksDbBackend::open(db_path).map_err(|e| {
+                EngineError::StorageError(format!("Failed to open RocksDB: {}", e))
+            })?);
 
-        let cache = Arc::new(ShardedCuckooTable::new(1024 * 1024));
+        let cache = Arc::new(ShardedCuckooTable::new(256 * 1024));
         let path_index = Arc::new(TlsBTreeManager::new(3));
         let sync_mode = AtomicU8::new(SyncMode::Batch as u8); // Default: Batch
 
@@ -87,20 +99,26 @@ impl KvEngine {
         }
     }
 
-    fn read_raw_optimistic<F, R>(&self, key: &str, mut f: F) -> Result<Option<R>, EngineError> 
+    fn read_raw_optimistic<F, R>(&self, key: &str, mut f: F) -> Result<Option<R>, EngineError>
     where
-        F: FnMut(&[u8]) -> R
+        F: FnMut(&[u8]) -> R,
     {
         if let Some(res) = self.cache.lookup_map(key, |entry| f(&entry.payload)) {
             return Ok(Some(res));
         }
-        if let Some(disk) = self.rocksdb.get_raw(key.as_bytes()).map_err(|e| {
-            EngineError::StorageError(format!("RocksDB get error: {}", e))
-        })? {
-            self.cache.insert(key, SecretEntry {
-                key: key.to_string(),
-                payload: disk.clone(),
-            });
+        if let Some(disk) = self
+            .rocksdb
+            .get_raw(key.as_bytes())
+            .map_err(|e| EngineError::StorageError(format!("RocksDB get error: {}", e)))?
+        {
+            self.cache.insert(
+                key,
+                SecretEntry {
+                    key: key.to_string(),
+                    payload: disk.clone(),
+                    referenced: std::sync::atomic::AtomicBool::new(true),
+                },
+            );
             return Ok(Some(f(&disk)));
         }
         Ok(None)
@@ -134,8 +152,6 @@ impl KvEngine {
         })?;
         Ok(bytes.into_vec())
     }
-
-
 
     fn serialize_metadata(meta: &KeyMetadata) -> Result<Vec<u8>, EngineError> {
         let bytes = rkyv::to_bytes::<_, 256>(meta).map_err(|e| {
@@ -197,32 +213,43 @@ impl SecretEngine for KvEngine {
         }
     }
 
-    async fn read_version(&self, path: &str, version: u32) -> Result<(SecretPayload, VersionState), EngineError> {
+    async fn read_version(
+        &self,
+        path: &str,
+        version: u32,
+    ) -> Result<(SecretPayload, VersionState), EngineError> {
         let mkey = Self::build_meta_key(path);
-        
+
         // Zero-copy Metadata extraction (No Vec<VersionState> heap allocation)
-        // SAFETY: Bytes come directly from RocksDB or CuckooCache which we wrote ourselves using rkyv.
-        let (target_version, is_destroyed, is_deleted, created_time_ms, deletion_time_ms, found) = self.read_raw_optimistic(&mkey, |bytes| {
-            let archived_meta = unsafe { rkyv::archived_root::<KeyMetadata>(bytes) };
-            let target = if version == 0 { archived_meta.current_version } else { version };
-            
-            let mut destroyed = false;
-            let mut deleted = false;
-            let mut created = 0;
-            let mut deletion_time = 0;
-            let mut found = false;
-            for v in archived_meta.versions.iter() {
-                if v.version_id == target {
-                    destroyed = v.destroyed;
-                    deleted = v.deletion_time_ms > 0;
-                    created = v.created_time_ms;
-                    deletion_time = v.deletion_time_ms;
-                    found = true;
-                    break;
+        // SAFETY: Bytes come directly from RocksDB or CuckooCache which we wrote
+        // ourselves using rkyv.
+        let (target_version, is_destroyed, is_deleted, created_time_ms, deletion_time_ms, found) =
+            self.read_raw_optimistic(&mkey, |bytes| {
+                let archived_meta = unsafe { rkyv::archived_root::<KeyMetadata>(bytes) };
+                let target = if version == 0 {
+                    archived_meta.current_version
+                } else {
+                    version
+                };
+
+                let mut destroyed = false;
+                let mut deleted = false;
+                let mut created = 0;
+                let mut deletion_time = 0;
+                let mut found = false;
+                for v in archived_meta.versions.iter() {
+                    if v.version_id == target {
+                        destroyed = v.destroyed;
+                        deleted = v.deletion_time_ms > 0;
+                        created = v.created_time_ms;
+                        deletion_time = v.deletion_time_ms;
+                        found = true;
+                        break;
+                    }
                 }
-            }
-            (target, destroyed, deleted, created, deletion_time, found)
-        })?.ok_or(EngineError::NotFound)?;
+                (target, destroyed, deleted, created, deletion_time, found)
+            })?
+            .ok_or(EngineError::NotFound)?;
 
         if target_version == 0 || !found {
             return Err(EngineError::InvalidVersion(version));
@@ -254,11 +281,18 @@ impl SecretEngine for KvEngine {
             };
             Ok((res, version_state))
         } else {
-            Err(EngineError::StorageError("Missing version payload".to_string()))
+            Err(EngineError::StorageError(
+                "Missing version payload".to_string(),
+            ))
         }
     }
 
-    async fn put_version(&self, path: &str, payload: &SecretPayload, cas: Option<u32>) -> Result<(), EngineError> {
+    async fn put_version(
+        &self,
+        path: &str,
+        payload: &SecretPayload,
+        cas: Option<u32>,
+    ) -> Result<(), EngineError> {
         let mkey = Self::build_meta_key(path);
         let mut meta = match self.read_metadata(path).await {
             Ok(m) => m,
@@ -290,14 +324,28 @@ impl SecretEngine for KvEngine {
             key: vkey.clone(),
             value: serialized_payload.clone(),
         })?;
-        self.cache.insert(&vkey, SecretEntry { key: vkey.clone(), payload: serialized_payload });
+        self.cache.insert(
+            &vkey,
+            SecretEntry {
+                key: vkey.clone(),
+                payload: serialized_payload,
+                referenced: std::sync::atomic::AtomicBool::new(true),
+            },
+        );
 
         let serialized_meta = Self::serialize_metadata(&meta)?;
         self.enqueue_or_execute(AsyncOp::Put {
             key: mkey.clone(),
             value: serialized_meta.clone(),
         })?;
-        self.cache.insert(&mkey, SecretEntry { key: mkey.clone(), payload: serialized_meta });
+        self.cache.insert(
+            &mkey,
+            SecretEntry {
+                key: mkey.clone(),
+                payload: serialized_meta,
+                referenced: std::sync::atomic::AtomicBool::new(true),
+            },
+        );
 
         self.path_index.insert_path_if_absent(path);
 
@@ -326,7 +374,14 @@ impl SecretEngine for KvEngine {
             key: mkey.clone(),
             value: serialized_meta.clone(),
         })?;
-        self.cache.insert(&mkey, SecretEntry { key: mkey.clone(), payload: serialized_meta });
+        self.cache.insert(
+            &mkey,
+            SecretEntry {
+                key: mkey.clone(),
+                payload: serialized_meta,
+                referenced: std::sync::atomic::AtomicBool::new(true),
+            },
+        );
 
         Ok(())
     }
@@ -356,7 +411,14 @@ impl SecretEngine for KvEngine {
             key: mkey.clone(),
             value: serialized_meta.clone(),
         })?;
-        self.cache.insert(&mkey, SecretEntry { key: mkey.clone(), payload: serialized_meta });
+        self.cache.insert(
+            &mkey,
+            SecretEntry {
+                key: mkey.clone(),
+                payload: serialized_meta,
+                referenced: std::sync::atomic::AtomicBool::new(true),
+            },
+        );
 
         Ok(())
     }
@@ -387,7 +449,14 @@ impl SecretEngine for KvEngine {
             key: mkey.clone(),
             value: serialized_meta.clone(),
         })?;
-        self.cache.insert(&mkey, SecretEntry { key: mkey.clone(), payload: serialized_meta });
+        self.cache.insert(
+            &mkey,
+            SecretEntry {
+                key: mkey.clone(),
+                payload: serialized_meta,
+                referenced: std::sync::atomic::AtomicBool::new(true),
+            },
+        );
 
         Ok(())
     }
@@ -431,9 +500,9 @@ impl SecretEngine for KvEngine {
     }
 
     async fn force_flush(&self) -> Result<(), EngineError> {
-        self.rocksdb.flush().map_err(|e| {
-            EngineError::StorageError(format!("RocksDB flush error: {}", e))
-        })
+        self.rocksdb
+            .flush()
+            .map_err(|e| EngineError::StorageError(format!("RocksDB flush error: {}", e)))
     }
 }
 
@@ -447,7 +516,7 @@ fn async_worker_loop(
 
     while running.load(Ordering::Relaxed) {
         let mut dequeued = false;
-        
+
         if let Ok(op) = queue.dequeue() {
             dequeued = true;
             match op {
@@ -500,9 +569,9 @@ fn now_ms() -> u64 {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::PathBuf};
+
     use super::*;
-    use std::fs;
-    use std::path::PathBuf;
 
     struct TestDb {
         path: PathBuf,
@@ -672,9 +741,9 @@ mod tests {
         permissions.set_readonly(true);
         fs::set_permissions(read_only_dir, permissions).unwrap();
 
-        // On many Linux setups, we can still write inside folders we own even if set to read-only 
-        // using metadata perms, or RocksDB might fail to open or write.
-        // Let's test if open or put_version fails.
+        // On many Linux setups, we can still write inside folders we own even if set to
+        // read-only using metadata perms, or RocksDB might fail to open or
+        // write. Let's test if open or put_version fails.
         let engine = KvEngine::open(read_only_dir);
         if let Ok(eng) = engine {
             eng.change_sync_mode(SyncMode::Immediate);
@@ -739,4 +808,3 @@ mod tests {
         assert_eq!(meta.current_version as usize, OPS_PER_THREAD);
     }
 }
-

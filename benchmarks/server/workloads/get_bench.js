@@ -9,10 +9,10 @@ import { SharedArray } from 'k6/data';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8200';
 
-// Pre-generate 1000 paths — SharedArray is read-only and shared across VUs
+// Pre-generate 256000 paths — SharedArray is read-only and shared across VUs
 const paths = new SharedArray('get_paths', function () {
   const items = [];
-  for (let i = 0; i < 1000; i++) {
+  for (let i = 0; i < 256000; i++) {
     items.push(`/v1/secret/data/bench/s${i}`);
   }
   return items;

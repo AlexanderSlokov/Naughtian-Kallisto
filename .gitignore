@@ -40,3 +40,5 @@ ghz-web
 /.cache
 docs/examples/*
 !docs/examples/.gitkeep
+*.env
+/.scannerwork

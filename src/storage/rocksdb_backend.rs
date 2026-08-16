@@ -1,6 +1,9 @@
+use std::{
+    path::Path,
+    sync::atomic::{AtomicBool, Ordering},
+};
+
 use rocksdb::{DB, Options, WriteBatch, WriteOptions};
-use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Represents a single operation in a write batch.
 pub enum BatchOp {
@@ -8,7 +11,8 @@ pub enum BatchOp {
     Delete { key: String },
 }
 
-/// Safe wrapper around `rocksdb::DB` providing a clean, type-safe persistence API.
+/// Safe wrapper around `rocksdb::DB` providing a clean, type-safe persistence
+/// API.
 ///
 /// Replaces the legacy C++ `RocksDBStorage` class, eliminating manual
 /// length-prefixed serialization in favor of `bincode` at the caller level.
@@ -21,7 +25,8 @@ impl RocksDbBackend {
     /// Open (or create) a RocksDB database at the given path.
     ///
     /// Automatically configures parallelism based on available CPU cores
-    /// and optimizes for level-style compaction (good for mixed read/write workloads).
+    /// and optimizes for level-style compaction (good for mixed read/write
+    /// workloads).
     pub fn open<P: AsRef<Path>>(path: P) -> Result<Self, rocksdb::Error> {
         let mut opts = Options::default();
         opts.create_if_missing(true);
@@ -40,7 +45,8 @@ impl RocksDbBackend {
 
     /// Toggle WAL sync mode.
     /// - `true` = IMMEDIATE (every write is fsync'd — durable but slower)
-    /// - `false` = BATCH (writes buffered in OS page cache — fast but risks data loss on crash)
+    /// - `false` = BATCH (writes buffered in OS page cache — fast but risks
+    ///   data loss on crash)
     pub fn set_sync(&self, sync: bool) {
         self.sync.store(sync, Ordering::Relaxed);
     }
@@ -62,7 +68,8 @@ impl RocksDbBackend {
         self.db.get(key)
     }
 
-    /// Delete a single key. Idempotent — deleting a non-existent key is not an error.
+    /// Delete a single key. Idempotent — deleting a non-existent key is not an
+    /// error.
     pub fn del_raw(&self, key: &[u8]) -> Result<(), rocksdb::Error> {
         let mut opts = WriteOptions::default();
         opts.set_sync(self.sync.load(Ordering::Relaxed));
@@ -134,9 +141,9 @@ impl RocksDbBackend {
 // =============================================================================
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::PathBuf};
+
     use super::*;
-    use std::fs;
-    use std::path::PathBuf;
 
     /// RAII test database helper — cleans up on drop.
     struct TestDb {
@@ -444,14 +451,8 @@ mod tests {
 
         backend.apply_batch(&ops).unwrap();
 
-        assert_eq!(
-            backend.get_raw(b"batch_k1").unwrap().unwrap(),
-            b"batch_v1"
-        );
-        assert_eq!(
-            backend.get_raw(b"batch_k2").unwrap().unwrap(),
-            b"batch_v2"
-        );
+        assert_eq!(backend.get_raw(b"batch_k1").unwrap().unwrap(), b"batch_v1");
+        assert_eq!(backend.get_raw(b"batch_k2").unwrap().unwrap(), b"batch_v2");
         assert!(backend.get_raw(b"to_delete").unwrap().is_none());
     }
 

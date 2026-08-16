@@ -1,12 +1,10 @@
-use naughtian_kallisto::KallistoCore;
-use naughtian_kallisto::server::http_handler::AppState;
-use naughtian_kallisto::event::worker::WorkerPool;
-use std::sync::Arc;
-use std::path::PathBuf;
+use std::{path::PathBuf, sync::Arc};
+
 use control_plane::admin_http::{start_admin_server, stop_admin_server};
-use tokio::time::{sleep, Duration};
+use naughtian_kallisto::{KallistoCore, event::worker::WorkerPool, server::http_handler::AppState};
 use reqwest::Client;
 use serde_json::json;
+use tokio::time::{Duration, sleep};
 
 #[tokio::test]
 async fn test_phase4_integration() {
@@ -32,7 +30,10 @@ async fn test_phase4_integration() {
 
     // 1. Write secret
     let res = client
-        .post(format!("http://127.0.0.1:{}/v1/secret/data/test_key", data_port))
+        .post(format!(
+            "http://127.0.0.1:{}/v1/secret/data/test_key",
+            data_port
+        ))
         .json(&json!({"value": "super_secret", "ttl": 3600}))
         .send()
         .await
@@ -41,7 +42,10 @@ async fn test_phase4_integration() {
 
     // 2. Read secret
     let res = client
-        .get(format!("http://127.0.0.1:{}/v1/secret/data/test_key", data_port))
+        .get(format!(
+            "http://127.0.0.1:{}/v1/secret/data/test_key",
+            data_port
+        ))
         .send()
         .await
         .unwrap();
@@ -51,7 +55,10 @@ async fn test_phase4_integration() {
 
     // 3. Admin API: /admin/mode/immediate
     let res = client
-        .post(format!("http://127.0.0.1:{}/admin/mode/immediate", admin_port))
+        .post(format!(
+            "http://127.0.0.1:{}/admin/mode/immediate",
+            admin_port
+        ))
         .send()
         .await
         .unwrap();
@@ -75,7 +82,10 @@ async fn test_phase4_integration() {
 
     // 6. Soft-delete
     let res = client
-        .post(format!("http://127.0.0.1:{}/v1/secret/delete/test_key", data_port))
+        .post(format!(
+            "http://127.0.0.1:{}/v1/secret/delete/test_key",
+            data_port
+        ))
         .json(&json!({"versions": [1]}))
         .send()
         .await
@@ -84,7 +94,10 @@ async fn test_phase4_integration() {
 
     // Read should fail
     let res = client
-        .get(format!("http://127.0.0.1:{}/v1/secret/data/test_key", data_port))
+        .get(format!(
+            "http://127.0.0.1:{}/v1/secret/data/test_key",
+            data_port
+        ))
         .send()
         .await
         .unwrap();
@@ -92,7 +105,10 @@ async fn test_phase4_integration() {
 
     // 7. Undelete
     let res = client
-        .post(format!("http://127.0.0.1:{}/v1/secret/undelete/test_key", data_port))
+        .post(format!(
+            "http://127.0.0.1:{}/v1/secret/undelete/test_key",
+            data_port
+        ))
         .json(&json!({"versions": [1]}))
         .send()
         .await
@@ -101,7 +117,10 @@ async fn test_phase4_integration() {
 
     // Read should succeed
     let res = client
-        .get(format!("http://127.0.0.1:{}/v1/secret/data/test_key", data_port))
+        .get(format!(
+            "http://127.0.0.1:{}/v1/secret/data/test_key",
+            data_port
+        ))
         .send()
         .await
         .unwrap();
@@ -109,7 +128,10 @@ async fn test_phase4_integration() {
 
     // 8. Destroy
     let res = client
-        .put(format!("http://127.0.0.1:{}/v1/secret/destroy/test_key", data_port))
+        .put(format!(
+            "http://127.0.0.1:{}/v1/secret/destroy/test_key",
+            data_port
+        ))
         .json(&json!({"versions": [1]}))
         .send()
         .await
@@ -118,7 +140,10 @@ async fn test_phase4_integration() {
 
     // Read should fail
     let res = client
-        .get(format!("http://127.0.0.1:{}/v1/secret/data/test_key", data_port))
+        .get(format!(
+            "http://127.0.0.1:{}/v1/secret/data/test_key",
+            data_port
+        ))
         .send()
         .await
         .unwrap();

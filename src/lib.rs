@@ -1,11 +1,14 @@
-pub mod server;
 pub mod engine;
-pub mod storage;
 pub mod event;
+pub mod server;
+pub mod storage;
 
 use std::sync::Arc;
-use crate::engine::engine_registry::EngineRegistry;
-use crate::engine::kv_engine::{KvEngine, SyncMode};
+
+use crate::engine::{
+    engine_registry::EngineRegistry,
+    kv_engine::{KvEngine, SyncMode},
+};
 
 #[derive(Clone)]
 pub struct KallistoCore {

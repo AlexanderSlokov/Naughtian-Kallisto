@@ -1,13 +1,15 @@
 use std::thread::JoinHandle;
 
-use crate::server::http_handler::{vault_kv_router, AppState};
-use crate::server::listener::bind_reuseport;
+use crate::server::{
+    http_handler::{AppState, vault_kv_router},
+    listener::bind_reuseport,
+};
 
 /// Manages a pool of Tokio single-threaded runtimes.
-/// 
+///
 /// This replicates the thread-per-core architecture of the legacy C++ system,
-/// bypassing the Tokio multi-thread scheduler's work-stealing overhead for better
-/// predictable tail latency and cache-locality under extreme load.
+/// bypassing the Tokio multi-thread scheduler's work-stealing overhead for
+/// better predictable tail latency and cache-locality under extreme load.
 pub struct WorkerPool {
     handles: Vec<JoinHandle<()>>,
 }
@@ -17,7 +19,7 @@ impl WorkerPool {
     /// and listens on the same SO_REUSEPORT bound socket.
     pub fn spawn(num_workers: usize, port: u16, state: AppState) -> Self {
         let core_ids = core_affinity::get_core_ids().unwrap_or_default();
-        
+
         let handles = (0..num_workers)
             .map(|worker_idx| {
                 let state = state.clone();
@@ -47,21 +49,21 @@ impl WorkerPool {
                             // The kernel load balances incoming TCP connections among them
                             let std_listener = bind_reuseport(port).expect("Failed to bind port");
                             std_listener.set_nonblocking(true).unwrap();
-                            
+
                             let listener = tokio::net::TcpListener::from_std(std_listener).unwrap();
                             let app = vault_kv_router(state);
-                            
+
                             axum::serve(listener, app).await.unwrap();
                         });
                     })
                     .unwrap()
             })
             .collect();
-            
+
         Self { handles }
     }
-    
-    /// Block until all workers have finished (which normally means never, 
+
+    /// Block until all workers have finished (which normally means never,
     /// unless they crash or are signalled to stop).
     pub fn join_all(self) {
         for handle in self.handles {

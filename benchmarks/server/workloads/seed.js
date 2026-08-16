@@ -8,10 +8,10 @@ import { SharedArray } from 'k6/data';
 
 const BASE_URL = __ENV.BASE_URL || 'http://localhost:8200';
 
-// Pre-generate 1000 seed payloads to avoid per-request string allocation
+// Pre-generate 256000 seed payloads to avoid per-request string allocation
 const seeds = new SharedArray('seed_payloads', function () {
   const items = [];
-  for (let i = 0; i < 1000; i++) {
+  for (let i = 0; i < 256000; i++) {
     items.push({
       path: `/v1/secret/data/bench/s${i}`,
       body: JSON.stringify({ data: { key: `seed-value-${i}`, index: i } }),
