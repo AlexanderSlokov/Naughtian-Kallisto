@@ -1,13 +1,9 @@
 {
   "name": "Kallisto C++ Dev Environment",
-  "image": "docker.io/thanhzeus2016/naughtain-kallisto-devcontainer:1.0.0",
+  "image": "docker.io/thanhzeus2016/naughtian-kallisto-devcontainer:1.0.0",
   "customizations": {
     "vscode": {
       "extensions": [
-        "ms-vscode.cpptools",
-		"ms-vscode.cpptools-themes",
-		"ms-vscode.cmake-tools",
-        "ms-vscode.cpptools-extension-pack",
 		"ms-vscode.test-adapter-converter",
 		"ms-python.python",
         "formulahendry.code-runner",
@@ -22,7 +18,6 @@
       ],
       "settings": {
         "terminal.integrated.defaultProfile.linux": "bash",
-        "C_Cpp.default.compilerPath": "/usr/bin/g++",
         "code-runner.runInTerminal": true,
         "editor.formatOnSave": true,
         "rust-analyzer.check.command": "clippy",
@@ -37,15 +32,13 @@
   },
   "remoteUser": "vscode",
   "containerEnv": {
-    "VCPKG_ROOT": "/usr/local/vcpkg",
     "RUSTUP_HOME": "/home/vscode/.rustup",
     "CARGO_HOME": "/home/vscode/.cargo"
   },
   "remoteEnv": {
-    "VCPKG_ROOT": "/usr/local/vcpkg",
     "RUSTUP_HOME": "/home/vscode/.rustup",
     "CARGO_HOME": "/home/vscode/.cargo",
-    "PATH": "/home/vscode/.cargo/bin:/usr/local/vcpkg:${containerEnv:PATH}"
+    "PATH": "/home/vscode/.cargo/bin:${containerEnv:PATH}"
   },
   "postCreateCommand": "sudo chown -R vscode:vscode /workspaces"
 }
