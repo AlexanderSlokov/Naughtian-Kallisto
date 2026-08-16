@@ -5,9 +5,9 @@ SHELL := bash
 
 # Docker
 REGISTRY ?= docker.io/thanhzeus2016
-DEVCONTAINER_IMAGE ?= naughtain-kallisto-devcontainer
+DEVCONTAINER_IMAGE ?= naughtian-kallisto-devcontainer
 CONTAINER_IMAGE ?= naughtain-kallisto
-DEVCONTAINER_TAG ?= 1.0.0
+DEVCONTAINER_TAG ?= 2.0.0
 CLOUD_BUILDER ?= cloud-thanhzeus2016-aleksandr-slokov-cloud-builder
 TARGET = kallisto
 
@@ -21,13 +21,7 @@ export KALLISTO_BUILD_GIT_TAG ?= $(shell git describe --tag || echo ${BUILD_INFO
 export KALLISTO_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
 
 
-clean:
-	cargo clean
-
-# Development builds
-# ------------------
-
-# A special target for building Kallisto docker images
+# Targets for building Kallisto docker images
 # ------------------------------------------------
 
 devcontainer_cloud_build:
@@ -64,6 +58,9 @@ docker-run:
 
 # Build System
 # ------------
+
+clean:
+	cargo clean
 
 build:
 	cargo build
@@ -141,16 +138,12 @@ help:
 	@echo "  Utilities:"
 	@echo "    make clean          - Deep clean build artifacts"
 
-# ===========================================================================
+
 # Unit Tests
-# ===========================================================================
+# ----------
 
 test:
 	cargo test --workspace
 
 e2e:
 	cargo test --test e2e_vault_compat -- --ignored
-
-# ===========================================================================
-# End of Makefile
-# ===========================================================================

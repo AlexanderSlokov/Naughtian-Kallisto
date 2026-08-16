@@ -1,6 +1,6 @@
 {
   "name": "Kallisto C++ Dev Environment",
-  "image": "docker.io/thanhzeus2016/naughtian-kallisto-devcontainer:1.0.0",
+  "image": "docker.io/thanhzeus2016/naughtian-kallisto-devcontainer:2.0.0",
   "customizations": {
     "vscode": {
       "extensions": [
