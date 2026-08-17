@@ -5,21 +5,34 @@
   <img src="https://img.shields.io/badge/License-AGPLv3-red.svg?style=for-the-badge" alt="License">
 </p>
 
-Naughtian Kallisto is a high performance, universal secret engine built with Rust, designed for high-throughput and low-latency (< 5ms). It provides a secure and efficient way to store and distribute secrets for micro-services, while can withstand a massive amount of GET requests per second for Roots of Trusts.
+Secret delivery for the request path.
 
-Please keep in mind that Naughtian Kallisto should be integrated into existing secret management systems (that is, Hashicorp Vault, Infisical, Conjur, etc). This is an intentional design decision to avoid unnecessary complexity and overhead about security concerns, while providing as highest throughput as possible.
+Kallisto is a high performance cache for secrets, sitting between your workloads and your Root of Trust. 
+
+The **Dataplane** runs on every node and answers secret reads locally, so your API gateway, worker nodes, CI runners, etc... can fetch secrets per request instead of at boot. 
+
+The **Controlplane** runs the fleet, pushing invalidations, warming caches before a rollout, and reporting how much plaintext is resident across every node.
+
+Compatible with the Vault KV-v2 API. Adopting it is one line:
+
+    - VAULT_ADDR=https://vault.internal:8200
+    + VAULT_ADDR=https://localhost:8200
+
+Removing it is the same line.
+
+Please keep in mind that Naughtian Kallisto should be integrated into **existing secret management systems** (that is, Hashicorp Vault, Infisical, Conjur, etc). This is an intentional design decision to avoid unnecessary complexity and overhead about security concerns.
 
 ## Use cases
 
 The main purposes of Naughtian Kallisto are:
 
-- **A Dataplane every Root-of-Trust wants:** serve secrets from upstream secret management systems in a fast, scalable and secure way, right at the node level without self DDoS-ing your own infrastructure.
+1. **A secret cache layer for every Root-of-Trust**: serve secrets from upstream secret management systems in a fast, scalable and secure way, right at the node level without self DDoS-ing your own infrastructure.
 
-- **Secure secret storage**: Naughtian Kallisto by itself can work in standalone mode to store key/value pairs while encrypts data before writing it to persistent storage, so your system can use secrets without letting `.env` files lying around.
+2. **Secure secret storage**: Naughtian Kallisto by itself can work in standalone mode to store key/value pairs while encrypts data before writing it to persistent storage, so your system can use secrets without letting `.env` files lying around.
 
-- **Secure edge config server**: Naughtian Kallisto can be use as a secure config server at edge, providing shared TLS certificates, API keys,... for your API gateway, LB fleet,....
+3. **Secure edge config server**: Naughtian Kallisto can be use as a secure config server at edge, providing shared TLS certificates, API keys,... for your API gateway and LB fleet.
 
-## IMPORTANT NOTICES
+## Important notices
 
 1. Be advised, `Naughtian Kallisto` from version `1.0.0` to `2.0.0` is not offically released as the production-ready application. We will not take any accountability for application security, compliance or stability if you use `Naughtian Kallisto` in your production environment, directly or indirectly, and causing damages for your own businesses. Use as your own consents.
 
@@ -27,7 +40,17 @@ The main purposes of Naughtian Kallisto are:
 
 3. `Naughtian Kallisto` is protected under `AGPLv3` license. Custom "Commercial" or "Enterprise" License can be discussed.
 
-4. DO NOT use `Naughtian Kallisto` as a drop-in replacement directly for your current `OpenBao`/`Hashicorp Vault` infrastructure! `Naughtian Kallisto` itself, while developed with high attention to security and provides similar API interface/contracts of `Vault`/`OpenBao`, can not and should not be used to replace them as an upstream secret management platform.
+4. **DO NOT** use `Naughtian Kallisto` as a drop-in replacement directly for your current `OpenBao`/`Hashicorp Vault` infrastructure! `Naughtian Kallisto` itself, while developed with high attention to security and provides similar API interface/contracts of `Vault`/`OpenBao`, can not and should not be used to replace them as an upstream secret management platform.
+
+## Status
+
+`Naughtian Kallisto` is a prototype. Not production-ready.
+
+Working: KV-v2 read/write path, cuckoo cache, CLOCK eviction.
+
+Not built yet: authentication on the data port, TLS, encryption barrier, controlplane.
+
+Do not run this where it matters.
 
 ## Future plans
 
