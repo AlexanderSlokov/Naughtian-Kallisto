@@ -287,3 +287,75 @@ mod tests {
         assert_eq!(stats_after.free_list_size, std::mem::size_of::<u32>(), "free_list should hold 1 item (4 bytes)");
     }
 }
+
+#[cfg(test)]
+mod tmp_profile {
+    use crate::engine::cuckoo_table::table::{DEEP_LOOPS, DISPLACEMENT_ITERS, INSERT_CALLS};
+    use crate::engine::cuckoo_table::{CuckooTable, SecretEntry};
+    use std::sync::atomic::Ordering;
+
+    #[test]
+    fn tmp_measure_displacement_depth() {
+        // 65536 buckets * 8 slots * 2 tables; max_capacity 90% of 16*size
+        let size = 65536usize;
+        let cap = (size * 16 * 90) / 100;
+        let table = CuckooTable::new(size, cap);
+
+        DISPLACEMENT_ITERS.store(0, Ordering::Relaxed);
+        INSERT_CALLS.store(0, Ordering::Relaxed);
+        DEEP_LOOPS.store(0, Ordering::Relaxed);
+
+        let n = cap;
+        for i in 0..n {
+            let k = format!("secret/data/app-{}/key-{}", i % 997, i);
+            table.insert(
+                &k,
+                SecretEntry {
+                    key: k.clone(),
+                    payload: vec![0u8; 64],
+                    referenced: std::sync::atomic::AtomicBool::new(true),
+                },
+            );
+        }
+
+        let iters = DISPLACEMENT_ITERS.load(Ordering::Relaxed);
+        let calls = INSERT_CALLS.load(Ordering::Relaxed);
+        let deep = DEEP_LOOPS.load(Ordering::Relaxed);
+        println!(
+            "FILL n={} inserts_reaching_loop={} loop_iters={} iters_per_insert={:.3} deep_iters(i>8)={} ({:.4}% of iters)",
+            n,
+            calls,
+            iters,
+            iters as f64 / calls.max(1) as f64,
+            deep,
+            100.0 * deep as f64 / iters.max(1) as f64
+        );
+
+        // Now steady-state churn at full load (what PUT benchmark actually hits)
+        DISPLACEMENT_ITERS.store(0, Ordering::Relaxed);
+        INSERT_CALLS.store(0, Ordering::Relaxed);
+        DEEP_LOOPS.store(0, Ordering::Relaxed);
+        for i in n..(n + 200_000) {
+            let k = format!("secret/data/app-{}/key-{}", i % 997, i);
+            table.insert(
+                &k,
+                SecretEntry {
+                    key: k.clone(),
+                    payload: vec![0u8; 64],
+                    referenced: std::sync::atomic::AtomicBool::new(true),
+                },
+            );
+        }
+        let iters = DISPLACEMENT_ITERS.load(Ordering::Relaxed);
+        let calls = INSERT_CALLS.load(Ordering::Relaxed);
+        let deep = DEEP_LOOPS.load(Ordering::Relaxed);
+        println!(
+            "STEADY inserts_reaching_loop={} loop_iters={} iters_per_insert={:.3} deep_iters(i>8)={} ({:.4}% of iters)",
+            calls,
+            iters,
+            iters as f64 / calls.max(1) as f64,
+            deep,
+            100.0 * deep as f64 / iters.max(1) as f64
+        );
+    }
+}

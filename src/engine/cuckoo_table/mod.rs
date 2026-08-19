@@ -1,5 +1,5 @@
 mod arena;
-mod table;
+pub(super) mod table;
 mod types;
 
 pub use table::CuckooTable;
