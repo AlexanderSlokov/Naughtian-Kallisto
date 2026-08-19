@@ -1,5 +1,5 @@
 use std::{
-    alloc::{Layout, alloc_zeroed, dealloc, realloc},
+    alloc::{Layout, alloc_zeroed, dealloc},
     hash::{Hash, Hasher},
     ptr,
     sync::atomic::{AtomicUsize, Ordering},
@@ -286,31 +286,36 @@ impl CuckooTable {
                     let h2_raw = Self::hash2_full(victim_key);
                     let b2 = (h2_raw as usize) % state.capacity;
 
-                    let mut victim_slot_ptr: *mut Slot = ptr::null_mut();
+                    let mut victim_slot_ref: Option<&mut Slot> = None;
                     let bucket1 = state.table_1.add(b1);
                     for j in 0..8 {
                         if (*bucket1).slots[j].index == victim_idx {
-                            victim_slot_ptr = &mut (*bucket1).slots[j];
+                            victim_slot_ref = Some(&mut (*bucket1).slots[j]);
                             break;
                         }
                     }
-                    if victim_slot_ptr.is_null() {
+                    if victim_slot_ref.is_none() {
                         let bucket2 = state.table_2.add(b2);
                         for j in 0..8 {
                             if (*bucket2).slots[j].index == victim_idx {
-                                victim_slot_ptr = &mut (*bucket2).slots[j];
+                                victim_slot_ref = Some(&mut (*bucket2).slots[j]);
                                 break;
                             }
                         }
                     }
 
-                    if !victim_slot_ptr.is_null() {
-                        // 1. ABA Safety Invariant: An toàn phụ thuộc vào việc toàn bộ evict + reuse
-                        // nằm trong một critical section (write lock), và bucket được xoá trước khi
-                        // storage bị ghi đè.
-                        (*victim_slot_ptr).index = u32::MAX;
-                        (*victim_slot_ptr).tag = 0;
-                    }
+                    // SAFETY: The CLOCK algorithm picked victim_idx from a live storage
+                    // slot, so it must have a corresponding entry in one of the two
+                    // bucket tables. If it doesn't, the data structure is corrupt.
+                    let victim_slot = victim_slot_ref.unwrap_or_else(|| {
+                        unreachable!(
+                            "BUG: storage index {} has no slot in either bucket — \
+                             cuckoo table invariant violated",
+                            victim_idx
+                        )
+                    });
+                    victim_slot.index = u32::MAX;
+                    victim_slot.tag = 0;
 
                     *se = SecretEntry {
                         key: key.to_string(),
@@ -647,5 +652,97 @@ mod tests {
         let stats = table.get_memory_stats();
         // Should not exceed max capacity
         assert!(stats.storage_used <= 100);
+    }
+
+    /// Regression test for CodeQL rust/access-invalid-pointer (GH finding 2026-08-19).
+    ///
+    /// Verifies the eviction path: when the table is full and a new key is
+    /// inserted, the CLOCK algorithm picks a victim, the victim's bucket slot
+    /// is invalidated (index set to u32::MAX) *before* the storage is reused,
+    /// and the evicted key is no longer reachable via `lookup`.
+    ///
+    /// This test fills the table to capacity, forces eviction, and then
+    /// verifies:
+    /// 1. The new key is reachable and contains the correct payload.
+    /// 2. The evicted key's storage slot was reused (no capacity growth).
+    /// 3. Repeated eviction cycles don't corrupt the table (no panic from
+    ///    the `unreachable!()` guard that replaced the old raw-pointer path).
+    #[test]
+    fn test_eviction_slot_invalidation_no_dangling_pointer() {
+        // Small table: 4 buckets × 2 tables × 8 slots = 64 slots.
+        // max_capacity capped at min(20, (4*16*90)/100 = 57) = 20.
+        let table = CuckooTable::new(4, 20);
+
+        // Fill to exactly max_capacity.
+        for i in 0..20 {
+            let key = format!("fill_{}", i);
+            let ok = table.insert(
+                &key,
+                SecretEntry {
+                    key: key.clone(),
+                    payload: vec![i as u8],
+                    referenced: std::sync::atomic::AtomicBool::new(true),
+                },
+            );
+            assert!(ok, "failed to insert key {} before table is full", i);
+        }
+
+        let stats = table.get_memory_stats();
+        assert_eq!(stats.storage_used, 20, "table should be at max_capacity");
+        assert_eq!(stats.storage_capacity, 20);
+
+        // Insert a 21st key — must trigger CLOCK eviction.
+        let eviction_key = "eviction_trigger";
+        let ok = table.insert(
+            eviction_key,
+            SecretEntry {
+                key: eviction_key.to_string(),
+                payload: vec![0xEE],
+                referenced: std::sync::atomic::AtomicBool::new(true),
+            },
+        );
+        assert!(ok, "eviction insert should succeed");
+
+        // The new key must be reachable with correct payload.
+        let entry = table
+            .lookup(eviction_key)
+            .expect("eviction_trigger key should be reachable after eviction");
+        assert_eq!(entry.key, eviction_key);
+        assert_eq!(entry.payload, vec![0xEE]);
+
+        // Capacity must not have grown — storage was reused, not appended.
+        let stats = table.get_memory_stats();
+        assert_eq!(stats.storage_used, 20, "eviction must reuse storage, not grow");
+
+        // Some original key must have been evicted (at least one lookup miss).
+        let mut evicted_count = 0;
+        for i in 0..20 {
+            if table.lookup(&format!("fill_{}", i)).is_none() {
+                evicted_count += 1;
+            }
+        }
+        assert!(
+            evicted_count >= 1,
+            "at least one original key should have been evicted, but all are still present"
+        );
+
+        // Stress: 50 more eviction-inducing inserts. If the slot invalidation
+        // guard (unreachable!()) is wrong, this will panic.
+        for i in 0..50 {
+            let key = format!("stress_{}", i);
+            table.insert(
+                &key,
+                SecretEntry {
+                    key: key.clone(),
+                    payload: vec![i as u8],
+                    referenced: std::sync::atomic::AtomicBool::new(true),
+                },
+            );
+        }
+
+        // Table must still be consistent: capacity unchanged, no crash.
+        let stats = table.get_memory_stats();
+        assert_eq!(stats.storage_capacity, 20);
+        assert_eq!(stats.storage_used, 20);
     }
 }
