@@ -28,7 +28,7 @@ CONNECTIONS=${2:-200}
 DURATION=${3:-10s}
 # wrk2 constant-rate target — set high to find the server's actual ceiling
 RATE=${4:-200000}
-PUT_RATE=${5:-$RATE}
+PUT_RATE=${5:-50000}
 THREADS=2
 HTTP_PORT=8200
 ADMIN_PORT=8202
