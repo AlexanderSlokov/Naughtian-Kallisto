@@ -86,7 +86,7 @@ bench-release:
 # (Sampled on AMD Ryzen 5 3550H, 15th Aug 2026).
 # --------------------------------------------------------------------
 bench-laptop:
-	@bash benchmarks/server/run_release_bench.sh 4 100 10s 30000
+	@bash benchmarks/server/run_release_bench.sh 4 100 10s 30000 12000
 
 full-bench-server: clean build-server bench-server
 

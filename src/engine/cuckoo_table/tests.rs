@@ -217,4 +217,73 @@ mod tests {
         assert_eq!(stats.storage_capacity, 20);
         assert_eq!(stats.storage_used, 20);
     }
+
+    /// Regression test for ghost slot leak when max displacement is reached.
+    ///
+    /// By forcing 17 keys to hash to the exact same pair of buckets (which only
+    /// hold 16 slots total), we guarantee that the 17th insertion will hit the
+    /// 256 max displacement limit. We then verify that the dropped slot's index
+    /// is returned to the free_list so it doesn't leak and cause a CLOCK panic.
+    #[test]
+    fn test_ghost_slot_leak_on_max_displacement() {
+        let table = CuckooTable::new(10, 100);
+
+        // Find 17 keys that collide on both h1 and h2 (b1 = 0, b2 = 0)
+        let mut colliding_keys = Vec::new();
+        let mut i = 0;
+        while colliding_keys.len() < 17 {
+            let key = format!("collider_{}", i);
+            let mut hasher1 = siphasher::sip::SipHasher24::new_with_keys(0xDEADBEEF64, 0xCAFEBABE64);
+            std::hash::Hash::hash(&key, &mut hasher1);
+            let h1 = std::hash::Hasher::finish(&hasher1);
+            
+            let mut hasher2 = siphasher::sip::SipHasher24::new_with_keys(0xFACEB00C64, 0xDEADC0DE64);
+            std::hash::Hash::hash(&key, &mut hasher2);
+            let h2 = std::hash::Hasher::finish(&hasher2);
+            if (h1 as usize) % 10 == 0 && (h2 as usize) % 10 == 0 {
+                colliding_keys.push(key);
+            }
+            i += 1;
+        }
+
+        // Insert the first 16 keys. They should all succeed because they exactly
+        // fill the 16 slots of bucket1[0] and bucket2[0].
+        for i in 0..16 {
+            let ok = table.insert(
+                &colliding_keys[i],
+                SecretEntry {
+                    key: colliding_keys[i].clone(),
+                    payload: vec![i as u8],
+                    referenced: std::sync::atomic::AtomicBool::new(true),
+                },
+            );
+            assert!(ok, "failed to insert colliding key {}", i);
+        }
+
+        let stats_before = table.get_memory_stats();
+        assert_eq!(stats_before.storage_used, 16);
+        assert_eq!(stats_before.free_list_size, 0);
+
+        // The 17th key will inevitably hit max displacement because the target
+        // buckets are 100% full, and its displacement chain is trapped in those
+        // two buckets.
+        let ok = table.insert(
+            &colliding_keys[16],
+            SecretEntry {
+                key: colliding_keys[16].clone(),
+                payload: vec![16],
+                referenced: std::sync::atomic::AtomicBool::new(true),
+            },
+        );
+
+        // It should reject the insert (or rather, the insert fails/returns false)
+        assert!(!ok, "17th insert into full buckets must fail");
+
+        // KEY CHECK: The storage slot must have been reclaimed to the free_list!
+        // `storage_used` remains 17 (since we allocated a slot initially), but
+        // `free_list_size` must be 1. Thus, effective used = 16.
+        let stats_after = table.get_memory_stats();
+        assert_eq!(stats_after.storage_used, 17, "allocated a slot before failing");
+        assert_eq!(stats_after.free_list_size, std::mem::size_of::<u32>(), "free_list should hold 1 item (4 bytes)");
+    }
 }

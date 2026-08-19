@@ -28,6 +28,7 @@ CONNECTIONS=${2:-200}
 DURATION=${3:-10s}
 # wrk2 constant-rate target — set high to find the server's actual ceiling
 RATE=${4:-200000}
+PUT_RATE=${5:-$RATE}
 THREADS=2
 HTTP_PORT=8200
 ADMIN_PORT=8202
@@ -124,9 +125,9 @@ run_benchmarks() {
     sleep 1
 
     echo ""
-    echo -e "${CYAN}[4/4] PUT throughput ceiling (${DURATION}, target ${RATE} req/s)...${NC}"
+    echo -e "${CYAN}[4/4] PUT throughput ceiling (${DURATION}, target ${PUT_RATE} req/s)...${NC}"
     echo "────────────────────────────────────────────────────────────────"
-    wrk2 -t$THREADS -c$CONNECTIONS -d$DURATION -R $RATE \
+    wrk2 -t$THREADS -c$CONNECTIONS -d$DURATION -R $PUT_RATE \
         --latency \
         -s "$WORKLOAD_DIR/wrk2_put.lua" \
         "http://localhost:$HTTP_PORT" 2>&1

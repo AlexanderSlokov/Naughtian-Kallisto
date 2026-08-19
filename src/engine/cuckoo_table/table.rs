@@ -230,7 +230,11 @@ impl CuckooTable {
                 let temp_tag = current_tag;
                 let temp_idx = current_index;
 
-                let victim = &mut (*bucket1).slots[victim_slot];
+                let victim = if i % 2 == 0 {
+                    &mut (*bucket1).slots[victim_slot]
+                } else {
+                    &mut (*bucket2).slots[victim_slot]
+                };
                 current_tag = victim.tag;
                 current_index = victim.index;
 
@@ -243,6 +247,12 @@ impl CuckooTable {
             eprintln!(
                 r#"{{"level":"warn","message":"Insert rejected: Cuckoo Table is full (Max displacement reached)."}}"#
             );
+            
+            ptr::write(state.free_list.add(state.free_list_size), current_index);
+            state.free_list_size += 1;
+            self.shadow_free_list_size
+                .store(state.free_list_size, Ordering::Relaxed);
+
             false
         }
     }
