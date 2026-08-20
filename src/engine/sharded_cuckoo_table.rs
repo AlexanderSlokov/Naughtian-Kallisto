@@ -129,8 +129,7 @@ mod tests {
 
         for i in 0..200_000u32 {
             let key = format!("v:secret/data/app/key-{}:{}", i % 50_000, i / 50_000);
-            reached[ShardedCuckooTable::get_shard_index(&key)]
-                .insert(hash1_full(&key) % CAPACITY);
+            reached[ShardedCuckooTable::get_shard_index(&key)].insert(hash1_full(&key) % CAPACITY);
         }
 
         let worst = reached.iter().map(|s| s.len()).min().unwrap();
@@ -157,7 +156,10 @@ mod tests {
             }
         }
 
-        assert_eq!(rejected, 0, "{rejected} of {capacity} inserts were rejected");
+        assert_eq!(
+            rejected, 0,
+            "{rejected} of {capacity} inserts were rejected"
+        );
 
         // Shards fill unevenly, so a few hundred keys land in shards that were
         // already full and get absorbed by CLOCK eviction instead of occupying

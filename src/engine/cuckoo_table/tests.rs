@@ -126,7 +126,8 @@ mod tests {
         assert!(stats.storage_used <= 100);
     }
 
-    /// Regression test for CodeQL rust/access-invalid-pointer (GH finding 2026-08-19).
+    /// Regression test for CodeQL rust/access-invalid-pointer (GH finding
+    /// 2026-08-19).
     ///
     /// Verifies the eviction path: when the table is full and a new key is
     /// inserted, the CLOCK algorithm picks a victim, the victim's bucket slot
@@ -137,8 +138,8 @@ mod tests {
     /// verifies:
     /// 1. The new key is reachable and contains the correct payload.
     /// 2. The evicted key's storage slot was reused (no capacity growth).
-    /// 3. Repeated eviction cycles don't corrupt the table (no panic from
-    ///    the `unreachable!()` guard that replaced the old raw-pointer path).
+    /// 3. Repeated eviction cycles don't corrupt the table (no panic from the
+    ///    `unreachable!()` guard that replaced the old raw-pointer path).
     #[test]
     fn test_eviction_slot_invalidation_no_dangling_pointer() {
         // Small table: 4 buckets × 2 tables × 8 slots = 64 slots.
@@ -184,7 +185,10 @@ mod tests {
 
         // Capacity must not have grown — storage was reused, not appended.
         let stats = table.get_memory_stats();
-        assert_eq!(stats.storage_used, 20, "eviction must reuse storage, not grow");
+        assert_eq!(
+            stats.storage_used, 20,
+            "eviction must reuse storage, not grow"
+        );
 
         // Some original key must have been evicted (at least one lookup miss).
         let mut evicted_count = 0;
@@ -233,11 +237,13 @@ mod tests {
         let mut i = 0;
         while colliding_keys.len() < 17 {
             let key = format!("collider_{}", i);
-            let mut hasher1 = siphasher::sip::SipHasher24::new_with_keys(0xDEADBEEF64, 0xCAFEBABE64);
+            let mut hasher1 =
+                siphasher::sip::SipHasher24::new_with_keys(0xDEADBEEF64, 0xCAFEBABE64);
             std::hash::Hash::hash(&key, &mut hasher1);
             let h1 = std::hash::Hasher::finish(&hasher1);
-            
-            let mut hasher2 = siphasher::sip::SipHasher24::new_with_keys(0xFACEB00C64, 0xDEADC0DE64);
+
+            let mut hasher2 =
+                siphasher::sip::SipHasher24::new_with_keys(0xFACEB00C64, 0xDEADC0DE64);
             std::hash::Hash::hash(&key, &mut hasher2);
             let h2 = std::hash::Hasher::finish(&hasher2);
             if (h1 as usize) % 10 == 0 && (h2 as usize) % 10 == 0 {
@@ -283,7 +289,14 @@ mod tests {
         // `storage_used` remains 17 (since we allocated a slot initially), but
         // `free_list_size` must be 1. Thus, effective used = 16.
         let stats_after = table.get_memory_stats();
-        assert_eq!(stats_after.storage_used, 17, "allocated a slot before failing");
-        assert_eq!(stats_after.free_list_size, std::mem::size_of::<u32>(), "free_list should hold 1 item (4 bytes)");
+        assert_eq!(
+            stats_after.storage_used, 17,
+            "allocated a slot before failing"
+        );
+        assert_eq!(
+            stats_after.free_list_size,
+            std::mem::size_of::<u32>(),
+            "free_list should hold 1 item (4 bytes)"
+        );
     }
 }

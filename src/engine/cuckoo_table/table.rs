@@ -6,8 +6,10 @@ use std::{
 
 use siphasher::sip::SipHasher24;
 
-use super::arena::{Bucket, Slot, UnsafeCuckoo};
-use super::types::{MemoryStats, SecretEntry};
+use super::{
+    arena::{Bucket, Slot, UnsafeCuckoo},
+    types::{MemoryStats, SecretEntry},
+};
 
 pub struct CuckooTable {
     state: parking_lot::RwLock<UnsafeCuckoo>,
@@ -247,7 +249,7 @@ impl CuckooTable {
             eprintln!(
                 r#"{{"level":"warn","message":"Insert rejected: Cuckoo Table is full (Max displacement reached)."}}"#
             );
-            
+
             ptr::write(state.free_list.add(state.free_list_size), current_index);
             state.free_list_size += 1;
             self.shadow_free_list_size
