@@ -26,9 +26,13 @@ impl ShardedCuckooTable {
         Self { shards }
     }
 
+    // NOTE: these keys must stay distinct from `CuckooTable::hash1_full`'s keys.
+    // Sharing them makes the shard index a function of h1, which pins the low
+    // log2(NUM_SHARDS) bits of `h1 % capacity` and leaves only
+    // capacity/NUM_SHARDS of table_1's buckets reachable inside a shard.
     #[inline]
     fn get_shard_index(key: &str) -> usize {
-        let mut hasher = SipHasher24::new_with_keys(0xDEADBEEF64, 0xCAFEBABE64);
+        let mut hasher = SipHasher24::new_with_keys(0x5EED1E55C0FFEE64, 0xB16B00B5DEADBEEF);
         key.hash(&mut hasher);
         (hasher.finish() as usize) & (Self::NUM_SHARDS - 1)
     }
@@ -85,5 +89,84 @@ impl ShardedCuckooTable {
             shard_stats.push(shard.get_memory_stats());
         }
         shard_stats
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::cuckoo_table::SecretEntry;
+
+    fn entry(key: &str) -> SecretEntry {
+        SecretEntry {
+            key: key.to_string(),
+            payload: vec![0u8; 64],
+            referenced: std::sync::atomic::AtomicBool::new(true),
+        }
+    }
+
+    /// Regression: `get_shard_index` must not be a function of
+    /// `CuckooTable::hash1_full`. When both used the same SipHash keys, the
+    /// shard index pinned the low log2(NUM_SHARDS) bits of `h1 % capacity`, so
+    /// only `capacity / NUM_SHARDS` of table_1's buckets were reachable within
+    /// a shard. That cut usable slots roughly in half and made the table
+    /// saturate — and displacement start failing — at ~50% nominal load.
+    #[test]
+    fn shard_index_is_decorrelated_from_hash1() {
+        use siphasher::sip::SipHasher24;
+
+        // Mirrors CuckooTable::hash1_full.
+        fn hash1_full(key: &str) -> u64 {
+            let mut hasher = SipHasher24::new_with_keys(0xDEADBEEF64, 0xCAFEBABE64);
+            key.hash(&mut hasher);
+            hasher.finish()
+        }
+
+        // Production geometry: ShardedCuckooTable::new(256 * 1024).
+        const CAPACITY: u64 = 512;
+        let mut reached: Vec<std::collections::HashSet<u64>> =
+            vec![Default::default(); ShardedCuckooTable::NUM_SHARDS];
+
+        for i in 0..200_000u32 {
+            let key = format!("v:secret/data/app/key-{}:{}", i % 50_000, i / 50_000);
+            reached[ShardedCuckooTable::get_shard_index(&key)]
+                .insert(hash1_full(&key) % CAPACITY);
+        }
+
+        let worst = reached.iter().map(|s| s.len()).min().unwrap();
+        assert!(
+            worst as u64 > CAPACITY / 2,
+            "table_1 bucket coverage collapsed: worst shard reaches only {worst} of {CAPACITY} \
+             buckets — get_shard_index and hash1_full must use distinct SipHash keys"
+        );
+    }
+
+    /// The whole table must absorb its full storage capacity without a single
+    /// rejected insert. Before the hash-decorrelation fix this rejected ~46% of
+    /// inserts at half load.
+    #[test]
+    fn fills_to_capacity_without_rejecting_inserts() {
+        let table = ShardedCuckooTable::new(256 * 1024);
+        let capacity = table.get_memory_stats().storage_capacity;
+
+        let mut rejected = 0usize;
+        for i in 0..capacity {
+            let key = format!("v:secret/data/app/key-{}:{}", i % 40_000, i / 40_000);
+            if !table.insert(&key, entry(&key)) {
+                rejected += 1;
+            }
+        }
+
+        assert_eq!(rejected, 0, "{rejected} of {capacity} inserts were rejected");
+
+        // Shards fill unevenly, so a few hundred keys land in shards that were
+        // already full and get absorbed by CLOCK eviction instead of occupying
+        // a fresh slot. Occupancy should still be within a fraction of a
+        // percent of capacity.
+        let used = table.get_memory_stats().storage_used;
+        assert!(
+            used * 100 >= capacity * 99,
+            "occupancy collapsed: {used} of {capacity} slots used"
+        );
     }
 }
