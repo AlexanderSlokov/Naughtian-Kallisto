@@ -9,10 +9,6 @@ use siphasher::sip::SipHasher24;
 use super::arena::{Bucket, Slot, UnsafeCuckoo};
 use super::types::{MemoryStats, SecretEntry};
 
-pub(super) static DISPLACEMENT_ITERS: AtomicUsize = AtomicUsize::new(0);
-pub(super) static INSERT_CALLS: AtomicUsize = AtomicUsize::new(0);
-pub(super) static DEEP_LOOPS: AtomicUsize = AtomicUsize::new(0);
-
 pub struct CuckooTable {
     state: parking_lot::RwLock<UnsafeCuckoo>,
 
@@ -202,11 +198,8 @@ impl CuckooTable {
             let mut current_index = new_storage_idx;
             let mut current_tag = tag;
             let mut cur_key_ref: &str = key;
-            INSERT_CALLS.fetch_add(1, Ordering::Relaxed);
 
             for i in 0..256 {
-                DISPLACEMENT_ITERS.fetch_add(1, Ordering::Relaxed);
-                if i > 8 { DEEP_LOOPS.fetch_add(1, Ordering::Relaxed); }
                 let h1 = Self::hash1_full(cur_key_ref);
                 let b1 = (h1 as usize) % state.capacity;
                 let bucket1 = state.table_1.add(b1);
