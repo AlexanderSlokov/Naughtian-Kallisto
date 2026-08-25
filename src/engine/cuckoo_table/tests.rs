@@ -246,7 +246,7 @@ mod tests {
                 siphasher::sip::SipHasher24::new_with_keys(0xFACEB00C64, 0xDEADC0DE64);
             std::hash::Hash::hash(&key, &mut hasher2);
             let h2 = std::hash::Hasher::finish(&hasher2);
-            if (h1 as usize) % 10 == 0 && (h2 as usize) % 10 == 0 {
+            if (h1 as usize).is_multiple_of(10) && (h2 as usize).is_multiple_of(10) {
                 colliding_keys.push(key);
             }
             i += 1;

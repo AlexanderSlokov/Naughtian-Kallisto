@@ -102,6 +102,7 @@ docs-build:
 	hugo -s docs
 
 .PHONY: all build build-server run run-server clean help logs test \
+        format clippy deny dev \
         e2e benchmark-strict benchmark-batch benchmark-p99 benchmark-throughput \
         benchmark-dos test-atomic benchmark-multithread \
         bench-server bench-release bench-laptop bench-http \
@@ -121,6 +122,12 @@ help:
 	@echo "  Test:"
 	@echo "    make test           - Run all unit tests (cargo test)"
 	@echo "    make e2e            - Run Vault API E2E compatibility tests"
+	@echo ""
+	@echo "  Static analysis:"
+	@echo "    make format         - cargo fmt --all"
+	@echo "    make clippy         - Project clippy gate (scripts/clippy)"
+	@echo "    make deny           - Dependency + advisory policy (deny.toml)"
+	@echo "    make dev            - format + clippy + deny + test (pre-PR check)"
 	@echo ""
 	@echo "  Benchmark:"
 	@echo "    make bench-server   - HTTP load test (k6: GET/PUT/MIXED)"
@@ -147,3 +154,19 @@ test:
 
 e2e:
 	cargo test --test e2e_vault_compat -- --ignored
+
+
+# Static Analysis
+# ---------------
+
+format:
+	cargo fmt --all
+
+clippy:
+	@./scripts/clippy
+
+deny:
+	cargo deny check
+
+# Everything CI enforces, in CI's order. Run this before opening a PR.
+dev: format clippy deny test

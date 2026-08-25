@@ -165,17 +165,31 @@ cargo test -p <crate> <test_name>   # e.g. cargo test -p kallisto_cluster gossip
 
 ```bash
 # Run formatter
-make format                 # cargo fmt (rustfmt.toml: style_edition 2024)
+make format                 # cargo fmt --all (rustfmt.toml: style_edition 2024)
 
-# Run clippy linter
-cargo clippy --workspace    # `make clippy` is not wired up yet — call clippy directly
+# Run the clippy quality gate
+make clippy                 # scripts/clippy — the same gate CI runs
                              # clippy.toml disallows several methods (see file) — read the reasons before working around them
 
-# Run full development checks (format + clippy + tests)
-# make dev (not yet available - but will be soon)
+# Run dependency + advisory policy
+make deny                   # cargo deny check (deny.toml bans pure-Rust crypto for FIPS)
+
+# Run full development checks (format + clippy + deny + tests)
+make dev
 ```
 
-Until `make dev` exists, run `make format`, `cargo clippy --workspace`, and `make test` individually before submitting a PR.
+Run `make dev` before submitting a PR.
+
+The clippy lint set lives in `scripts/clippy`, adopted from tikv/tikv (Apache-2.0, see
+`THIRD-PARTY-NOTICES.md`). It denies more than `-D warnings` did — notably
+`clippy::assertions_on_result_states` (use `x.unwrap()` / `x.unwrap_err()` in tests, not
+`assert!(x.is_ok())`, so failures print the error) and an async-discipline group
+(`unused_async`, `redundant_async_block`, `manual_async_fn`, `large_futures`) that
+matters because the data plane runs one single-threaded runtime per core.
+
+Prefer fixing the code over adding an `-A` entry. If a lint genuinely does not fit
+Kallisto, add it to the Kallisto-specific block at the bottom of `scripts/clippy` with
+the reason, not to the inherited block.
 
 ### Running the server
 

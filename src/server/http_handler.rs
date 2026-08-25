@@ -222,13 +222,12 @@ async fn patch_secret(
     json_merge_patch(&mut current_value, patch_data);
 
     let mut options_cas = None;
-    if let Some(opts) = patch_body.pointer(sonic_rs::pointer!["options"]) {
-        if let Some(cas) = opts
+    if let Some(opts) = patch_body.pointer(sonic_rs::pointer!["options"])
+        && let Some(cas) = opts
             .pointer(sonic_rs::pointer!["cas"])
             .and_then(|v| v.as_u64())
-        {
-            options_cas = Some(cas as u32);
-        }
+    {
+        options_cas = Some(cas as u32);
     }
 
     let new_payload = SecretPayload {
