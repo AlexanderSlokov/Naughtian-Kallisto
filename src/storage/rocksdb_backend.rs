@@ -176,7 +176,7 @@ mod tests {
     fn test_opens_successfully() {
         let db = TestDb::new("open");
         let backend = RocksDbBackend::open(db.path_str());
-        assert!(backend.is_ok());
+        backend.unwrap();
     }
 
     #[test]
@@ -184,7 +184,7 @@ mod tests {
         let db = TestDb::new("nested_open");
         let nested_path = format!("{}/nested/deep/dir", db.path_str());
         let backend = RocksDbBackend::open(&nested_path);
-        assert!(backend.is_ok());
+        backend.unwrap();
     }
 
     // -----------------------------------------------------------------------
@@ -244,7 +244,7 @@ mod tests {
         let backend = RocksDbBackend::open(db.path_str()).unwrap();
 
         let result = backend.del_raw(b"never_existed");
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     #[test]
@@ -255,7 +255,7 @@ mod tests {
         backend.put_raw(b"once", b"val").unwrap();
         backend.del_raw(b"once").unwrap();
         let result = backend.del_raw(b"once"); // Second delete should also succeed
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     // -----------------------------------------------------------------------
@@ -462,7 +462,7 @@ mod tests {
         let backend = RocksDbBackend::open(db.path_str()).unwrap();
 
         let result = backend.apply_batch(&[]);
-        assert!(result.is_ok());
+        result.unwrap();
     }
 
     // -----------------------------------------------------------------------

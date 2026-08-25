@@ -1,3 +1,7 @@
+# Derived from tikv/tikv (https://github.com/tikv/tikv), Copyright The TiKV
+# Authors, licensed under Apache-2.0. Upstream revision 1ef0a19 (2026-08-25).
+# Modified for Naughtian Kallisto. See THIRD-PARTY-NOTICES.md.
+
 # To comply with FIPS 140-2, we should not use crypto algorithms implemented in
 # rust, instead we should delegate these operation to OpenSSL, including
 # symmetric encryption, asymmetric encryption, hash functions,
@@ -52,9 +56,11 @@ ignore = [
     "RUSTSEC-2025-0141"
 ]
 
-# TiKV is licensed under Apache 2.0, according to ASF 3RD PARTY LICENSE POLICY,
-# TiKV can include licenses in Category A, and include licenses in Category B
-# under certain conditions.
+# Kallisto is licensed under AGPL-3.0-or-later. The allow-list below is the set
+# of licenses that can be combined into an AGPL work without adding obligations
+# we cannot meet: permissive licenses, plus MPL-2.0 (file-level copyleft) and
+# AGPL itself. It follows the ASF Category A grouping, which is a convenient
+# ready-made list of such licenses, not because Kallisto is an ASF project.
 # See https://www.apache.org/legal/resolved.html.
 [licenses]
 version = 2

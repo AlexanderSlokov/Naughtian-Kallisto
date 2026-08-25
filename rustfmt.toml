@@ -1,3 +1,7 @@
+# Derived from tikv/tikv (https://github.com/tikv/tikv), Copyright The TiKV
+# Authors, licensed under Apache-2.0. Upstream revision 1ef0a19 (2026-08-25).
+# Adopted verbatim for Naughtian Kallisto. See THIRD-PARTY-NOTICES.md.
+
 style_edition="2024"
 unstable_features = true
 
