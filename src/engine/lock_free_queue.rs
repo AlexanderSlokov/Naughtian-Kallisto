@@ -30,9 +30,12 @@ pub struct LockFreeQueue<T> {
     dequeue_pos: CachePadded<AtomicUsize>,
 }
 
-// Manual thread-safety guarantees as per PingCAP/TiKV unsafe philosophy.
-// Since the queue is inherently safe for concurrent access via atomics, we can
-// declare it Send/Sync.
+// SAFETY: All shared state (`enqueue_pos`, `dequeue_pos`, `Node::sequence`) is
+// accessed exclusively through `AtomicUsize` operations. `Node::data` is only
+// written after a successful CAS on `enqueue_pos` and only read after a
+// successful CAS on `dequeue_pos`, so at most one thread accesses a slot's data
+// at any time. The `T: Send` bound guarantees the payload itself is safe to
+// transfer across threads.
 unsafe impl<T: Send> Send for LockFreeQueue<T> {}
 unsafe impl<T: Send> Sync for LockFreeQueue<T> {}
 
@@ -71,9 +74,13 @@ impl<T> LockFreeQueue<T> {
                     .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
                     .is_ok()
                 {
+                    // SAFETY: The CAS on `enqueue_pos` succeeded, so this thread
+                    // has exclusive ownership of slot `pos & mask`. The slot's
+                    // previous data was consumed by a prior `dequeue` (or was
+                    // never initialized—`MaybeUninit`), so `ptr::write` does not
+                    // double-drop. The subsequent `Release` store on `sequence`
+                    // publishes the write to consumers.
                     unsafe {
-                        // 1. Unsafe Block: Direct memory write, bypassing borrow checker for
-                        //    zero-cost queueing
                         ptr::write(cell.data.as_ptr() as *mut T, data);
                     }
                     cell.sequence.store(pos + 1, Ordering::Release);
@@ -104,10 +111,14 @@ impl<T> LockFreeQueue<T> {
                     .compare_exchange_weak(pos, pos + 1, Ordering::Relaxed, Ordering::Relaxed)
                     .is_ok()
                 {
-                    let data = unsafe {
-                        // 2. Unsafe Block: Direct memory read, extracting ownership without cloning
-                        ptr::read(cell.data.as_ptr())
-                    };
+                    // SAFETY: The CAS on `dequeue_pos` succeeded, so this thread
+                    // has exclusive read access to slot `pos & mask`. The producer
+                    // wrote valid data via `ptr::write` and published it with a
+                    // `Release` store on `sequence` (observed by our `Acquire`
+                    // load above). `ptr::read` moves the value out; the slot is
+                    // then logically empty and will be reused by a future
+                    // `enqueue` only after we advance `sequence` below.
+                    let data = unsafe { ptr::read(cell.data.as_ptr()) };
                     cell.sequence.store(pos + capacity, Ordering::Release);
                     return Ok(data);
                 }
@@ -125,3 +136,63 @@ impl<T> Drop for LockFreeQueue<T> {
         while self.dequeue().is_ok() {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn single_thread_roundtrip() {
+        let q = LockFreeQueue::new(4);
+        q.enqueue(10u64).unwrap();
+        q.enqueue(20).unwrap();
+        assert_eq!(q.dequeue().unwrap(), 10);
+        assert_eq!(q.dequeue().unwrap(), 20);
+        assert!(q.dequeue().is_err());
+    }
+
+    #[test]
+    fn full_queue_returns_error() {
+        let q = LockFreeQueue::new(2);
+        q.enqueue(1u32).unwrap();
+        q.enqueue(2).unwrap();
+        assert!(matches!(q.enqueue(3), Err(QueueError::Full)));
+    }
+
+    #[test]
+    fn drop_partially_filled_no_leak() {
+        // Miri tracks allocations; dropping without dequeuing everything
+        // must not leak. The Drop impl drains remaining items.
+        let q = LockFreeQueue::new(4);
+        q.enqueue(String::from("leak_check_1")).unwrap();
+        q.enqueue(String::from("leak_check_2")).unwrap();
+        // Only dequeue one; the other must be dropped cleanly.
+        let _ = q.dequeue().unwrap();
+        drop(q);
+    }
+
+    #[test]
+    fn send_across_thread() {
+        // C2: Verify Send/Sync soundness by moving the queue to another thread.
+        let q = std::sync::Arc::new(LockFreeQueue::new(4));
+        let q2 = q.clone();
+        let handle = std::thread::spawn(move || {
+            q2.enqueue(42u64).unwrap();
+        });
+        handle.join().unwrap();
+        assert_eq!(q.dequeue().unwrap(), 42);
+    }
+
+    #[test]
+    fn wrap_around_reuse() {
+        // Fill, drain, refill to exercise slot reuse across sequence wrap.
+        let q = LockFreeQueue::new(2);
+        for round in 0..4u64 {
+            q.enqueue(round * 10).unwrap();
+            q.enqueue(round * 10 + 1).unwrap();
+            assert_eq!(q.dequeue().unwrap(), round * 10);
+            assert_eq!(q.dequeue().unwrap(), round * 10 + 1);
+        }
+    }
+}
+

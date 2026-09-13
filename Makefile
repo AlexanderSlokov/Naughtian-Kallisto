@@ -108,7 +108,8 @@ docs-build:
         bench-server bench-release bench-laptop bench-http \
         docker-build docker-test docker-run \
         devcontainer_cloud_build devcontainer_local_build \
-        docs-serve docs-build
+        docs-serve docs-build \
+        verify verify-miri verify-proptest loom fuzz mutants-core mutants-all prove
 
 all: build
 
@@ -122,6 +123,14 @@ help:
 	@echo "  Test:"
 	@echo "    make test           - Run all unit tests (cargo test)"
 	@echo "    make e2e            - Run Vault API E2E compatibility tests"
+	@echo ""
+	@echo "  Verification (ADR-0013):"
+	@echo "    make verify         - proptest + miri (BLOCKING, every PR)"
+	@echo "    make loom           - Loom concurrency model checker (nightly schedule)"
+	@echo "    make fuzz           - cargo-fuzz, 15m per target (nightly schedule)"
+	@echo "    make mutants-core   - Mutation testing, main crate only (~30 min)"
+	@echo "    make mutants-all    - Mutation testing, entire workspace (~2-3h, weekly)"
+	@echo "    make prove          - Creusot proofs (advisory, allowed to fail)"
 	@echo ""
 	@echo "  Static analysis:"
 	@echo "    make format         - cargo fmt --all"
@@ -170,3 +179,55 @@ deny:
 
 # Everything CI enforces, in CI's order. Run this before opening a PR.
 dev: format clippy deny test
+
+
+# Verification (ADR-0013)
+# -----------------------
+# Only `make verify` blocks PRs. The rest run on nightly/weekly schedules.
+# See ADR-0013 §5 and roadmap Phase V for the full CI wiring spec.
+
+# BLOCKING — runs on every PR.
+# Combines miri (memory safety for unsafe code) and proptest (KV-v2 invariants).
+verify: verify-miri verify-proptest
+
+# Miri: detects UB, data races, and memory leaks in unsafe blocks.
+# Scoped to lock_free_queue tests which exercise all unsafe code paths.
+verify-miri:
+	cargo +nightly miri test -p naughtian-kallisto -- engine::lock_free_queue::tests
+
+# Proptest: model-based property testing for KV-v2 semantics (A1–A9).
+# Requires the kallisto_kv_model crate (V1). Until V1 lands, this is a no-op.
+verify-proptest:
+	@if cargo metadata --no-deps --format-version=1 2>/dev/null | grep -q kallisto_kv_model; then \
+		cargo test -p kallisto_kv_model; \
+	else \
+		echo "kallisto_kv_model not yet created — skipping proptest"; \
+	fi
+
+# Loom: exhaustive concurrency model checker for LockFreeQueue and ShardedCuckooTable.
+# Slow (explores all thread interleavings). Run on nightly CI schedule, not per-PR.
+loom:
+	RUSTFLAGS="--cfg loom" cargo test --features loom \
+		-p naughtian-kallisto --lib engine::loom_tests -- --test-threads=1
+
+# cargo-fuzz: feeds random bytes into rkyv deserialization and HTTP parsing.
+# 15 minutes per target. Run on nightly CI schedule.
+fuzz:
+	cargo +nightly fuzz run rkyv_deser  -- -max_total_time=900
+	cargo +nightly fuzz run http_parser -- -max_total_time=900
+
+# Mutation testing: measures test suite quality by injecting faults.
+# mutants-core: main crate only, ~30 min. Good for local dev feedback.
+# mutants-all:  entire workspace, ~2-3h. Run weekly in CI, posts score as comment.
+mutants-core:
+	cargo mutants -p naughtian-kallisto
+
+mutants-all:
+	cargo mutants --workspace
+
+# Creusot: deductive proofs for kallisto_kv_model (Tier 2, advisory).
+# Requires opam + Why3 + SMT solver. See ADR-0013 V4.
+# allowed to fail — never blocks PRs or nightly.
+prove:
+	@echo "Creusot proofs not yet wired (V4 deferred to 1.2.0)"
+
