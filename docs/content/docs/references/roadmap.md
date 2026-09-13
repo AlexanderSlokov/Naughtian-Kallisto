@@ -103,6 +103,81 @@ Commit to dropping RocksDB at the single-node stage, rather than waiting for Raf
   - A log entry means a credential sits on disk unpurged. All payloads written to the log must pass through the Phase 2 encryption barrier.
   - Snapshot and log truncation frequency is a security dial (narrowing disk exposure), not a performance dial. Set it higher than standard DB defaults.
 
+### Phase V: Verification (ADR-0013)
+
+Verification phases are ordered by fastest value. V0, V2, and V3 have no prerequisites and can run in parallel with any other phase. V1 requires V0.
+
+#### V0 — Miri + Mutants Baseline (runs parallel to Phase 3, no deps)
+
+- [ ] Add `// SAFETY:` comments to both `unsafe` blocks in `lock_free_queue.rs` (lines 74-78 and 107-110). AGENTS.md requires this before miri work begins.
+- [ ] Add `#[cfg(miri)] mod miri_tests` to `lock_free_queue.rs`:
+  - C1: write + read round-trip triggers no UB
+  - C2: send queue across a thread boundary is sound (`Send/Sync`)
+  - C3: dropping a partially-filled queue leaks no `Node<T>` allocations
+- [ ] Wire `make verify` (initial scope: miri on `lock_free_queue` and `miri_tests`).
+- [ ] Wire `make mutants-core` (scoped to `-p naughtian-kallisto`, ~30 min) and `make mutants-all` (entire workspace, ~2-3h, run weekly in CI). Record the baseline mutation score before writing any new tests.
+
+#### V2 — Loom (runs parallel to Phase 3, no deps)
+
+- [ ] Add `loom = "0.7"` to `[dev-dependencies]` and a `[features] loom = []` entry in `Cargo.toml`.
+- [ ] Create `src/engine/loom_tests.rs` (gated on `#[cfg(loom)]`) with six tests:
+  - B1: no enqueued item is lost; no item dequeued twice
+  - B2: full queue returns `QueueError::Full`; no unconsumed slot is overwritten
+  - B3: `ShardedCuckooTable::insert` returning `true` guarantees subsequent `lookup` finds the entry
+  - B4: CLOCK eviction leaves no dangling `lookup_map` pointer
+  - B5: `Drop` order—`async_worker.join()` completes before `rocksdb.flush()` (prevents recurrence of the C++ Phase 4a crash)
+- [ ] Wire `make loom`: `RUSTFLAGS="--cfg loom" cargo test --features loom -p naughtian-kallisto --lib engine::loom_tests -- --test-threads=1`
+
+#### V3 — cargo-fuzz (runs parallel to Phase 3, no deps)
+
+- [ ] Create `fuzz/` directory with workspace `Cargo.toml` and two targets:
+  - `fuzz/fuzz_targets/rkyv_deser.rs`: feeds arbitrary bytes into `rkyv::archived_root::<KeyMetadata>` and `rkyv::archived_root::<SecretPayload>` (exercises C1 under adversarial input)
+  - `fuzz/fuzz_targets/http_parser.rs`: feeds arbitrary HTTP bodies into the `put_version` handler (checks for panics on malformed input)
+- [ ] Wire `make fuzz`: 15 min per target on nightly CI.
+
+#### V1 — `kallisto_kv_model` Crate + proptest (depends on V0)
+
+This is the largest change in the verification track. It fixes two confirmed issues as implementation consequences.
+
+**Confirmed bugs fixed here:**
+- A7: `put_version` never trims `meta.versions` against `max_versions` (`kv_engine.rs:319`). Metadata grows unboundedly, diverging from Vault semantics.
+- A9: `build_version_key` formats as `v:{path}:{version}`. A path containing `:` causes key collisions. Fix: switch to `v:{len_hex8}:{path}:{version}` (length-prefix encoding, unconditionally injective, zero edge cases). Breaking change on disk format—acceptable with zero users.
+
+- [ ] Create `components/kallisto_kv_model/` (picked up automatically by the `components/*` workspace glob):
+  - `ops.rs`: `KvOp` enum
+  - `effects.rs`: `Effect` enum
+  - `apply.rs`: `pub fn apply(meta: &KeyMetadata, op: KvOp, now_ms: u64) -> Result<(KeyMetadata, Vec<Effect>), EngineError>` — pure, no async, no I/O, no unsafe
+  - `oracle.rs`: `BTreeMap`-backed reference implementation for proptest model comparison
+- [ ] Implement A7 fix inside `apply`: when `max_versions > 0` and `versions.len() >= max_versions`, drop the oldest non-destroyed version before appending. Verify against `hashicorp/vault/builtin/logical/kv/path_data.go` (cite file + line in commit message).
+- [ ] Implement A9 fix: switch `build_version_key` and `build_meta_key` to length-prefix encoding. Migrate any existing test fixtures.
+- [ ] Write nine proptest property tests in `apply.rs` covering A1–A9. Each test must be demonstrably fail-able: commit message must cite a SHA or diff that breaks it.
+- [ ] Refactor `KvEngine`: `put_version`, `soft_delete`, `undelete`, and `destroy_version` delegate to `kallisto_kv_model::apply()`. No business logic remains inside `KvEngine`.
+- [ ] Extend `make verify` to include `cargo test -p kallisto_kv_model`.
+
+#### Security Invariants E1/E2/E3 (standard tests, blocking)
+
+- [ ] Create `tests/security_invariants.rs`:
+  - E1: `format!("{:?}", payload)` must not contain the literal secret value. Same check for `KeyMetadata` and error messages.
+  - E2: Token comparison uses `subtle::ConstantTimeEq`. Assert structurally (code path calls `ct_eq`); timing measurements are unreliable in test environments.
+  - E3: `allow *` + `deny specific-path` policy pair returns `Denied` for the specific path.
+
+#### Durability Invariants D1/D2 (integration tests)
+
+- [ ] Extend `tests/integration/test_persistence.sh`:
+  - D1: Immediate mode — write a key, `kill -9`, restart, read the key; fail if absent.
+  - D2: Batch mode — write a key, `kill -9` before the 5ms flush window, restart, assert the key **may** be absent. The test locks down the documented write-behind contract, not a stronger guarantee. Fails if documentation and code disagree.
+
+#### CI Wiring
+
+- [ ] Add to `.github/workflows/`:
+  - `make verify`: blocking, every PR
+  - `make loom`: nightly schedule only (slow)
+  - `make fuzz`: nightly schedule only
+  - `make mutants-core`: weekly, advisory (post score as comment)
+  - `make mutants-all`: weekly, advisory
+  - `make prove` (Creusot, deferred—see 1.2.0): advisory, `continue-on-error: true`
+- Three-strikes rule: a non-blocking job that fails three consecutive nightly runs without a fix is removed from CI. A permanently red job is worse than no job.
+
 ### 1.1.0 Acceptance Criteria
 
 - `cargo test --workspace` passes 100%.
@@ -111,6 +186,11 @@ Commit to dropping RocksDB at the single-node stage, rather than waiting for Raf
 - Dataplane test suite passes with zero controlplane configuration.
 - Integration test: kill the controlplane mid-run; the dataplane continues serving cache reads and contacting upstream for cache misses.
 - `openraft` `Suite::test_all()` is deferred (no Raft in 1.1.0), but the `redb` adapter must be written to pass this suite when Raft activates.
+- `make verify` passes cleanly (`proptest` + `miri`).
+- `make loom` passes on the latest nightly run.
+- `tests/security_invariants.rs` passes 100% (E1/E2/E3).
+- `tests/integration/test_persistence.sh` passes with D1 and D2 asserted.
+- `kallisto_kv_model` crate compiles with no `unsafe`, no I/O dependencies, and no async.
 
 ---
 
@@ -135,6 +215,21 @@ These are the non-goals of improvement proposal 1.1.0, recorded here to prevent 
 - The payload is a deletion command; it never contains the secret itself.
 - Eventual consistency is acceptable when paired with a hard TTL.
 - No routing tables stored—SWIM rediscovers the network rapidly.
+
+### Verification: Creusot Pilot + TLA+ (1.2.0)
+
+Deferred from 1.1.0. Both tools require prerequisites that are not yet met.
+
+#### V4 — Creusot Pilot (requires V1)
+
+- [ ] Verify Creusot 0.11.x builds in the devcontainer: requires `opam`, Why3, and an SMT solver, pinned to a specific nightly separate from the workspace toolchain. If setup exceeds 2 hours or conflicts with workspace nightly—stop and record the blocker. Cancelling V4 does not affect Tier 1.
+- [ ] If build succeeds: write Creusot proofs for `kallisto_kv_model::apply` covering the Group A invariants already tested by proptest. Proofs run as `make prove` with `allowed_failure: true`.
+- [ ] Proof maintenance rule: refactoring `apply` requires updating associated proofs before merging.
+
+#### V5 — TLA+ for Control/Data Plane Protocols (before coding CP/DP in 1.2.0)
+
+- [ ] Write TLA+ specifications for lease invalidation, gossip invalidation commands, and Raft interaction. Specifications must be written and model-checked *before* any control plane / data plane protocol code is committed.
+- [ ] Wire `make prove-tla` running TLC.
 
 ### Raft and HA for Control Plane (Unscheduled)
 
@@ -245,8 +340,11 @@ Note: dynamic secret generation with short TTLs and policy-based lease renewals 
 | ADR-0010 | Static secret boundary for control plane | proposed |
 | ADR-0011 | Proxy mode architecture and technical requirements | proposed |
 | ADR-0012 | Seal trait + encryption barrier + buffer pool | **unwritten** |
+| ADR-0013 | Verification strategy | proposed |
 
 ADR-0008 through ADR-0011 remain `proposed`, yet Phase 3 and Phase 4 depend on them directly. Their statuses must be finalized before coding those phases.
+
+ADR-0012 (Seal trait) is a hard prerequisite for 1.1.0 Phase 2 and must be written before that phase begins. ADR-0013 (Verification) is proposed and its V0/V2/V3 work items can begin immediately.
 
 ---
 
