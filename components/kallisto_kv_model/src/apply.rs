@@ -262,12 +262,10 @@ mod tests {
     /// metadata after all operations.
     fn apply_sequence(ops: &[KvOp]) -> KeyMetadata {
         let mut meta = KeyMetadata::default();
-        let mut time = 1000u64;
-        for op in ops {
-            if let Ok((new_meta, _)) = apply(&meta, op.clone(), time) {
+        for (time, op) in (1000u64..).zip(ops.iter().cloned()) {
+            if let Ok((new_meta, _)) = apply(&meta, op, time) {
                 meta = new_meta;
             }
-            time += 1;
         }
         meta
     }

@@ -1,3 +1,4 @@
+#![allow(dead_code)]
 use std::collections::BTreeMap;
 
 use crate::{
@@ -18,10 +19,7 @@ impl Oracle {
     }
 
     pub fn apply_op(&mut self, path: &str, op: KvOp, now_ms: u64) {
-        let meta = self
-            .store
-            .entry(path.to_string())
-            .or_insert_with(KeyMetadata::default);
+        let meta = self.store.entry(path.to_string()).or_default();
 
         if let Ok((new_meta, _effects)) = apply(meta, op, now_ms) {
             *meta = new_meta;

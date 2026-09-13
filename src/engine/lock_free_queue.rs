@@ -148,7 +148,7 @@ mod tests {
         q.enqueue(20).unwrap();
         assert_eq!(q.dequeue().unwrap(), 10);
         assert_eq!(q.dequeue().unwrap(), 20);
-        assert!(q.dequeue().is_err());
+        let _ = q.dequeue().unwrap_err();
     }
 
     #[test]
