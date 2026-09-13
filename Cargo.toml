@@ -53,12 +53,17 @@ socket2 = { workspace = true }
 core_affinity = { workspace = true }
 siphasher = "1.0.3"
 kallisto_kv_model = { path = "components/kallisto_kv_model" }
+loom = { version = "0.7", optional = true }
+
+[features]
+loom = ["dep:loom"]
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tower = { version = "0.5", features = ["util"] }
 reqwest = { version = "0.12", features = ["json"] }
 control_plane = { path = "components/kallisto_cluster" }
+walkdir = "2.5.0"
 
 [[bench]]
 name = "storage_bench"

@@ -37,11 +37,20 @@ pub struct KeyMetadata {
 }
 
 #[derive(
-    Debug, Clone, SerdeSerialize, SerdeDeserialize, Archive, Serialize, Deserialize, PartialEq, Eq,
+    Clone, SerdeSerialize, SerdeDeserialize, Archive, Serialize, Deserialize, PartialEq, Eq,
 )]
 pub struct SecretPayload {
     pub value: String, // Chứa dữ liệu bí mật
     pub ttl: u64,
+}
+
+impl std::fmt::Debug for SecretPayload {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SecretPayload")
+            .field("value", &"<REDACTED>")
+            .field("ttl", &self.ttl)
+            .finish()
+    }
 }
 
 #[async_trait]

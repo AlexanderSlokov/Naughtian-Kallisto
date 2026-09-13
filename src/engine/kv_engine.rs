@@ -191,6 +191,48 @@ impl KvEngine {
     }
 }
 
+fn meta_to_model(meta: &KeyMetadata) -> kallisto_kv_model::apply::KeyMetadata {
+    kallisto_kv_model::apply::KeyMetadata {
+        current_version: meta.current_version,
+        max_versions: meta.max_versions,
+        cas_required: meta.cas_required,
+        delete_version_after_ms: meta.delete_version_after_ms,
+        versions: meta
+            .versions
+            .iter()
+            .map(|v| kallisto_kv_model::apply::VersionState {
+                created_time_ms: v.created_time_ms,
+                deletion_time_ms: v.deletion_time_ms,
+                version_id: v.version_id,
+                destroyed: v.destroyed,
+            })
+            .collect(),
+    }
+}
+
+fn meta_from_model(
+    model: kallisto_kv_model::apply::KeyMetadata,
+    custom_metadata: std::collections::HashMap<String, String>,
+) -> KeyMetadata {
+    KeyMetadata {
+        current_version: model.current_version,
+        max_versions: model.max_versions,
+        cas_required: model.cas_required,
+        delete_version_after_ms: model.delete_version_after_ms,
+        custom_metadata,
+        versions: model
+            .versions
+            .into_iter()
+            .map(|v| crate::engine::traits::VersionState {
+                created_time_ms: v.created_time_ms,
+                deletion_time_ms: v.deletion_time_ms,
+                version_id: v.version_id,
+                destroyed: v.destroyed,
+            })
+            .collect(),
+    }
+}
+
 impl Drop for KvEngine {
     fn drop(&mut self) {
         self.async_running.store(false, Ordering::Relaxed);
@@ -296,16 +338,18 @@ impl SecretEngine for KvEngine {
         let mkey = Self::build_meta_key(path);
         let meta = match self.read_metadata(path).await {
             Ok(m) => m,
-            Err(EngineError::NotFound) => kallisto_kv_model::apply::KeyMetadata::default(),
+            Err(EngineError::NotFound) => KeyMetadata::default(),
             Err(e) => return Err(e),
         };
+
+        let model_meta = meta_to_model(&meta);
 
         let op = kallisto_kv_model::ops::KvOp::Put {
             payload_len: payload.value.len(),
             cas,
         };
 
-        let (new_meta, effects) = kallisto_kv_model::apply::apply(&meta, op, now_ms())
+        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
             .map_err(|e| match e {
                 kallisto_kv_model::apply::ModelError::CasMismatch { expected, actual } => {
                     EngineError::CasMismatch { expected, actual }
@@ -326,13 +370,14 @@ impl SecretEngine for KvEngine {
                     self.cache.insert(
                         &vkey,
                         SecretEntry {
-                            key: vkey,
+                            key: vkey.clone(),
                             payload: serialized_payload,
                             referenced: std::sync::atomic::AtomicBool::new(true),
                         },
                     );
                 }
                 kallisto_kv_model::effects::Effect::WriteMeta => {
+                    let new_meta = meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
                     let serialized_meta = Self::serialize_metadata(&new_meta)?;
                     self.enqueue_or_execute(AsyncOp::Put {
                         key: mkey.clone(),
@@ -365,9 +410,10 @@ impl SecretEngine for KvEngine {
     async fn soft_delete(&self, path: &str, version: u32) -> Result<(), EngineError> {
         let mkey = Self::build_meta_key(path);
         let meta = self.read_metadata(path).await?;
+        let model_meta = meta_to_model(&meta);
 
         let op = kallisto_kv_model::ops::KvOp::SoftDelete { version };
-        let (new_meta, effects) = kallisto_kv_model::apply::apply(&meta, op, now_ms())
+        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
             .map_err(|e| match e {
                 kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
                 kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
@@ -376,6 +422,7 @@ impl SecretEngine for KvEngine {
 
         for effect in effects {
             if matches!(effect, kallisto_kv_model::effects::Effect::WriteMeta) {
+                let new_meta = meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
                 let serialized_meta = Self::serialize_metadata(&new_meta)?;
                 self.enqueue_or_execute(AsyncOp::Put {
                     key: mkey.clone(),
@@ -398,9 +445,10 @@ impl SecretEngine for KvEngine {
     async fn undelete(&self, path: &str, version: u32) -> Result<(), EngineError> {
         let mkey = Self::build_meta_key(path);
         let meta = self.read_metadata(path).await?;
+        let model_meta = meta_to_model(&meta);
 
         let op = kallisto_kv_model::ops::KvOp::Undelete { version };
-        let (new_meta, effects) = kallisto_kv_model::apply::apply(&meta, op, now_ms())
+        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
             .map_err(|e| match e {
                 kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
                 kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
@@ -409,6 +457,7 @@ impl SecretEngine for KvEngine {
 
         for effect in effects {
             if matches!(effect, kallisto_kv_model::effects::Effect::WriteMeta) {
+                let new_meta = meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
                 let serialized_meta = Self::serialize_metadata(&new_meta)?;
                 self.enqueue_or_execute(AsyncOp::Put {
                     key: mkey.clone(),
@@ -431,9 +480,10 @@ impl SecretEngine for KvEngine {
     async fn destroy_version(&self, path: &str, version: u32) -> Result<(), EngineError> {
         let mkey = Self::build_meta_key(path);
         let meta = self.read_metadata(path).await?;
+        let model_meta = meta_to_model(&meta);
 
         let op = kallisto_kv_model::ops::KvOp::Destroy { version };
-        let (new_meta, effects) = kallisto_kv_model::apply::apply(&meta, op, now_ms())
+        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
             .map_err(|e| match e {
                 kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
                 kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
@@ -443,6 +493,7 @@ impl SecretEngine for KvEngine {
         for effect in effects {
             match effect {
                 kallisto_kv_model::effects::Effect::WriteMeta => {
+                    let new_meta = meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
                     let serialized_meta = Self::serialize_metadata(&new_meta)?;
                     self.enqueue_or_execute(AsyncOp::Put {
                         key: mkey.clone(),

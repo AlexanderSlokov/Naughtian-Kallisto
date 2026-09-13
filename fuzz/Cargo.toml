@@ -1,0 +1,28 @@
+[package]
+name = "naughtian-kallisto-fuzz"
+version = "0.0.1"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rkyv = "0.7"
+naughtian-kallisto = { path = ".." }
+axum = "0.7"
+http = "1.0"
+hyper = "1.0"
+
+[[bin]]
+name = "rkyv_deser"
+path = "fuzz_targets/rkyv_deser.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "http_parser"
+path = "fuzz_targets/http_parser.rs"
+test = false
+doc = false
