@@ -1,6 +1,9 @@
-use crate::apply::{apply, KeyMetadata};
-use crate::ops::KvOp;
 use std::collections::BTreeMap;
+
+use crate::{
+    apply::{KeyMetadata, apply},
+    ops::KvOp,
+};
 
 /// BTreeMap-backed reference implementation for proptest model comparison.
 /// Acts as the ultimate source of truth for KV-v2 state transitions.

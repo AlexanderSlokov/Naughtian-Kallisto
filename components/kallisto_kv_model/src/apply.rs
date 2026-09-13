@@ -1,5 +1,4 @@
-use crate::effects::Effect;
-use crate::ops::KvOp;
+use crate::{effects::Effect, ops::KvOp};
 
 /// KV-v2 version state, matching the engine's `VersionState`.
 /// Duplicated here to keep this crate free of I/O and serialization deps.
@@ -14,7 +13,7 @@ pub struct VersionState {
 }
 
 /// KV-v2 key metadata, matching the engine's `KeyMetadata`.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeyMetadata {
     pub current_version: u32,
     /// 0 = use engine mount config default (no trim).
@@ -22,18 +21,6 @@ pub struct KeyMetadata {
     pub cas_required: bool,
     pub delete_version_after_ms: u64,
     pub versions: Vec<VersionState>,
-}
-
-impl Default for KeyMetadata {
-    fn default() -> Self {
-        Self {
-            current_version: 0,
-            max_versions: 0,
-            cas_required: false,
-            delete_version_after_ms: 0,
-            versions: Vec::new(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -54,15 +41,21 @@ pub enum ModelError {
 ///
 /// # Example
 /// ```
-/// use kallisto_kv_model::apply::{apply, KeyMetadata, ModelError};
-/// use kallisto_kv_model::ops::KvOp;
+/// use kallisto_kv_model::{
+///     apply::{KeyMetadata, ModelError, apply},
+///     ops::KvOp,
+/// };
 ///
 /// let meta = KeyMetadata::default();
 /// let (new_meta, effects) = apply(
 ///     &meta,
-///     KvOp::Put { payload_len: 42, cas: None },
+///     KvOp::Put {
+///         payload_len: 42,
+///         cas: None,
+///     },
 ///     1000,
-/// ).unwrap();
+/// )
+/// .unwrap();
 /// assert_eq!(new_meta.current_version, 1);
 /// ```
 pub fn apply(
@@ -89,13 +82,13 @@ fn apply_put(
     now_ms: u64,
 ) -> Result<(KeyMetadata, Vec<Effect>), ModelError> {
     // A4: CAS mismatch leaves state byte-for-byte unchanged.
-    if let Some(expected_cas) = cas {
-        if meta.current_version != expected_cas {
-            return Err(ModelError::CasMismatch {
-                expected: expected_cas,
-                actual: meta.current_version,
-            });
-        }
+    if let Some(expected_cas) = cas
+        && meta.current_version != expected_cas
+    {
+        return Err(ModelError::CasMismatch {
+            expected: expected_cas,
+            actual: meta.current_version,
+        });
     }
 
     let mut new_meta = meta.clone();
@@ -124,11 +117,7 @@ fn apply_put(
     // hashicorp/vault/builtin/logical/kv/path_data.go (~line 300).
     if new_meta.max_versions > 0 {
         while new_meta.versions.len() as u32 > new_meta.max_versions {
-            if let Some(pos) = new_meta
-                .versions
-                .iter()
-                .position(|v| !v.destroyed)
-            {
+            if let Some(pos) = new_meta.versions.iter().position(|v| !v.destroyed) {
                 let trimmed = new_meta.versions.remove(pos);
                 effects.push(Effect::TrimVersion {
                     version: trimmed.version_id,
@@ -160,7 +149,8 @@ fn apply_undelete(
 ) -> Result<(KeyMetadata, Vec<Effect>), ModelError> {
     let mut new_meta = meta.clone();
     let vs = find_version_mut(&mut new_meta.versions, version)?;
-    // A3: destroyed = true is terminal. Undelete on a destroyed version is an error.
+    // A3: destroyed = true is terminal. Undelete on a destroyed version is an
+    // error.
     if vs.destroyed {
         return Err(ModelError::Destroyed(version));
     }
@@ -240,9 +230,10 @@ pub fn build_version_key(path: &str, version: u32) -> String {
 
 #[cfg(test)]
 mod tests {
+    use proptest::prelude::*;
+
     use super::*;
     use crate::ops::KvOp;
-    use proptest::prelude::*;
 
     // --- Strategies ---
 
@@ -470,11 +461,18 @@ mod tests {
     #[test]
     fn destroy_retains_version_state() {
         let mut meta = KeyMetadata::default();
-        let (m, _) = apply(&meta, KvOp::Put { payload_len: 10, cas: None }, 1000).unwrap();
+        let (m, _) = apply(
+            &meta,
+            KvOp::Put {
+                payload_len: 10,
+                cas: None,
+            },
+            1000,
+        )
+        .unwrap();
         meta = m;
 
-        let (after_destroy, effects) =
-            apply(&meta, KvOp::Destroy { version: 1 }, 2000).unwrap();
+        let (after_destroy, effects) = apply(&meta, KvOp::Destroy { version: 1 }, 2000).unwrap();
 
         // VersionState still exists in metadata.
         let vs = after_destroy
@@ -485,9 +483,11 @@ mod tests {
         assert!(vs.destroyed);
 
         // A DeleteVersion effect was emitted (payload deletion).
-        assert!(effects
-            .iter()
-            .any(|e| matches!(e, Effect::DeleteVersion { version: 1 })));
+        assert!(
+            effects
+                .iter()
+                .any(|e| matches!(e, Effect::DeleteVersion { version: 1 }))
+        );
     }
 
     // --- A9: (path, version) -> storage key is injective ---
@@ -504,8 +504,8 @@ mod tests {
                 let key_a = build_version_key(&path_a, ver_a);
                 let key_b = build_version_key(&path_b, ver_b);
                 prop_assert_ne!(
-                    key_a, key_b,
-                    "collision: ({:?}, {}) and ({:?}, {}) both map to {:?}",
+                    key_a.clone(), key_b,
+                    "collision: ({:?}, {}) and ({:?}, {}) both generated key {}",
                     path_a, ver_a, path_b, ver_b, key_a,
                 );
             }

@@ -1,7 +1,12 @@
-use loom::sync::atomic::{AtomicUsize, Ordering};
-use loom::sync::Arc;
-use loom::thread;
 use std::mem::MaybeUninit;
+
+use loom::{
+    sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    },
+    thread,
+};
 
 // A simplified lock-free queue for Loom testing.
 // We duplicate the core logic here using loom primitives because the actual
@@ -113,7 +118,7 @@ impl<T> Drop for LoomLockFreeQueue<T> {
 fn prop_loom_b1_b2_lock_free_queue() {
     loom::model(|| {
         let q = Arc::new(LoomLockFreeQueue::new(2));
-        
+
         let q1 = q.clone();
         let t1 = thread::spawn(move || {
             let _ = q1.enqueue(1usize);
@@ -136,21 +141,21 @@ fn prop_loom_b1_b2_lock_free_queue() {
 fn prop_loom_b3_cuckoo_table_insert_lookup() {
     loom::model(|| {
         // Simplified test for loom - usually we would mock the cuckoo table here
-        // with loom primitives, but since ShardedCuckooTable is complex, we just 
+        // with loom primitives, but since ShardedCuckooTable is complex, we just
         // verify the atomic properties of a single shard.
         let atomic_val = Arc::new(loom::sync::atomic::AtomicUsize::new(0));
         let a1 = atomic_val.clone();
         let t1 = thread::spawn(move || {
             a1.store(1, Ordering::Release);
         });
-        
+
         let a2 = atomic_val.clone();
         let t2 = thread::spawn(move || {
             if a2.load(Ordering::Acquire) == 1 {
                 // Ensure happens-before relationship
             }
         });
-        
+
         t1.join().unwrap();
         t2.join().unwrap();
     });
@@ -166,13 +171,13 @@ fn prop_loom_b4_clock_eviction() {
             let val = c1.fetch_add(1, Ordering::SeqCst);
             assert!(val < 3); // max states
         });
-        
+
         let c2 = clock.clone();
         let t2 = thread::spawn(move || {
             let val = c2.fetch_add(1, Ordering::SeqCst);
             assert!(val < 3);
         });
-        
+
         t1.join().unwrap();
         t2.join().unwrap();
     });
@@ -184,18 +189,18 @@ fn prop_loom_b5_drop_order() {
     loom::model(|| {
         // Simulate drop order constraints
         let state = Arc::new(loom::sync::atomic::AtomicUsize::new(0));
-        
+
         let s1 = state.clone();
         let worker = thread::spawn(move || {
             s1.store(1, Ordering::Release); // worker done
         });
-        
+
         let s2 = state.clone();
         let flusher = thread::spawn(move || {
             worker.join().unwrap(); // must join before flush
             assert_eq!(s2.load(Ordering::Acquire), 1);
         });
-        
+
         flusher.join().unwrap();
     });
 }

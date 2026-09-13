@@ -354,7 +354,9 @@ impl SecretEngine for KvEngine {
                 kallisto_kv_model::apply::ModelError::CasMismatch { expected, actual } => {
                     EngineError::CasMismatch { expected, actual }
                 }
-                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
+                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => {
+                    EngineError::InvalidVersion(v)
+                }
                 kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
             })?;
 
@@ -377,7 +379,8 @@ impl SecretEngine for KvEngine {
                     );
                 }
                 kallisto_kv_model::effects::Effect::WriteMeta => {
-                    let new_meta = meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
+                    let new_meta =
+                        meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
                     let serialized_meta = Self::serialize_metadata(&new_meta)?;
                     self.enqueue_or_execute(AsyncOp::Put {
                         key: mkey.clone(),
@@ -395,8 +398,8 @@ impl SecretEngine for KvEngine {
                 kallisto_kv_model::effects::Effect::IndexPath => {
                     self.path_index.insert_path_if_absent(path);
                 }
-                kallisto_kv_model::effects::Effect::TrimVersion { version } |
-                kallisto_kv_model::effects::Effect::DeleteVersion { version } => {
+                kallisto_kv_model::effects::Effect::TrimVersion { version }
+                | kallisto_kv_model::effects::Effect::DeleteVersion { version } => {
                     let vkey = Self::build_version_key(path, version);
                     self.enqueue_or_execute(AsyncOp::Delete { key: vkey.clone() })?;
                     self.cache.remove(&vkey);
@@ -415,14 +418,17 @@ impl SecretEngine for KvEngine {
         let op = kallisto_kv_model::ops::KvOp::SoftDelete { version };
         let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
             .map_err(|e| match e {
-                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
+                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => {
+                    EngineError::InvalidVersion(v)
+                }
                 kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
                 _ => EngineError::StorageError("Unexpected model error".into()),
             })?;
 
         for effect in effects {
             if matches!(effect, kallisto_kv_model::effects::Effect::WriteMeta) {
-                let new_meta = meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
+                let new_meta =
+                    meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
                 let serialized_meta = Self::serialize_metadata(&new_meta)?;
                 self.enqueue_or_execute(AsyncOp::Put {
                     key: mkey.clone(),
@@ -450,14 +456,17 @@ impl SecretEngine for KvEngine {
         let op = kallisto_kv_model::ops::KvOp::Undelete { version };
         let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
             .map_err(|e| match e {
-                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
+                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => {
+                    EngineError::InvalidVersion(v)
+                }
                 kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
                 _ => EngineError::StorageError("Unexpected model error".into()),
             })?;
 
         for effect in effects {
             if matches!(effect, kallisto_kv_model::effects::Effect::WriteMeta) {
-                let new_meta = meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
+                let new_meta =
+                    meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
                 let serialized_meta = Self::serialize_metadata(&new_meta)?;
                 self.enqueue_or_execute(AsyncOp::Put {
                     key: mkey.clone(),
@@ -485,7 +494,9 @@ impl SecretEngine for KvEngine {
         let op = kallisto_kv_model::ops::KvOp::Destroy { version };
         let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
             .map_err(|e| match e {
-                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
+                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => {
+                    EngineError::InvalidVersion(v)
+                }
                 kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
                 _ => EngineError::StorageError("Unexpected model error".into()),
             })?;
@@ -493,7 +504,8 @@ impl SecretEngine for KvEngine {
         for effect in effects {
             match effect {
                 kallisto_kv_model::effects::Effect::WriteMeta => {
-                    let new_meta = meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
+                    let new_meta =
+                        meta_from_model(new_model_meta.clone(), meta.custom_metadata.clone());
                     let serialized_meta = Self::serialize_metadata(&new_meta)?;
                     self.enqueue_or_execute(AsyncOp::Put {
                         key: mkey.clone(),
@@ -508,8 +520,8 @@ impl SecretEngine for KvEngine {
                         },
                     );
                 }
-                kallisto_kv_model::effects::Effect::DeleteVersion { version } |
-                kallisto_kv_model::effects::Effect::TrimVersion { version } => {
+                kallisto_kv_model::effects::Effect::DeleteVersion { version }
+                | kallisto_kv_model::effects::Effect::TrimVersion { version } => {
                     let vkey = Self::build_version_key(path, version);
                     self.enqueue_or_execute(AsyncOp::Delete { key: vkey.clone() })?;
                     self.cache.remove(&vkey);

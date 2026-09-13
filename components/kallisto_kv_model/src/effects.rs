@@ -3,11 +3,17 @@
 /// never performs I/O.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Effect {
-    WriteVersion { version: u32 },
-    DeleteVersion { version: u32 },
+    WriteVersion {
+        version: u32,
+    },
+    DeleteVersion {
+        version: u32,
+    },
     WriteMeta,
     IndexPath,
     /// Trim oldest version: the engine must delete the payload at this version
     /// from storage and cache after the metadata write.
-    TrimVersion { version: u32 },
+    TrimVersion {
+        version: u32,
+    },
 }

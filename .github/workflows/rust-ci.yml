@@ -67,3 +67,65 @@ jobs:
 
       - name: Run Tests
         run: cargo test --workspace
+
+  verify:
+    name: Verify (Miri & Proptest)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-x86_64-unknown-linux-gnu
+          components: miri, rust-src
+
+      - name: Install OS dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+
+      - name: Run make verify
+        run: make verify
+
+  loom-fuzz:
+    name: Loom & Fuzz
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-x86_64-unknown-linux-gnu
+
+      - name: Install OS dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz
+
+      - name: Run Loom tests
+        run: make loom
+
+      - name: Check Fuzz targets build
+        run: cargo +nightly fuzz build
+
+  mutants:
+    name: Mutation Testing
+    runs-on: ubuntu-latest
+    continue-on-error: true # Advisory only
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Install OS dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants
+
+      - name: Run Mutation Testing (Core)
+        run: make mutants-core
