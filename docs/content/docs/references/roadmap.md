@@ -3,256 +3,256 @@ title: "Kallisto Project Roadmap & History"
 weight: 10
 ---
 
-## Vị trí hiện tại
+## Current Status
 
-Bản Rust rewrite đã hoàn tất và thay thế toàn bộ codebase C++. Những gì đang chạy trong `1.0.0-alpha`:
+The Rust rewrite is complete and replaces the entire C++ codebase. Running in `1.0.0-alpha`:
 
-- KV v2 core CRUD tương thích Vault/OpenBao (versioning, CAS, soft-delete, destroy, subkeys, JSON Merge Patch).
-- Thread-per-core Tokio + `SO_REUSEPORT`, sharded CuckooTable 64 shard, write-behind qua Vyukov MPMC lock-free queue, RocksDB làm backend bền vững.
-- Hai mặt phẳng cổng tách biệt: data plane 8200, admin plane 8202.
+- Core KV-v2 CRUD compatible with Vault/OpenBao (versioning, CAS, soft-delete, destroy, subkeys, JSON Merge Patch).
+- Thread-per-core Tokio + `SO_REUSEPORT`, 64-shard CuckooTable, write-behind via Vyukov MPMC lock-free queue, RocksDB backend.
+- Separated plane ports: data plane on 8200, admin plane on 8202.
 
-Baseline hiệu năng để đối chiếu khi làm 1.1.0: `bench-laptop` p99 1.386ms.
+Performance baseline for 1.1.0 comparisons: `bench-laptop` p99 1.386ms.
 
-## Trục kiến trúc
+## Architectural Axis
 
-Từ ADR-0005 (accepted), Kallisto tách thành hai role và cấu hình dùng đúng hai giá trị này:
+Following ADR-0005 (accepted), Kallisto splits into two roles. Configuration strictly enforces these two values:
 
 ```yaml
-role: proxy          # dataplane — cache node-local, đứng trước một Root of Trust
-role: control-plane  # controlplane — điều phối fleet, có thể (nhưng không bắt buộc) giữ secret
+role: proxy          # dataplane: node-local cache in front of a Root of Trust
+role: control-plane  # controlplane: fleet coordinator; may or may not hold secrets
 ```
 
-"Sovereign" và "Hybrid mode" là codename trong tài liệu thiết kế (ADR-0006, ADR-0010), không phải giá trị hợp lệ của `role:`. ADR-0005 đã thay khung "Sovereign = kho secret standalone" bằng "controlplane = bộ điều phối fleet".
+"Sovereign" and "Hybrid mode" are design-document codenames (ADR-0006, ADR-0010), not valid `role:` values. ADR-0005 replaced the "Sovereign = standalone secret store" concept with "controlplane = fleet coordinator".
 
-Bất biến xuyên suốt roadmap: dataplane phải khởi động và phục vụ được khi không có controlplane. Đây là fitness function, không phải mục tiêu phấn đấu.
+Roadmap invariant: the dataplane must boot and serve traffic without a controlplane. This is a fitness function, not an aspirational goal.
 
 ---
 
-## 1.1.0 — Hai role, encryption barrier, và proxy mode hoàn chỉnh
+## 1.1.0: Two Roles, Encryption Barrier, and Full Proxy Mode
 
-Thứ tự dưới đây theo khuyến nghị của [improvement proposal 1.1.0](improvement_proposals/1.1.0.md): làm proxy mode trước, để control plane lại cho tới khi có người dùng thật hỏi xin. Proxy mode không hy sinh gì cả — khoảng 70% mã dùng chung (engine, HTTP, cuckoo table, auth, barrier) và nó là con đường ngắn nhất tới một thứ hoàn chỉnh.
+The sequence below follows the [improvement proposal 1.1.0](improvement_proposals/1.1.0.md): build proxy mode first, and defer the control plane until actual users request it. Proxy mode sacrifices nothing—around 70% of the code is shared (engine, HTTP, cuckoo table, auth, barrier)—and represents the shortest path to a complete product.
 
-### Phase 1 — Cấu hình và phân rã build
+### Phase 1: Configuration and Build Segregation
 
-- [ ] Config YAML dạng Kubernetes (ADR-0003):
-  - `serde` tagged enum trên `role:`, `#[serde(deny_unknown_fields)]`. Cấu hình sai tổ hợp phải chết lúc parse, không phải lúc runtime.
-  - Thứ tự ưu tiên: CLI > env > file > defaults.
-  - `kallisto validate --config x.yaml` để CI kiểm tra mà không cần khởi động server.
-  - Breaking: file config cũ (CLI-only args) không còn parse được. `role:` là trường bắt buộc.
-- [ ] Phân rã build controlplane/dataplane (ADR-0005):
-  - Hệ thống cargo feature tách rạch ròi hai role, để dataplane không kéo theo phụ thuộc của controlplane.
-  - Fitness function: test suite dataplane phải pass khi không cấu hình controlplane nào.
+- [ ] Kubernetes-style YAML config (ADR-0003):
+  - `serde` tagged enum on `role:`, `#[serde(deny_unknown_fields)]`. Misconfigured combinations must crash at parse time, not runtime.
+  - Priority order: CLI > env > file > defaults.
+  - `kallisto validate --config x.yaml` allows CI checks without starting the server.
+  - Breaking: legacy config files (CLI-only args) no longer parse. `role:` is required.
+- [ ] Controlplane/dataplane build segregation (ADR-0005):
+  - Cargo features strictly isolate the two roles, preventing the dataplane from pulling controlplane dependencies.
+  - Fitness function: dataplane test suite must pass with zero controlplane configuration.
 
-### Phase 2 — Encryption barrier
+### Phase 2: Encryption Barrier
 
-Barrier cần ở cả hai role, chỉ khác chỗ nó bảo vệ: proxy thì bảo vệ RAM, control-plane thì bảo vệ đĩa.
+Both roles require the barrier. They differ only in what they protect: proxy protects RAM, control-plane protects disk.
 
-- [ ] Seal trait + state machine (cần ADR-0012, chưa viết):
-  - Trait `Seal` với backend đầu tiên là Vault Transit auto-unseal. Shamir là backend thứ hai, đẩy sang sau 1.1.0.
-  - `vault_client.rs`: auth với Vault (AppRole/Kubernetes), `POST /v1/transit/decrypt/kallisto-kek` để unwrap KEK lúc startup.
-  - `keyring.rs`: giữ KEK in-memory với `zeroize` on drop và `secrecy` wrapper. KEK không bao giờ chạm đĩa.
-  - `dek.rs`: sinh DEK từ KEK, per-engine.
-  - Startup mode detection: có `vault_addr` trong config thì auto-unseal; không có thì chờ manual unseal (chưa có backend manual ở 1.1.0 nên trạng thái này là sealed vĩnh viễn — phải báo lỗi rõ ràng).
-- [ ] Barrier + buffer pool (cần ADR-0012):
-  - AES-256-GCM cho mọi value trước khi rời khỏi vùng plaintext.
-  - Buffer pool để plaintext chỉ tồn tại trong các buffer đã đăng ký, có `mlock` và `zeroize` on drop — đây là cái làm cho "phơi sáng là con số đặt ra, không phải hệ quả" (ADR-0010) trở thành sự thật kiểm chứng được.
-  - Key hierarchy: `Vault Master Key → KEK (in-memory) → DEK (per-engine) → AES-256-GCM → storage`.
+- [ ] Seal trait + state machine (requires ADR-0012, unwritten):
+  - `Seal` trait with Vault Transit auto-unseal as the first backend. Shamir is the second backend, deferred post-1.1.0.
+  - `vault_client.rs`: Vault auth (AppRole/Kubernetes), `POST /v1/transit/decrypt/kallisto-kek` to unwrap the KEK at startup.
+  - `keyring.rs`: holds KEK in-memory with `zeroize` on drop and `secrecy` wrappers. The KEK never touches disk.
+  - `dek.rs`: derives DEK from KEK, per-engine.
+  - Startup mode detection: presence of `vault_addr` triggers auto-unseal; absence halts for manual unseal (no manual backend exists in 1.1.0, meaning permanent lock—must fail explicitly).
+- [ ] Barrier + buffer pool (requires ADR-0012):
+  - AES-256-GCM for all values leaving the plaintext zone.
+  - Buffer pool limits plaintext to registered buffers with `mlock` and `zeroize` on drop. This turns "exposure is a configured number, not an emergent property" (ADR-0010) into a verifiable fact.
+  - Key hierarchy: `Vault Master Key -> KEK (in-memory) -> DEK (per-engine) -> AES-256-GCM -> storage`.
 - [ ] Key rotation (`rotation.rs`):
-  - Gọi Vault `POST /v1/transit/keys/kallisto-kek/rotate`, re-wrap KEK mới, re-encrypt barrier.
+  - Call Vault `POST /v1/transit/keys/kallisto-kek/rotate`, re-wrap the new KEK, and re-encrypt the barrier.
 
-### Phase 3 — Proxy mode (dataplane)
+### Phase 3: Proxy Mode (Dataplane)
 
 - [ ] Zero persistence (ADR-0001, ADR-0011):
-  - Loại bỏ hoàn toàn đường ghi đĩa ở role `proxy`. In-memory arena, không RocksDB, không versioning, không lease machinery.
-  - Config đọc một lần lúc khởi động từ ConfigMap, không bao giờ ghi. Thay config phải qua atomic rename.
-  - Log chỉ ra `stdout`/`stderr`, không tự ghi file.
-  - Node ID lấy từ `/etc/machine-id` hoặc file ghi-một-lần. Đây là thứ duy nhất cần bền vững ở proxy mode.
-  - `SipHash key` ngẫu nhiên lại mỗi lần khởi động — hệ quả miễn phí của zero persistence, chặn hash collision attack.
-- [ ] Kiểm soát bộ nhớ (ADR-0011):
-  - Arena cấp phát cố định lúc khởi động để fail-fast lúc boot thay vì bị OOMKill lúc 3 giờ sáng.
-  - Ghi tài liệu công thức tính dung lượng: `256K entry × kích thước secret trung bình + dung lượng chỉ mục`, đối chiếu với cgroup limit để operator đặt limit cho container chính xác.
-- [ ] Chống cache poisoning (ADR-0011):
-  - Chỉ nạp cache từ upstream. Tuyệt đối không nhận secret từ client ở role `proxy` — đường ghi bị chặn và forward lên upstream.
-- [ ] Tách biệt kiểu hỏng (ADR-0011):
-  - Fail-closed cho phân quyền: không xác minh được token client (ví dụ mất JWKS) thì từ chối ngay.
-  - Fail-open cho fresh state: upstream chết thì tiếp tục phục vụ dữ liệu cũ trong cache và ghi log cảnh báo.
-  - Metric `kallisto_passthrough_active` để trạng thái degraded nhìn thấy được thay vì im lặng.
-- [ ] Token lên upstream với policy hẹp (ADR-0011):
-  - Vòng lặp gia hạn, tự auth lại khi hỏng. Policy là hợp của các quyền mà pod trên node đó thực sự cần, không bao giờ dùng `secret/*`.
-- [ ] Header minh bạch nguồn gốc (ADR-0011):
-  - `X-Kallisto-Source: cache` và `X-Kallisto-Age: 12s` để ứng dụng nhạy cảm tự quyết định có bỏ qua cache hay không.
-- [ ] Bảo vệ secret path trong log (ADR-0011):
-  - Không log plaintext đường dẫn secret. Log băm của đường dẫn, hoặc đẩy vào sink riêng tách khỏi log ứng dụng.
-- [ ] Chống dồn cục sau restart (ADR-0001):
-  - Restart là cache lạnh. Gộp request trùng (single-flight) + rắc ngẫu nhiên TTL.
+  - Completely eliminate disk writes in the `proxy` role. In-memory arena, no RocksDB, no versioning, no lease machinery.
+  - Read config once at startup from ConfigMap; never write it. Config updates require atomic renames.
+  - Log exclusively to `stdout`/`stderr`; no self-managed log files.
+  - Pull Node ID from `/etc/machine-id` or a write-once file. This is the only durable state proxy mode needs.
+  - Randomize `SipHash key` per boot—a free consequence of zero persistence that blocks hash collision attacks.
+- [ ] Memory control (ADR-0011):
+  - Allocate a fixed-size arena at startup. Fail fast on boot rather than triggering an OOMKill at 3 AM.
+  - Document the capacity formula: `256K entries * average secret size + index overhead`. Operators use this to set accurate container cgroup limits.
+- [ ] Cache poisoning defense (ADR-0011):
+  - Load cache exclusively from upstream. The `proxy` role never accepts secrets from clients—writes are blocked and forwarded upstream.
+- [ ] Failure isolation (ADR-0011):
+  - Fail-closed authorization: reject requests immediately if client tokens cannot be verified (e.g., unreachable JWKS).
+  - Fail-open freshness: serve stale cache data and log a warning if upstream dies.
+  - Metric `kallisto_passthrough_active` makes degraded states visible instead of silent.
+- [ ] Narrowly scoped upstream tokens (ADR-0011):
+  - Renewal loop with automatic re-auth on failure. Policy equals the union of permissions actually required by the pod. Never use `secret/*`.
+- [ ] Source transparency headers (ADR-0011):
+  - Inject `X-Kallisto-Source: cache` and `X-Kallisto-Age: 12s` so sensitive applications can decide whether to bypass the cache.
+- [ ] Secret path redaction in logs (ADR-0011):
+  - Never log plaintext secret paths. Log path hashes or route them to an isolated sink.
+- [ ] Post-restart stampede defense (ADR-0001):
+  - Restarts mean cold caches. Apply request coalescing (single-flight) and TTL jitter.
 
-### Phase 4 — Storage backend mới với redb
+### Phase 4: New Storage Backend (`redb`)
 
-Chốt bỏ RocksDB ngay từ single-node, không đợi tới lúc bật Raft (ADR-0009).
+Commit to dropping RocksDB at the single-node stage, rather than waiting for Raft (ADR-0009).
 
-- [ ] Thay RocksDB bằng `redb` (ADR-0009):
-  - Cổng Hexagonal đã có sẵn nên đây là việc thay adapter, không phải thay kiến trúc.
-  - Một file duy nhất, nhiều table. Ở 1.1.0 chỉ cần table dữ liệu và table meta; hai table `raft_log`/`raft_meta` bật lên sau khi có Raft mà không phải đổi engine.
-  - Snapshot lưu thành file rời bên ngoài B-Tree (bản đổ của arena, rename nguyên tử), không nhét blob lớn vào cây.
-  - Lợi ích tức thì: thoát khỏi FFI C++ khi cross-compile.
-- [ ] Group commit fire-and-wait (ADR-0008):
-  - Bổ sung đường báo ngược (`oneshot::Sender`) vào hàng đợi Vyukov hiện có. Flusher `fsync` xong một lô thì kích hoạt toàn bộ sender trong lô.
-  - Chính sách gom lô theo role: proxy giữ ngưỡng thông lượng (1024 ops / 5ms), control-plane dùng flush cơ hội — ghi và `fsync` ngay khi hàng đợi rỗng, chỉ gom lô khi đang bận.
-  - Tuyệt đối không `fsync` trực tiếp trong `async fn`. Mọi I/O đẩy sang worker thread qua channel.
-- [ ] Mã hoá payload ở tầng log (ADR-0009):
-  - Entry nằm trong log đồng nghĩa với một credential đang nằm trên đĩa chưa bị purge. Mọi payload ghi vào log bắt buộc mã hoá qua barrier ở Phase 2.
-  - Chu kỳ snapshot/cắt log là một núm vặn bảo mật (thu hẹp phơi sáng trên đĩa), không phải núm vặn hiệu năng. Đặt tần suất cao hơn mức thông thường.
+- [ ] Replace RocksDB with `redb` (ADR-0009):
+  - The Hexagonal architecture already exists; this is an adapter swap, not an architectural rewrite.
+  - Single file, multiple tables. 1.1.0 only needs data and meta tables; `raft_log`/`raft_meta` activate later without an engine swap.
+  - Snapshots dump the arena to an external file via atomic rename, avoiding massive blob insertions into the B-Tree.
+  - Immediate payoff: removes the C++ FFI burden during cross-compilation.
+- [ ] Fire-and-wait group commit (ADR-0008):
+  - Add callback channels (`oneshot::Sender`) to the existing Vyukov queue. After the flusher completes an `fsync`, it fires all senders in that batch.
+  - Role-based batching: proxy maintains a throughput threshold (1024 ops / 5ms); control-plane uses opportunistic flushing—writes and `fsync`s immediately when the queue is empty, batching only under load.
+  - Never call `fsync` directly in an `async fn`. Offload all I/O to a worker thread via channels.
+- [ ] Log-layer payload encryption (ADR-0009):
+  - A log entry means a credential sits on disk unpurged. All payloads written to the log must pass through the Phase 2 encryption barrier.
+  - Snapshot and log truncation frequency is a security dial (narrowing disk exposure), not a performance dial. Set it higher than standard DB defaults.
 
-### Nghiệm thu 1.1.0
+### 1.1.0 Acceptance Criteria
 
-- `cargo test --workspace` pass 100%.
-- `bench-laptop` giữ trong 10% của baseline 1.386ms.
-- `kallisto validate` reject được config sai role (ví dụ `role: proxy` kèm block của control-plane).
-- Test suite dataplane pass khi không có controlplane nào được cấu hình.
-- Integration test: giết controlplane giữa chừng, dataplane vẫn phục vụ được cache reads và vẫn với tới upstream cho cache miss.
-- `openraft` `Suite::test_all()` chưa áp dụng ở 1.1.0 (chưa có Raft), nhưng adapter `redb` phải được viết sao cho chạy được bộ suite này khi Raft bật lên.
-
----
-
-## Đã đẩy sang sau 1.1.0
-
-Đây là phần "non-goals" của improvement proposal 1.1.0, ghi lại ở đây để không rơi mất.
-
-### Control plane (1.2.0)
-
-- Loopback identity auth (ADR-0006, đang `proposed` — phải chốt trước khi viết mã):
-  - Xác thực workload qua HTTP loopback với cơ chế danh tính độc lập với kernel HĐH, cấp scoped token ngắn hạn cho workload cục bộ.
-  - Một agent DaemonSet phục vụ hàng trăm workload thay vì sidecar mỗi pod.
-- Identity broker: CP giữ credential mạnh, cấp token ngắn hạn và phạm vi hẹp cho từng proxy node.
-- Command channel: mTLS bắt buộc, mọi lệnh phải mang nguồn gốc xác minh được. Lệnh không xác minh được nguồn thì từ chối, không phải log-rồi-vẫn-chạy.
-- Primitive vận hành: hâm nóng cache trước rolling restart, pace stampede sau khi upstream hồi phục, rút cạn khẩn cấp một node bị nghi chiếm quyền.
-- Ranh giới bí mật tĩnh (ADR-0010): control-plane chỉ lưu static secret, không bao giờ sinh credential động. Atomic handoff qua CAS của KV-v2; rotation policy thuộc về hệ thống bên ngoài.
-- Ranh giới sở hữu (ADR-0005): CP được giữ secret tồn tại *vì fleet tồn tại* (cert của fleet, khoá inter-node). Không được giữ secret tồn tại độc lập với Kallisto (password DB, API key bên thứ ba) — những thứ đó thuộc upstream.
-
-### Foca gossip cho data plane (1.2.0)
-
-- CP publish lệnh xoá cache cho một node, các node lan truyền qua SWIM. CP phát sinh và cấp phép lệnh, gossip lan truyền.
-- Thứ lan truyền là lệnh xoá, không bao giờ chứa secret.
-- Eventual consistency chấp nhận được nhờ kết hợp với hard TTL.
-- Không lưu bảng định tuyến — SWIM tự khám phá lại rất nhanh.
-
-### Raft và HA cho control plane (chưa lên lịch)
-
-ADR-0005 hoãn Raft cho tới khi có yêu cầu thật rằng mất một write là không chấp nhận được *và* cần bầu leader tự động. ADR-0006 để ngỏ tuỳ chọn HA. Bản đầu tiên của control plane chạy single-node với snapshot định kỳ có kiểm chứng.
-
-Khi tới lúc: dùng `openraft` (hoặc `raft-rs`), không tự viết consensus. Adapter `redb` ở Phase 4 đã được chuẩn bị cho việc này — chỉ cần thêm hai table metadata.
-
-### Terraform (chưa lên lịch)
-
-ADR-0007 đã chốt **không** viết provider riêng. Việc cần làm là tương thích API để dùng lại `terraform-provider-vault` với tính năng write-only (`_wo`) của Terraform 1.11:
-
-- Deliverable trước mắt là một bảng đánh giá: resource nào của `terraform-provider-vault` chạy được với Kallisto, resource nào không (bắt đầu với `vault_kv_secret_v2` và `vault_mount`).
-- Chi phí thật phải trả: control-plane cần mở một mặt API quản trị tương đối rộng — `sys/mounts`, `sys/policy`, và endpoint cho auth role.
-- Chỉ áp dụng cho control-plane. Dùng Terraform để mô tả trạng thái của một cache (proxy mode) là sai về khái niệm — dữ liệu biến mất khi restart, Terraform sẽ báo drift vĩnh viễn.
-
-### Shamir standalone unseal (chưa lên lịch)
-
-Backend `Seal` thứ hai, sau Transit. Lý do vẫn giữ trong roadmap: có unseal key standalone thì test encrypt barrier dễ hơn nhiều so với phải dựng một Vault instance, và nó phù hợp với edge/air-gapped deployment. Keyring + DEK logic đã có từ Phase 2, chỉ cần thay nguồn của Master Key từ Transit sang Shamir combine.
-
-- `shamir.rs`: số học GF(2⁸), split/combine đa thức, thao tác constant-time.
-- `master_key.rs`: sinh Master Key 256-bit từ `/dev/urandom`, cắt Shamir (5 shares, threshold 3).
-- In unseal key ra stdout lúc `kallisto init` đúng một lần, rồi `zeroize` Master Key khỏi RAM.
-- `POST /v1/sys/unseal` và `POST /v1/sys/seal` trên port 8202.
-- Đặc tả chi tiết đã có sẵn tại `components/kallisto_crypto/README.md`.
-
-### Giao diện (suspended)
-
-ADR-0004 đang ở trạng thái `suspended`. Chốt lại để tránh hiểu nhầm:
-
-- WebUI trên data plane bị cấm tuyệt đối.
-- Observability toàn fleet giao cho Prometheus + Grafana. Repo cung cấp `dashboard.json`.
-- TUI chỉ được cân nhắc lại nếu chứng minh được là hữu ích cho chẩn đoán node-local. Nếu có, nó nói chuyện qua admin API 8202 và **không bao giờ** hiển thị giá trị secret.
+- `cargo test --workspace` passes 100%.
+- `bench-laptop` remains within 10% of the 1.386ms baseline.
+- `kallisto validate` rejects misconfigured roles (e.g., `role: proxy` containing a control-plane block).
+- Dataplane test suite passes with zero controlplane configuration.
+- Integration test: kill the controlplane mid-run; the dataplane continues serving cache reads and contacting upstream for cache misses.
+- `openraft` `Suite::test_all()` is deferred (no Raft in 1.1.0), but the `redb` adapter must be written to pass this suite when Raft activates.
 
 ---
 
-## Hàng tồn từ 1.0.x
+## Deferred Post-1.1.0
 
-Những mục này không thuộc trục 1.1.0 nhưng vẫn còn nợ. Một số là tiền đề của 1.1.0 và được đánh dấu.
+These are the non-goals of improvement proposal 1.1.0, recorded here to prevent dropping them.
 
-### Vault/OpenBao API compliance
+### Control Plane (1.2.0)
 
-Đã xong: `GET/POST/DELETE /v1/secret/data/:path`, `POST /v1/secret/{delete,undelete,destroy}/:path`, `GET /v1/secret/metadata/:path`, `PATCH /v1/secret/data/:path` (RFC 7396), `GET /v1/secret/subkeys/:path`, `LIST /v1/secret/metadata/:path`, `custom_metadata`, parse ISO 8601 duration cho `delete_version_after`.
+- Loopback identity auth (ADR-0006, `proposed`—requires approval before coding):
+  - Authenticate workloads via HTTP loopback using an identity mechanism decoupled from the OS kernel. Issue scoped, short-lived tokens to local workloads.
+  - One DaemonSet agent serves hundreds of workloads, replacing per-pod sidecars.
+- Identity broker: CP holds strong credentials; issues short-lived, narrow-scoped tokens to proxy nodes.
+- Command channel: mandatory mTLS. All commands require a verified source. Reject unverified commands; do not log-and-execute.
+- Operator primitives: warm cache before rolling restarts, pace stampedes after upstream recovery, emergency drain suspected compromised nodes.
+- Static secret boundary (ADR-0010): control-plane stores only static secrets; it never generates dynamic credentials. Atomic handoff occurs via KV-v2 CAS; rotation policy belongs to external systems.
+- Ownership boundary (ADR-0005): CP holds secrets that exist *because the fleet exists* (fleet certs, inter-node keys). It cannot hold secrets that exist independently of Kallisto (password DBs, third-party API keys)—those belong upstream.
 
-Còn nợ:
+### Foca Gossip for Data Plane (1.2.0)
 
-- [ ] `POST   /v1/secret/metadata/:path` — update metadata (`custom_metadata`, `max_versions`, `cas_required`)
-- [ ] `PATCH  /v1/secret/metadata/:path` — patch metadata
-- [ ] `DELETE /v1/secret/metadata/:path` — xoá toàn bộ version + metadata
-- [ ] `POST   /v1/secret/config` — configure engine
-- [ ] `POST   /v1/sys/mounts/:path` — mount engine (tiền đề của Terraform, xem ADR-0007)
-- [ ] `kallisto status` — healthcheck binary support
+- CP publishes a cache invalidation command to one node; nodes propagate it via SWIM. CP generates and authorizes the command; gossip distributes it.
+- The payload is a deletion command; it never contains the secret itself.
+- Eventual consistency is acceptable when paired with a hard TTL.
+- No routing tables stored—SWIM rediscovers the network rapidly.
 
-Đã có dạng mock: `GET /v1/sys/health`, `GET /v1/sys/seal-status`, `GET /v1/sys/mounts`. Lưu ý `seal-status` sẽ thành thật khi Phase 2 xong.
+### Raft and HA for Control Plane (Unscheduled)
 
-### Observability (tiền đề của Phase 2)
+ADR-0005 defers Raft until users demand strictly zero write loss *and* automatic leader election. ADR-0006 leaves the HA option open. The initial control plane runs single-node with verified periodic snapshots.
 
-Metrics và audit log phải hoạt động **trước** khi implement seal/unseal — crypto không có observability là crypto không kiểm chứng được.
+When required: use `openraft` (or `raft-rs`). Do not write custom consensus. The Phase 4 `redb` adapter prepares for this—it only needs two additional metadata tables.
 
-- [ ] Prometheus endpoint `/v1/sys/metrics` (text format), counter atomic in-process, không thêm dependency nặng:
+### Terraform (Unscheduled)
+
+ADR-0007 decided **against** writing a custom provider. The task is to match API surfaces to reuse `terraform-provider-vault` with Terraform 1.11's write-only (`_wo`) features:
+
+- Immediate deliverable: an evaluation matrix defining which `terraform-provider-vault` resources work with Kallisto and which fail (starting with `vault_kv_secret_v2` and `vault_mount`).
+- Actual cost: the control-plane must expose a broad admin API surface—`sys/mounts`, `sys/policy`, and auth role endpoints.
+- Control-plane only. Using Terraform to declare the state of a cache (proxy mode) is conceptually wrong—data vanishes on restart, causing permanent Terraform drift.
+
+### Shamir Standalone Unseal (Unscheduled)
+
+The second `Seal` backend, following Transit. Retained on the roadmap because a standalone unseal key makes testing the encryption barrier far easier than standing up a Vault instance, and it fits edge/air-gapped deployments. Keyring and DEK logic already exist from Phase 2; this only requires swapping the Master Key source from Transit to a Shamir combine.
+
+- `shamir.rs`: GF(2^8) arithmetic, polynomial split/combine, constant-time operations.
+- `master_key.rs`: generate a 256-bit Master Key from `/dev/urandom`, split via Shamir (5 shares, threshold 3).
+- Print unseal keys to stdout exactly once during `kallisto init`, then `zeroize` the Master Key from RAM.
+- `POST /v1/sys/unseal` and `POST /v1/sys/seal` on port 8202.
+- Detailed spec available at `components/kallisto_crypto/README.md`.
+
+### UI (Suspended)
+
+ADR-0004 is `suspended`. To be explicitly clear:
+
+- WebUI on the data plane is strictly forbidden.
+- Fleet-wide observability belongs to Prometheus + Grafana. The repo provides `dashboard.json`.
+- A TUI will only be reconsidered if proven necessary for node-local diagnostics. If built, it communicates via the 8202 admin API and **never** displays secret values.
+
+---
+
+## 1.0.x Backlog
+
+These items fall outside the 1.1.0 axis but remain unresolved. Some act as prerequisites for 1.1.0 and are marked accordingly.
+
+### Vault/OpenBao API Compliance
+
+Complete: `GET/POST/DELETE /v1/secret/data/:path`, `POST /v1/secret/{delete,undelete,destroy}/:path`, `GET /v1/secret/metadata/:path`, `PATCH /v1/secret/data/:path` (RFC 7396), `GET /v1/secret/subkeys/:path`, `LIST /v1/secret/metadata/:path`, `custom_metadata`, parse ISO 8601 duration for `delete_version_after`.
+
+Pending:
+
+- [ ] `POST   /v1/secret/metadata/:path`: update metadata (`custom_metadata`, `max_versions`, `cas_required`)
+- [ ] `PATCH  /v1/secret/metadata/:path`: patch metadata
+- [ ] `DELETE /v1/secret/metadata/:path`: delete all versions + metadata
+- [ ] `POST   /v1/secret/config`: configure engine
+- [ ] `POST   /v1/sys/mounts/:path`: mount engine (Terraform prerequisite, see ADR-0007)
+- [ ] `kallisto status`: healthcheck binary support
+
+Mocked: `GET /v1/sys/health`, `GET /v1/sys/seal-status`, `GET /v1/sys/mounts`. Note: `seal-status` becomes real after Phase 2.
+
+### Observability (Phase 2 Prerequisite)
+
+Metrics and audit logs must function **before** implementing seal/unseal. Cryptography without observability cannot be verified.
+
+- [ ] Prometheus endpoint `/v1/sys/metrics` (text format), in-process atomic counters, no heavy dependencies:
   - `kallisto_http_requests_total{method, path, status}`
   - `kallisto_http_request_duration_seconds{method, path}`
   - `kallisto_secret_operations_total{operation}`
-  - `kallisto_cache_hit_ratio` — CuckooTable hit vs backend fallback
+  - `kallisto_cache_hit_ratio`: CuckooTable hits vs backend fallback
   - `kallisto_active_connections`
-  - `kallisto_passthrough_active` — bắt buộc, xem Phase 3
+  - `kallisto_passthrough_active`: mandatory, see Phase 3
   - `kallisto_unseal_attempts_total{result}`, `kallisto_seal_status`, `kallisto_key_rotation_timestamp`
-- [ ] Audit log (`kallisto_telemetry/audit_log.rs`): append-only JSON, tách khỏi log ứng dụng. Event: `seal`, `unseal`, `key_rotate`, `auth_success`, `auth_failure`, `policy_change`.
-- [ ] Structured logging: JSON format cho log aggregator. `LogConfig` đã có sẵn field `logFilePath`, `logRotateBytes`, `logRotateMaxFiles` nhưng chưa dùng. Lưu ý ở role `proxy` thì ghi file bị cấm (ADR-0011) — rotation chỉ có nghĩa với control-plane.
+- [ ] Audit log (`kallisto_telemetry/audit_log.rs`): append-only JSON, isolated from application logs. Events: `seal`, `unseal`, `key_rotate`, `auth_success`, `auth_failure`, `policy_change`.
+- [ ] Structured logging: JSON format for log aggregators. `LogConfig` has `logFilePath`, `logRotateBytes`, `logRotateMaxFiles` fields, but they remain unused. Note: file writes are forbidden in the `proxy` role (ADR-0011)—rotation only applies to the control-plane.
 
-### Codebase hygiene
+### Codebase Hygiene
 
-- [ ] SonarQube sweep: ~600 issue, xử lý theo severity Critical → Major → Minor. Ưu tiên memory safety, error handling, dead code, unused imports.
-- [ ] `cargo clippy --workspace` sạch warning.
-- [ ] `make format` pass.
-- [ ] Wire up `make clippy`, `make dev`, `make release` (hiện chưa có, AGENTS.md đang phải hướng dẫn chạy tay).
+- [ ] SonarQube sweep: ~600 issues. Address by severity (Critical -> Major -> Minor). Prioritize memory safety, error handling, dead code, unused imports.
+- [ ] `cargo clippy --workspace` passes cleanly.
+- [ ] `make format` passes.
+- [ ] Wire up `make clippy`, `make dev`, `make release` (currently missing; AGENTS.md instructs manual execution).
 
-### TLS (tiền đề của control plane)
+### TLS (Control Plane Prerequisite)
 
-Command channel của control plane bắt buộc mTLS, nên TLS phải xong trước 1.2.0.
+The control plane command channel requires mTLS, making TLS mandatory before 1.2.0.
 
-- [ ] TLS termination cho data plane và admin plane. Config: `tls_cert_file`, `tls_key_file`, `tls_min_version` (mặc định 1.2+).
-- [ ] `tls_disable = true` cho dev/test mode.
-- [ ] mTLS cho giao tiếp nội cụm.
+- [ ] TLS termination for data and admin planes. Config: `tls_cert_file`, `tls_key_file`, `tls_min_version` (defaults to 1.2+).
+- [ ] `tls_disable = true` for dev/test modes.
+- [ ] mTLS for intra-cluster communication.
 
-### Access control & policy
+### Access Control & Policy
 
-- [ ] ACL: token-based auth + path-based policy RBAC tận dụng cấu trúc B-Tree phân cấp.
-- [ ] Chống timing attack: thời gian xử lý request không được phụ thuộc nội dung request. Vault đã từng lộ chỗ này — request xác thực sai trả về nhanh hơn request xác thực đúng, đủ để dò token bằng cách đo thời gian.
-- [ ] Cơ chế tự động xoá secret hết hạn.
+- [ ] ACL: token-based auth + path-based RBAC leveraging the hierarchical B-Tree structure.
+- [ ] Timing attack defense: request processing time must not depend on request content. Vault leaked tokens this way historically (failed auth returned faster than successful auth).
+- [ ] Automatic deletion of expired secrets.
 
-Lưu ý: cấp phát secret động có TTL ngắn và lease-renew theo policy đã bị **loại khỏi phạm vi** bởi ADR-0010. Kallisto không bao giờ tạo credential trong hệ thống mà nó không sở hữu. Việc xoay khoá do controller bên ngoài làm, Kallisto chỉ đảm bảo atomic handoff qua CAS.
+Note: dynamic secret generation with short TTLs and policy-based lease renewals are **out of scope** (ADR-0010). Kallisto never generates credentials in systems it does not own. External controllers handle key rotation; Kallisto guarantees only atomic handoff via CAS.
 
 ---
 
-## Trạng thái ADR
+## ADR Status
 
-| ADR | Chủ đề | Status |
+| ADR | Topic | Status |
 | --- | --- | --- |
-| ADR-0001 | Bỏ persistence ở proxy mode | accepted |
-| ADR-0002 | *(khuyết — số bị bỏ trống)* | — |
+| ADR-0001 | Drop persistence in proxy mode | accepted |
+| ADR-0002 | *(skipped—number unused)* | — |
 | ADR-0003 | Configuration format (YAML tagged enum) | accepted |
 | ADR-0004 | TUI vs WebUI | suspended |
 | ADR-0005 | Split Dataplane / Controlplane | accepted |
 | ADR-0006 | Control plane + loopback workload auth | proposed |
 | ADR-0007 | Terraform (Zero Ceremony provisioning) | proposed |
-| ADR-0008 | Vyukov queue cho Raft group commit | proposed |
-| ADR-0009 | Storage engine `redb` cho Raft log | proposed |
-| ADR-0010 | Ranh giới bí mật tĩnh của control plane | proposed |
-| ADR-0011 | Kiến trúc và yêu cầu kỹ thuật của proxy mode | proposed |
-| ADR-0012 | Seal trait + encryption barrier + buffer pool | **chưa viết** |
+| ADR-0008 | Vyukov queue for Raft group commit | proposed |
+| ADR-0009 | Storage engine `redb` for Raft log | proposed |
+| ADR-0010 | Static secret boundary for control plane | proposed |
+| ADR-0011 | Proxy mode architecture and technical requirements | proposed |
+| ADR-0012 | Seal trait + encryption barrier + buffer pool | **unwritten** |
 
-ADR-0008 đến ADR-0011 vẫn ở `proposed` trong khi Phase 3 và Phase 4 phụ thuộc trực tiếp vào chúng. Cần chốt status trước khi bắt đầu code hai phase đó.
+ADR-0008 through ADR-0011 remain `proposed`, yet Phase 3 and Phase 4 depend on them directly. Their statuses must be finalized before coding those phases.
 
 ---
 
-## Implementation history (completed)
+## Implementation History (Completed)
 
-Phần dưới đây là ngữ cảnh và pattern đã triển khai trong codebase.
+The section below records the context and patterns already implemented in the codebase.
 
 ### Phase 6: P0 — Hexagonal Architecture & KV Engine v2
 - Status: COMPLETE
@@ -278,14 +278,14 @@ Phần dưới đây là ngữ cảnh và pattern đã triển khai trong codeba
 - Security Fix: Re-enabled B-Tree Path indexing logic during startup/rebuild from RocksDB iterators to prevent DB-bypass DoS vulnerability.
 
 ### Phase 3: RocksDB Persistence Dual-Write
-- Status: COMPLETE (sẽ bị thay bởi `redb` ở 1.1.0 Phase 4, xem ADR-0009)
+- Status: COMPLETE (replaced by `redb` in 1.1.0 Phase 4, see ADR-0009)
 - Architecture: Hybrid Storage Engine. `ShardedCuckooTable` as O(1) Hot-Cache, `RocksDB` as persistent Write-Ahead Log (WAL).
 - Data Flow: PUT asynchronously writes to RocksDB -> Update CuckooTable. GET hits Cuckoo directly (sub-microsecond), cache-miss defaults to reading RocksDB.
 - Core Files: `rocksdb_storage.hpp/cpp`.
 
-### Phase 4a: Clean up code và The Big Hunt
+### Phase 4a: Clean up code and The Big Hunt
 - Status: COMPLETE
-- pthread lock Invalid argument (Core dumped) on EXIT: Vấn đề nằm ở thứ tự khởi tạo và hủy các biến static/global trong C++. Logger (chứa `std::mutex`) bị hủy trước con trỏ server. Khắc phục: Gọi `server.reset();` ngay phía trên `exit(0)`.
+- pthread lock Invalid argument (Core dumped) on EXIT: Issue stemmed from C++ static/global initialization and destruction order. The logger (containing `std::mutex`) was destroyed before the server pointer. Fix: Call `server.reset();` immediately before `exit(0)`.
 
 ### Phase 4b: KallistoCore and UDS Admin CLI
 - Status: COMPLETE
@@ -308,7 +308,7 @@ Phần dưới đây là ngữ cảnh và pattern đã triển khai trong codeba
 
 ### Rust Rewrite
 - Status: COMPLETE (1.0.0-alpha)
-- Networking/Runtime: Tokio single-threaded per core + `SO_REUSEPORT` + pinned cores. Giữ triết lý thread-per-core của Envoy, không dùng work-stealing. Tận dụng được hệ sinh thái Tokio (axum, reqwest) mà không vướng runtime model của Monoio/Glommio.
-- Sharding: `Arc<[parking_lot::RwLock<CuckooTable>; 64]>` thay vì `DashMap`, để bảo toàn tính `O(1)` tuyệt đối của Cuckoo Hashing. Khoá `parking_lot` cực nhẹ, tối ưu cho lock contention thấp.
-- Write-behind queue: MPMC lock-free bounded (262.144), tạo backpressure tự nhiên (HTTP 503 khi đầy). Background worker dùng `recv_timeout` để lấy batch và fsync.
-- Core algorithms: `siphasher` (SipHash-2-4 chống DoS), `arc-swap` cho RCU trên B-Tree.
+- Networking/Runtime: Tokio single-threaded per core + `SO_REUSEPORT` + pinned cores. Retains Envoy's thread-per-core philosophy; no work-stealing. Leverages the Tokio ecosystem (axum, reqwest) without the constraints of the Monoio/Glommio runtime model.
+- Sharding: `Arc<[parking_lot::RwLock<CuckooTable>; 64]>` instead of `DashMap`, preserving strict `O(1)` Cuckoo Hashing. `parking_lot` locks are extremely lightweight, optimized for low contention.
+- Write-behind queue: Bounded MPMC lock-free queue (262,144 capacity), providing natural backpressure (HTTP 503 when full). A background worker uses `recv_timeout` to fetch batches and execute `fsync`.
+- Core algorithms: `siphasher` (SipHash-2-4 for DoS protection), `arc-swap` for RCU on the B-Tree.
