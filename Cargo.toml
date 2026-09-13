@@ -52,6 +52,7 @@ rkyv = { workspace = true }
 socket2 = { workspace = true }
 core_affinity = { workspace = true }
 siphasher = "1.0.3"
+kallisto_kv_model = { path = "components/kallisto_kv_model" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

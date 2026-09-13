@@ -183,11 +183,11 @@ impl KvEngine {
     }
 
     fn build_meta_key(path: &str) -> String {
-        format!("m:{}", path)
+        kallisto_kv_model::apply::build_meta_key(path)
     }
 
     fn build_version_key(path: &str, version: u32) -> String {
-        format!("v:{}:{}", path, version)
+        kallisto_kv_model::apply::build_version_key(path, version)
     }
 }
 
@@ -294,169 +294,178 @@ impl SecretEngine for KvEngine {
         cas: Option<u32>,
     ) -> Result<(), EngineError> {
         let mkey = Self::build_meta_key(path);
-        let mut meta = match self.read_metadata(path).await {
+        let meta = match self.read_metadata(path).await {
             Ok(m) => m,
-            Err(EngineError::NotFound) => KeyMetadata::default(),
+            Err(EngineError::NotFound) => kallisto_kv_model::apply::KeyMetadata::default(),
             Err(e) => return Err(e),
         };
 
-        if let Some(expected_cas) = cas
-            && meta.current_version != expected_cas
-        {
-            return Err(EngineError::CasMismatch {
-                expected: expected_cas,
-                actual: meta.current_version,
-            });
-        }
-
-        meta.current_version += 1;
-        let vs = VersionState {
-            version_id: meta.current_version,
-            created_time_ms: now_ms(),
-            deletion_time_ms: 0,
-            destroyed: false,
+        let op = kallisto_kv_model::ops::KvOp::Put {
+            payload_len: payload.value.len(),
+            cas,
         };
-        meta.versions.push(vs.clone());
 
-        let vkey = Self::build_version_key(path, vs.version_id);
-        let serialized_payload = Self::serialize_payload(payload)?;
-        self.enqueue_or_execute(AsyncOp::Put {
-            key: vkey.clone(),
-            value: serialized_payload.clone(),
-        })?;
-        self.cache.insert(
-            &vkey,
-            SecretEntry {
-                key: vkey.clone(),
-                payload: serialized_payload,
-                referenced: std::sync::atomic::AtomicBool::new(true),
-            },
-        );
+        let (new_meta, effects) = kallisto_kv_model::apply::apply(&meta, op, now_ms())
+            .map_err(|e| match e {
+                kallisto_kv_model::apply::ModelError::CasMismatch { expected, actual } => {
+                    EngineError::CasMismatch { expected, actual }
+                }
+                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
+                kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
+            })?;
 
-        let serialized_meta = Self::serialize_metadata(&meta)?;
-        self.enqueue_or_execute(AsyncOp::Put {
-            key: mkey.clone(),
-            value: serialized_meta.clone(),
-        })?;
-        self.cache.insert(
-            &mkey,
-            SecretEntry {
-                key: mkey.clone(),
-                payload: serialized_meta,
-                referenced: std::sync::atomic::AtomicBool::new(true),
-            },
-        );
-
-        self.path_index.insert_path_if_absent(path);
+        for effect in effects {
+            match effect {
+                kallisto_kv_model::effects::Effect::WriteVersion { version } => {
+                    let vkey = Self::build_version_key(path, version);
+                    let serialized_payload = Self::serialize_payload(payload)?;
+                    self.enqueue_or_execute(AsyncOp::Put {
+                        key: vkey.clone(),
+                        value: serialized_payload.clone(),
+                    })?;
+                    self.cache.insert(
+                        &vkey,
+                        SecretEntry {
+                            key: vkey,
+                            payload: serialized_payload,
+                            referenced: std::sync::atomic::AtomicBool::new(true),
+                        },
+                    );
+                }
+                kallisto_kv_model::effects::Effect::WriteMeta => {
+                    let serialized_meta = Self::serialize_metadata(&new_meta)?;
+                    self.enqueue_or_execute(AsyncOp::Put {
+                        key: mkey.clone(),
+                        value: serialized_meta.clone(),
+                    })?;
+                    self.cache.insert(
+                        &mkey,
+                        SecretEntry {
+                            key: mkey.clone(),
+                            payload: serialized_meta,
+                            referenced: std::sync::atomic::AtomicBool::new(true),
+                        },
+                    );
+                }
+                kallisto_kv_model::effects::Effect::IndexPath => {
+                    self.path_index.insert_path_if_absent(path);
+                }
+                kallisto_kv_model::effects::Effect::TrimVersion { version } |
+                kallisto_kv_model::effects::Effect::DeleteVersion { version } => {
+                    let vkey = Self::build_version_key(path, version);
+                    self.enqueue_or_execute(AsyncOp::Delete { key: vkey.clone() })?;
+                    self.cache.remove(&vkey);
+                }
+            }
+        }
 
         Ok(())
     }
 
     async fn soft_delete(&self, path: &str, version: u32) -> Result<(), EngineError> {
         let mkey = Self::build_meta_key(path);
-        let mut meta = self.read_metadata(path).await?;
+        let meta = self.read_metadata(path).await?;
 
-        let mut found = false;
-        for vs in &mut meta.versions {
-            if vs.version_id == version {
-                vs.deletion_time_ms = now_ms();
-                found = true;
-                break;
+        let op = kallisto_kv_model::ops::KvOp::SoftDelete { version };
+        let (new_meta, effects) = kallisto_kv_model::apply::apply(&meta, op, now_ms())
+            .map_err(|e| match e {
+                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
+                kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
+                _ => EngineError::StorageError("Unexpected model error".into()),
+            })?;
+
+        for effect in effects {
+            if matches!(effect, kallisto_kv_model::effects::Effect::WriteMeta) {
+                let serialized_meta = Self::serialize_metadata(&new_meta)?;
+                self.enqueue_or_execute(AsyncOp::Put {
+                    key: mkey.clone(),
+                    value: serialized_meta.clone(),
+                })?;
+                self.cache.insert(
+                    &mkey,
+                    SecretEntry {
+                        key: mkey.clone(),
+                        payload: serialized_meta,
+                        referenced: std::sync::atomic::AtomicBool::new(true),
+                    },
+                );
             }
         }
-
-        if !found {
-            return Err(EngineError::InvalidVersion(version));
-        }
-
-        let serialized_meta = Self::serialize_metadata(&meta)?;
-        self.enqueue_or_execute(AsyncOp::Put {
-            key: mkey.clone(),
-            value: serialized_meta.clone(),
-        })?;
-        self.cache.insert(
-            &mkey,
-            SecretEntry {
-                key: mkey.clone(),
-                payload: serialized_meta,
-                referenced: std::sync::atomic::AtomicBool::new(true),
-            },
-        );
 
         Ok(())
     }
 
     async fn undelete(&self, path: &str, version: u32) -> Result<(), EngineError> {
         let mkey = Self::build_meta_key(path);
-        let mut meta = self.read_metadata(path).await?;
+        let meta = self.read_metadata(path).await?;
 
-        let mut found = false;
-        for vs in &mut meta.versions {
-            if vs.version_id == version {
-                if vs.destroyed {
-                    return Err(EngineError::Destroyed);
-                }
-                vs.deletion_time_ms = 0;
-                found = true;
-                break;
+        let op = kallisto_kv_model::ops::KvOp::Undelete { version };
+        let (new_meta, effects) = kallisto_kv_model::apply::apply(&meta, op, now_ms())
+            .map_err(|e| match e {
+                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
+                kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
+                _ => EngineError::StorageError("Unexpected model error".into()),
+            })?;
+
+        for effect in effects {
+            if matches!(effect, kallisto_kv_model::effects::Effect::WriteMeta) {
+                let serialized_meta = Self::serialize_metadata(&new_meta)?;
+                self.enqueue_or_execute(AsyncOp::Put {
+                    key: mkey.clone(),
+                    value: serialized_meta.clone(),
+                })?;
+                self.cache.insert(
+                    &mkey,
+                    SecretEntry {
+                        key: mkey.clone(),
+                        payload: serialized_meta,
+                        referenced: std::sync::atomic::AtomicBool::new(true),
+                    },
+                );
             }
         }
-
-        if !found {
-            return Err(EngineError::InvalidVersion(version));
-        }
-
-        let serialized_meta = Self::serialize_metadata(&meta)?;
-        self.enqueue_or_execute(AsyncOp::Put {
-            key: mkey.clone(),
-            value: serialized_meta.clone(),
-        })?;
-        self.cache.insert(
-            &mkey,
-            SecretEntry {
-                key: mkey.clone(),
-                payload: serialized_meta,
-                referenced: std::sync::atomic::AtomicBool::new(true),
-            },
-        );
 
         Ok(())
     }
 
     async fn destroy_version(&self, path: &str, version: u32) -> Result<(), EngineError> {
         let mkey = Self::build_meta_key(path);
-        let mut meta = self.read_metadata(path).await?;
+        let meta = self.read_metadata(path).await?;
 
-        let mut found = false;
-        for vs in &mut meta.versions {
-            if vs.version_id == version {
-                vs.destroyed = true;
-                found = true;
-                break;
+        let op = kallisto_kv_model::ops::KvOp::Destroy { version };
+        let (new_meta, effects) = kallisto_kv_model::apply::apply(&meta, op, now_ms())
+            .map_err(|e| match e {
+                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => EngineError::InvalidVersion(v),
+                kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
+                _ => EngineError::StorageError("Unexpected model error".into()),
+            })?;
+
+        for effect in effects {
+            match effect {
+                kallisto_kv_model::effects::Effect::WriteMeta => {
+                    let serialized_meta = Self::serialize_metadata(&new_meta)?;
+                    self.enqueue_or_execute(AsyncOp::Put {
+                        key: mkey.clone(),
+                        value: serialized_meta.clone(),
+                    })?;
+                    self.cache.insert(
+                        &mkey,
+                        SecretEntry {
+                            key: mkey.clone(),
+                            payload: serialized_meta,
+                            referenced: std::sync::atomic::AtomicBool::new(true),
+                        },
+                    );
+                }
+                kallisto_kv_model::effects::Effect::DeleteVersion { version } |
+                kallisto_kv_model::effects::Effect::TrimVersion { version } => {
+                    let vkey = Self::build_version_key(path, version);
+                    self.enqueue_or_execute(AsyncOp::Delete { key: vkey.clone() })?;
+                    self.cache.remove(&vkey);
+                }
+                _ => {}
             }
         }
-
-        if !found {
-            return Err(EngineError::InvalidVersion(version));
-        }
-
-        let vkey = Self::build_version_key(path, version);
-        self.enqueue_or_execute(AsyncOp::Delete { key: vkey.clone() })?;
-        self.cache.remove(&vkey);
-
-        let serialized_meta = Self::serialize_metadata(&meta)?;
-        self.enqueue_or_execute(AsyncOp::Put {
-            key: mkey.clone(),
-            value: serialized_meta.clone(),
-        })?;
-        self.cache.insert(
-            &mkey,
-            SecretEntry {
-                key: mkey.clone(),
-                payload: serialized_meta,
-                referenced: std::sync::atomic::AtomicBool::new(true),
-            },
-        );
 
         Ok(())
     }

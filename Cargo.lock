@@ -1693,6 +1693,7 @@ dependencies = [
  "crossbeam-channel",
  "crossbeam-epoch",
  "dashmap",
+ "kallisto_kv_model",
  "parking_lot",
  "reqwest",
  "rkyv 0.7.46",
