@@ -91,7 +91,16 @@ impl KvEngine {
         })
     }
 
+    /// Switch durability mode.
+    ///
+    /// `Immediate` must also turn on RocksDB's WAL `sync` flag. Writing
+    /// synchronously only gets the record into the memtable and the WAL buffer;
+    /// without `sync` the OS still holds it, so a `kill -9` loses a write that
+    /// already answered 2xx. That is precisely the D1 guarantee, and it was not
+    /// implemented: nothing outside the storage backend's own tests ever
+    /// enabled `sync`.
     pub fn change_sync_mode(&self, mode: SyncMode) {
+        self.rocksdb.set_sync(mode == SyncMode::Immediate);
         self.sync_mode.store(mode as u8, Ordering::Relaxed);
     }
 
@@ -130,6 +139,8 @@ impl KvEngine {
 
     fn enqueue_or_execute(&self, op: AsyncOp) -> Result<(), EngineError> {
         if self.get_sync_mode() == SyncMode::Immediate {
+            // `set_sync(true)` from `change_sync_mode` makes these fsync before
+            // returning, so a 2xx response means the record is on stable storage.
             match op {
                 AsyncOp::Put { key, value } => {
                     self.rocksdb.put_raw(key.as_bytes(), &value).map_err(|e| {
@@ -142,10 +153,8 @@ impl KvEngine {
                     })?;
                 }
             }
-        } else {
-            if let Err(QueueError::Full) = self.async_queue.enqueue(op) {
-                return Err(EngineError::QueueFull);
-            }
+        } else if let Err(QueueError::Full) = self.async_queue.enqueue(op) {
+            return Err(EngineError::QueueFull);
         }
         Ok(())
     }
