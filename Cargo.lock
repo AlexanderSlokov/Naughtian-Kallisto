@@ -1452,6 +1452,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "kallisto_queue"
+version = "1.0.0"
+dependencies = [
+ "loom",
+]
+
+[[package]]
 name = "kallisto_tui"
 version = "1.0.0"
 dependencies = [
@@ -1731,7 +1738,7 @@ dependencies = [
  "crossbeam-epoch",
  "dashmap",
  "kallisto_kv_model",
- "loom",
+ "kallisto_queue",
  "parking_lot",
  "reqwest",
  "rkyv 0.7.46",

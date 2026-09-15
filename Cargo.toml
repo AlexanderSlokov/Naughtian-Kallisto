@@ -53,10 +53,12 @@ socket2 = { workspace = true }
 core_affinity = { workspace = true }
 siphasher = "1.0.3"
 kallisto_kv_model = { path = "components/kallisto_kv_model" }
-loom = { version = "0.7", optional = true }
+kallisto_queue = { path = "components/kallisto_queue" }
 
 [features]
-loom = ["dep:loom"]
+# Exposes internal request parsers to the fuzz targets only (ADR-0013 V3).
+# Never enabled for a release build.
+fuzzing = []
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

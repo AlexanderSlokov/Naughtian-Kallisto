@@ -7,6 +7,3 @@ pub mod lock_free_queue;
 pub mod sharded_cuckoo_table;
 pub mod tls_btree_manager;
 pub mod traits;
-
-#[cfg(feature = "loom")]
-pub mod loom_tests;

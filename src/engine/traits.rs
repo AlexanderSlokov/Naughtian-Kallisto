@@ -28,6 +28,11 @@ pub struct VersionState {
 )]
 pub struct KeyMetadata {
     pub current_version: u32,
+    /// Lowest version number still present in `versions`. Retention prunes a
+    /// contiguous range of version numbers starting here, so this must be
+    /// persisted — recomputing it from `versions` would lose the distinction
+    /// between "pruned" and "destroyed".
+    pub oldest_version: u32,
     pub max_versions: u32, // 0 = dùng Engine Mount Config mặc định
     pub cas_required: bool,
     pub delete_version_after_ms: u64, // TTL per version
@@ -73,4 +78,15 @@ pub trait SecretEngine: Send + Sync {
     async fn list_keys(&self, prefix: &str) -> Result<Vec<String>, EngineError>;
     fn engine_type(&self) -> &'static str;
     async fn force_flush(&self) -> Result<(), EngineError>;
+
+    /// Switch durability mode: `true` fsyncs before answering, `false` uses
+    /// write-behind batching (ADR-0013 D1/D2).
+    ///
+    /// Defaults to a no-op so engines with a single durability mode need not
+    /// implement it. `KvEngine` overrides it — without that override the
+    /// `/admin/mode/*` endpoints answered `"OK"` while leaving the mode
+    /// untouched, which made D1 impossible to test and the endpoint a lie.
+    async fn set_sync_mode(&self, _immediate: bool) -> Result<(), EngineError> {
+        Ok(())
+    }
 }

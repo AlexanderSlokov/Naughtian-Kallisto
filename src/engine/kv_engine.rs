@@ -58,8 +58,12 @@ impl KvEngine {
         // Rebuild path index from RocksDB keys
         let path_index_clone = path_index.clone();
         rocksdb.iterate_keys(move |key| {
-            if key.starts_with(b"m:")
-                && let Ok(path_str) = std::str::from_utf8(&key[2..])
+            // Must go through `parse_meta_key`: metadata keys are
+            // length-prefixed (`m:{len:08x}:{path}`), so the old fixed `key[2..]`
+            // offset indexed `00000006:app/db` as if it were the secret's path
+            // and broke LIST for every key after a restart.
+            if let Ok(key_str) = std::str::from_utf8(key)
+                && let Some(path_str) = kallisto_kv_model::apply::parse_meta_key(key_str)
             {
                 path_index_clone.insert_path_if_absent(path_str);
             }
@@ -174,6 +178,7 @@ impl KvEngine {
         }
         Ok(KeyMetadata {
             current_version: archived.current_version,
+            oldest_version: archived.oldest_version,
             max_versions: archived.max_versions,
             cas_required: archived.cas_required,
             delete_version_after_ms: archived.delete_version_after_ms,
@@ -194,6 +199,7 @@ impl KvEngine {
 fn meta_to_model(meta: &KeyMetadata) -> kallisto_kv_model::apply::KeyMetadata {
     kallisto_kv_model::apply::KeyMetadata {
         current_version: meta.current_version,
+        oldest_version: meta.oldest_version,
         max_versions: meta.max_versions,
         cas_required: meta.cas_required,
         delete_version_after_ms: meta.delete_version_after_ms,
@@ -216,6 +222,7 @@ fn meta_from_model(
 ) -> KeyMetadata {
     KeyMetadata {
         current_version: model.current_version,
+        oldest_version: model.oldest_version,
         max_versions: model.max_versions,
         cas_required: model.cas_required,
         delete_version_after_ms: model.delete_version_after_ms,
@@ -261,6 +268,9 @@ impl SecretEngine for KvEngine {
         version: u32,
     ) -> Result<(SecretPayload, VersionState), EngineError> {
         let mkey = Self::build_meta_key(path);
+        // One clock read for the whole operation, so a version cannot be judged
+        // readable and unreadable within the same request.
+        let read_at_ms = now_ms();
 
         // Zero-copy Metadata extraction (No Vec<VersionState> heap allocation)
         // SAFETY: Bytes come directly from RocksDB or CuckooCache which we wrote
@@ -282,7 +292,12 @@ impl SecretEngine for KvEngine {
                 for v in archived_meta.versions.iter() {
                     if v.version_id == target {
                         destroyed = v.destroyed;
-                        deleted = v.deletion_time_ms > 0;
+                        // `deletion_time_ms` is an absolute timestamp, not a
+                        // flag: a value in the future is a pending
+                        // `delete_version_after` expiry and must stay readable.
+                        // Treating any non-zero value as deleted would hide every
+                        // version the moment a TTL was configured.
+                        deleted = v.deletion_time_ms > 0 && v.deletion_time_ms <= read_at_ms;
                         created = v.created_time_ms;
                         deletion_time = v.deletion_time_ms;
                         found = true;
@@ -349,16 +364,7 @@ impl SecretEngine for KvEngine {
             cas,
         };
 
-        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
-            .map_err(|e| match e {
-                kallisto_kv_model::apply::ModelError::CasMismatch { expected, actual } => {
-                    EngineError::CasMismatch { expected, actual }
-                }
-                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => {
-                    EngineError::InvalidVersion(v)
-                }
-                kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
-            })?;
+        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())?;
 
         for effect in effects {
             match effect {
@@ -416,14 +422,7 @@ impl SecretEngine for KvEngine {
         let model_meta = meta_to_model(&meta);
 
         let op = kallisto_kv_model::ops::KvOp::SoftDelete { version };
-        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
-            .map_err(|e| match e {
-                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => {
-                    EngineError::InvalidVersion(v)
-                }
-                kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
-                _ => EngineError::StorageError("Unexpected model error".into()),
-            })?;
+        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())?;
 
         for effect in effects {
             if matches!(effect, kallisto_kv_model::effects::Effect::WriteMeta) {
@@ -454,14 +453,7 @@ impl SecretEngine for KvEngine {
         let model_meta = meta_to_model(&meta);
 
         let op = kallisto_kv_model::ops::KvOp::Undelete { version };
-        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
-            .map_err(|e| match e {
-                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => {
-                    EngineError::InvalidVersion(v)
-                }
-                kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
-                _ => EngineError::StorageError("Unexpected model error".into()),
-            })?;
+        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())?;
 
         for effect in effects {
             if matches!(effect, kallisto_kv_model::effects::Effect::WriteMeta) {
@@ -492,14 +484,7 @@ impl SecretEngine for KvEngine {
         let model_meta = meta_to_model(&meta);
 
         let op = kallisto_kv_model::ops::KvOp::Destroy { version };
-        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())
-            .map_err(|e| match e {
-                kallisto_kv_model::apply::ModelError::InvalidVersion(v) => {
-                    EngineError::InvalidVersion(v)
-                }
-                kallisto_kv_model::apply::ModelError::Destroyed(_) => EngineError::Destroyed,
-                _ => EngineError::StorageError("Unexpected model error".into()),
-            })?;
+        let (new_model_meta, effects) = kallisto_kv_model::apply::apply(&model_meta, op, now_ms())?;
 
         for effect in effects {
             match effect {
@@ -569,6 +554,15 @@ impl SecretEngine for KvEngine {
 
     fn engine_type(&self) -> &'static str {
         "kv"
+    }
+
+    async fn set_sync_mode(&self, immediate: bool) -> Result<(), EngineError> {
+        self.change_sync_mode(if immediate {
+            SyncMode::Immediate
+        } else {
+            SyncMode::Batch
+        });
+        Ok(())
     }
 
     async fn force_flush(&self) -> Result<(), EngineError> {
