@@ -108,7 +108,9 @@ docs-build:
         bench-server bench-release bench-laptop bench-http \
         docker-build docker-test docker-run \
         devcontainer_cloud_build devcontainer_local_build \
-        docs-serve docs-build
+        docs-serve docs-build \
+        verify verify-miri verify-miri-queue verify-miri-rkyv verify-proptest \
+        verify-security loom fuzz fuzz-build durability mutants-core mutants-all prove
 
 all: build
 
@@ -122,6 +124,15 @@ help:
 	@echo "  Test:"
 	@echo "    make test           - Run all unit tests (cargo test)"
 	@echo "    make e2e            - Run Vault API E2E compatibility tests"
+	@echo ""
+	@echo "  Verification (ADR-0013):"
+	@echo "    make verify         - miri + proptest + security (BLOCKING, every PR)"
+	@echo "    make loom           - Loom concurrency model checker (nightly schedule)"
+	@echo "    make fuzz           - cargo-fuzz, 15m per target (nightly schedule)"
+	@echo "    make durability     - D1/D2 kill -9 durability tests (needs release build)"
+	@echo "    make mutants-core   - Mutation testing, main crate only (~30 min)"
+	@echo "    make mutants-all    - Mutation testing, entire workspace (~2-3h, weekly)"
+	@echo "    make prove          - Creusot proofs (advisory, allowed to fail)"
 	@echo ""
 	@echo "  Static analysis:"
 	@echo "    make format         - cargo fmt --all"
@@ -170,3 +181,77 @@ deny:
 
 # Everything CI enforces, in CI's order. Run this before opening a PR.
 dev: format clippy deny test
+
+
+# Verification (ADR-0013)
+# -----------------------
+# Only `make verify` blocks PRs. The rest run on nightly/weekly schedules.
+# See ADR-0013 §5 and docs/references/verification-status.md for what each
+# invariant is actually covered by — and what is not.
+
+# BLOCKING — runs on every PR.
+verify: verify-miri verify-proptest verify-security
+
+# Miri: undefined behaviour, data races and leaks in unsafe code.
+verify-miri: verify-miri-queue verify-miri-rkyv
+
+# C2/C3 — LockFreeQueue's unsafe slot writes, Send/Sync soundness, and Drop.
+# Runs under the default Stacked Borrows model, the stricter of the two.
+# The queue lives in its own crate so this does not have to build RocksDB.
+verify-miri-queue:
+	cargo +nightly miri test -p kallisto_queue
+
+# C1 — rkyv::archived_root over archives this crate produced.
+#
+# Tree Borrows, not the default Stacked Borrows. rkyv 0.7's ArchivedVec derives a
+# pointer to the vector's elements from a RelPtr field, which Stacked Borrows
+# rejects because the resulting range lies outside the retagged field. Tree
+# Borrows accepts it, and Miri itself reports Stacked Borrows as experimental.
+# This is not a Miri exemption — ADR-0013 forbids those and none is used here;
+# it is running the checker under the model whose rules the code satisfies. The
+# residual risk and the fix (the rkyv 0.8 migration) are recorded in
+# docs/references/verification-status.md.
+verify-miri-rkyv:
+	MIRIFLAGS="-Zmiri-tree-borrows" cargo +nightly miri test \
+		-p naughtian-kallisto -- engine::traits::rkyv_safety
+
+# Group A — KV-v2 semantics, including the differential test against the
+# independent reference implementation in kallisto_kv_model::oracle.
+verify-proptest:
+	cargo test -p kallisto_kv_model
+
+# Group E — secret redaction. E2/E3 are not covered; see verification-status.md.
+verify-security:
+	cargo test --test security_invariants
+
+# Group B — exhaustive interleaving check of the real LockFreeQueue.
+# Slow. Nightly CI schedule, not per-PR.
+loom:
+	RUSTFLAGS="--cfg loom" cargo test --features loom \
+		-p kallisto_queue --lib -- --test-threads=1
+
+# cargo-fuzz: 15 minutes per target. Nightly CI schedule.
+fuzz:
+	cargo +nightly fuzz run rkyv_roundtrip -- -max_total_time=900
+	cargo +nightly fuzz run http_parser  -- -max_total_time=900
+
+fuzz-build:
+	cargo +nightly fuzz build
+
+# Group D — durability across kill -9. Needs the release binary.
+durability: build-server
+	@bash tests/integration/test_persistence.sh
+
+# Mutation testing: measures test suite quality by injecting faults.
+# mutants-core: main crate only, ~30 min. Good for local dev feedback.
+# mutants-all:  entire workspace, ~2-3h. Weekly in CI.
+mutants-core:
+	cargo mutants -p naughtian-kallisto
+
+mutants-all:
+	cargo mutants --workspace
+
+# Creusot: deductive proofs for kallisto_kv_model (Tier 2, advisory).
+# Requires opam + Why3 + SMT solver. See ADR-0013 V4.
+prove:
+	@echo "Creusot proofs not yet wired (V4 deferred to 1.2.0)"

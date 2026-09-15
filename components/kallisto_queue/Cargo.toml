@@ -1,0 +1,20 @@
+[package]
+name = "kallisto_queue"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Vyukov MPMC bounded lock-free queue. Isolated from the async stack so `loom` can model-check it (ADR-0013 B1/B2)."
+
+# Deliberately dependency-free apart from the loom shim. `make loom` sets
+# RUSTFLAGS="--cfg loom", which tokio and hyper-util react to by dropping
+# modules; keeping this crate out of their dependency graph is the whole reason
+# it exists as a separate component.
+[dependencies]
+loom = { version = "0.7", optional = true }
+
+[features]
+loom = ["dep:loom"]
+
+# `--cfg loom` is set by `make loom`, not by a Cargo feature, so declare it.
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(loom)'] }
