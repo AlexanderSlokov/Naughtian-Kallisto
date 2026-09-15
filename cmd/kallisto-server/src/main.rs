@@ -116,11 +116,12 @@ fn main() -> ExitCode {
 
     // Only ever on an explicit request. This used to happen unconditionally on
     // every startup, which silently made the store non-durable.
-    if cfg.wipe && cfg.db_path.exists() {
-        if let Err(e) = std::fs::remove_dir_all(&cfg.db_path) {
-            eprintln!("failed to wipe {}: {e}", cfg.db_path.display());
-            return ExitCode::FAILURE;
-        }
+    if cfg.wipe
+        && cfg.db_path.exists()
+        && let Err(e) = std::fs::remove_dir_all(&cfg.db_path)
+    {
+        eprintln!("failed to wipe {}: {e}", cfg.db_path.display());
+        return ExitCode::FAILURE;
     }
 
     let Some(db_path) = cfg.db_path.to_str() else {

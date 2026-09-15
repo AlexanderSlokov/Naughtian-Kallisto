@@ -83,49 +83,13 @@ jobs:
       - name: Install OS dependencies
         run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
 
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # BLOCKING, per ADR-0013 §5: miri + proptest + security invariants.
+      # loom, fuzz, mutants and the durability tests run on a schedule in
+      # verification-scheduled.yml — a slow job on the PR path is how a
+      # verification suite gets disabled.
       - name: Run make verify
         run: make verify
 
-  loom-fuzz:
-    name: Loom & Fuzz
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install nightly Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: nightly-x86_64-unknown-linux-gnu
-
-      - name: Install OS dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
-
-      - name: Install cargo-fuzz
-        run: cargo install cargo-fuzz
-
-      - name: Run Loom tests
-        run: make loom
-
-      - name: Check Fuzz targets build
-        run: cargo +nightly fuzz build
-
-  mutants:
-    name: Mutation Testing
-    runs-on: ubuntu-latest
-    continue-on-error: true # Advisory only
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@master
-        with:
-          toolchain: stable
-
-      - name: Install OS dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
-
-      - name: Install cargo-mutants
-        run: cargo install cargo-mutants
-
-      - name: Run Mutation Testing (Core)
-        run: make mutants-core

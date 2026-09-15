@@ -105,78 +105,73 @@ Commit to dropping RocksDB at the single-node stage, rather than waiting for Raf
 
 ### Phase V: Verification (ADR-0013)
 
+Per-invariant status, including everything that is *not* covered and why, is in
+[Verification Status](../verification-status/). That page is the one ADR-0013
+asks for when it says an unproven invariant list is as valuable as a proven one.
+
 Verification phases are ordered by fastest value. V0, V2, and V3 have no prerequisites and can run in parallel with any other phase. V1 requires V0.
 
 #### V0 — Miri + Mutants Baseline (runs parallel to Phase 3, no deps)
 
-- [x] Add `// SAFETY:` comments to both `unsafe` blocks in `lock_free_queue.rs` (lines 74-78 and 107-110). AGENTS.md requires this before miri work begins.
-- [x] Add `#[cfg(miri)] mod miri_tests` to `lock_free_queue.rs`:
-  - C1: write + read round-trip triggers no UB
-  - C2: send queue across a thread boundary is sound (`Send/Sync`)
-  - C3: dropping a partially-filled queue leaks no `Node<T>` allocations
-- [x] Wire `make verify` (initial scope: miri on `lock_free_queue` and `miri_tests`).
-- [x] Wire `make mutants-core` (scoped to `-p naughtian-kallisto`, ~30 min) and `make mutants-all` (entire workspace, ~2-3h, run weekly in CI). Record the baseline mutation score before writing any new tests.
+- [x] Add `// SAFETY:` comments to both `unsafe` blocks in the queue. AGENTS.md requires this before miri work begins.
+- [x] Miri tests for the queue: write/read round-trip (C1 shape), `Send`/`Sync` across a thread (C2), dropping a partially-filled queue (C3).
+- [x] Wire `make verify`. Scope is `kallisto_queue` under Stacked Borrows plus `engine::traits::rkyv_safety` under Tree Borrows — see `verification-status.md` for why the model differs and what that leaves uncovered.
+- [x] Wire `make mutants-core` and `make mutants-all` (weekly in CI).
+- [ ] **Record the baseline mutation score.** The targets run; no baseline number has been captured, so there is nothing to compare future runs against.
 
 #### V2 — Loom (runs parallel to Phase 3, no deps)
 
-- [x] Add `loom = "0.7"` to `[dev-dependencies]` and a `[features] loom = []` entry in `Cargo.toml`.
-- [x] Create `src/engine/loom_tests.rs` (gated on `#[cfg(loom)]`) with six tests:
-  - B1: no enqueued item is lost; no item dequeued twice
-  - B2: full queue returns `QueueError::Full`; no unconsumed slot is overwritten
-  - B3: `ShardedCuckooTable::insert` returning `true` guarantees subsequent `lookup` finds the entry
-  - B4: CLOCK eviction leaves no dangling `lookup_map` pointer
-  - B5: `Drop` order—`async_worker.join()` completes before `rocksdb.flush()` (prevents recurrence of the C++ Phase 4a crash)
-- [x] Wire `make loom`: `RUSTFLAGS="--cfg loom" cargo test --features loom -p naughtian-kallisto --lib engine::loom_tests -- --test-threads=1`
+- [x] Extract the queue into `components/kallisto_queue` with a `loom`/`std` atomics shim. Required, not cosmetic: `--cfg loom` applies to the whole dependency graph, and tokio drops `tokio::net` under it, which breaks hyper-util. Loom was unrunnable until the queue left the main crate.
+- [x] B1: no enqueued item is lost; no item dequeued twice. Two loom models plus a real-contention stress test.
+- [x] B2: full queue returns `QueueError::Full`; no unconsumed slot is overwritten. Two loom models.
+- [ ] **B3: `ShardedCuckooTable::insert` → `lookup`.** Not loom-verifiable as the table stands — all state sits behind one `parking_lot::RwLock`, so this is a logic invariant, not a memory-ordering one. Needs a multi-threaded stress test with an oracle, or `shuttle`.
+- [ ] **B4: CLOCK eviction leaves no dangling `lookup_map` read.** Same blocker as B3.
+- [ ] **B5: `async_worker.join()` completes before `rocksdb.flush()`.** Sequential drop-order property; loom is the wrong tool. Needs an observable-ordering regression test.
+- [x] Wire `make loom` against `-p kallisto_queue`.
 
 #### V3 — cargo-fuzz (runs parallel to Phase 3, no deps)
 
-- [x] Create `fuzz/` directory with workspace `Cargo.toml` and two targets:
-  - `fuzz/fuzz_targets/rkyv_deser.rs`: feeds arbitrary bytes into `rkyv::archived_root::<KeyMetadata>` and `rkyv::archived_root::<SecretPayload>` (exercises C1 under adversarial input)
-  - `fuzz/fuzz_targets/http_parser.rs`: feeds arbitrary HTTP bodies into the `put_version` handler (checks for panics on malformed input)
-- [x] Wire `make fuzz`: 15 min per target on nightly CI.
+- [x] Add `[workspace]` to `fuzz/Cargo.toml`. Without it every cargo invocation inside `fuzz/` failed with "current package believes it's in a workspace when it's not", so `make fuzz` and the CI fuzz-build step could not run at all.
+- [x] `rkyv_roundtrip`: `arbitrary`-driven values through serialise → `archived_root` → compare. Replaces a target that fed raw bytes into unchecked `archived_root`, which is UB by contract and would have reported crashes that say nothing about Kallisto.
+- [x] `http_parser`: Kallisto's own body parser, URI splitter, query extractors, RFC 7396 merge patch and subkey projection, reached through a `fuzzing`-gated module so the released public API is unchanged. Replaces a target that built an `http::Request` and dropped it, fuzzing the `http` crate and none of Kallisto.
+- [x] Remove `catch_unwind` from both targets — it hid every panic from libFuzzer, which is the one thing the targets exist to surface.
+- [x] Wire `make fuzz` (15 min per target) and `make fuzz-build`.
 
 #### V1 — `kallisto_kv_model` Crate + proptest (depends on V0)
 
-This is the largest change in the verification track. It fixes two confirmed issues as implementation consequences.
-
-**Confirmed bugs fixed here:**
-- A7: `put_version` never trims `meta.versions` against `max_versions` (`kv_engine.rs:319`). Metadata grows unboundedly, diverging from Vault semantics.
-- A9: `build_version_key` formats as `v:{path}:{version}`. A path containing `:` causes key collisions. Fix: switch to `v:{len_hex8}:{path}:{version}` (length-prefix encoding, unconditionally injective, zero edge cases). Breaking change on disk format—acceptable with zero users.
-
-- [x] Create `components/kallisto_kv_model/` (picked up automatically by the `components/*` workspace glob):
-  - `ops.rs`: `KvOp` enum
-  - `effects.rs`: `Effect` enum
-  - `apply.rs`: `pub fn apply(meta: &KeyMetadata, op: KvOp, now_ms: u64) -> Result<(KeyMetadata, Vec<Effect>), EngineError>` — pure, no async, no I/O, no unsafe
-  - `oracle.rs`: `BTreeMap`-backed reference implementation for proptest model comparison
-- [x] Implement A7 fix inside `apply`: when `max_versions > 0` and `versions.len() >= max_versions`, drop the oldest non-destroyed version before appending. Verify against `hashicorp/vault/builtin/logical/kv/path_data.go` (cite file + line in commit message).
-- [x] Implement A9 fix: switch `build_version_key` and `build_meta_key` to length-prefix encoding. Migrate any existing test fixtures.
-- [x] Write nine proptest property tests in `apply.rs` covering A1–A9. Each test must be demonstrably fail-able: commit message must cite a SHA or diff that breaks it.
-- [x] Refactor `KvEngine`: `put_version`, `soft_delete`, `undelete`, and `destroy_version` delegate to `kallisto_kv_model::apply()`. No business logic remains inside `KvEngine`.
-- [x] Extend `make verify` to include `cargo test -p kallisto_kv_model`.
+- [x] Create `components/kallisto_kv_model/` with `ops.rs`, `effects.rs`, `apply.rs`, `oracle.rs`.
+- [x] `oracle.rs` is an independent reference implementation — `BTreeMap` keyed by version number, rules written in unfactored form, sharing no code with `apply`. The first version delegated to `apply`, making the differential test a tautology.
+- [x] `prop_matches_oracle`: random operation sequences through both, identical observable state required at every step. This is the check the crate exists for.
+- [x] A7: prune a contiguous range of the oldest version numbers, counting destroyed versions rather than skipping them, and never pruning the version just written. `max_versions == 0` means the default limit, not "unlimited". Requires a persisted `oldest_version` field.
+- [x] `cas_required` enforced. `delete_version_after` applied, with `deletion_time_ms` treated as a timestamp rather than a flag, including on the engine's read path.
+- [x] Soft-delete / undelete / destroy report success and change nothing when the version is missing or already in the target state.
+- [x] A9: length-prefix key encoding, **plus** `parse_meta_key` for readers. The encoding alone was not enough — the path index rebuild still used a fixed `key[2..]` offset and indexed `00000006:app/db` as a secret path, breaking `LIST` after every restart.
+- [x] Refactor `KvEngine` to delegate to `apply()` and execute the returned `Effect` list.
+- [x] Nine invariant groups covered by fail-able tests; the mutation that breaks each one is recorded in `verification-status.md`.
+- [ ] **ADR-0013 amendments.** A7, A6 and A5 as written in the ADR are imprecise; the precise forms are in `verification-status.md` and should be folded back into the ADR.
 
 #### Security Invariants E1/E2/E3 (standard tests, blocking)
 
-- [x] Create `tests/security_invariants.rs`:
-  - E1: `format!("{:?}", payload)` must not contain the literal secret value. Same check for `KeyMetadata` and error messages.
-  - E2: Token comparison uses `subtle::ConstantTimeEq`. Assert structurally (code path calls `ct_eq`); timing measurements are unreliable in test environments.
-  - E3: `allow *` + `deny specific-path` policy pair returns `Denied` for the specific path.
+- [x] E1: `Debug`, `{:#?}`, nesting inside a derived `Debug`, every `EngineError` variant's `Display`, and the absence of any payload-carrying field on `KeyMetadata`.
+- [ ] **E2: constant-time token comparison.** No token authentication exists in this workspace, so there is nothing to test. The previous test grepped the source tree and passed when it found nothing.
+- [ ] **E3: explicit `deny` overrides `allow`.** `components/kallisto_policy` is a 3-line stub with no evaluator. The previous test had an empty body.
 
 #### Durability Invariants D1/D2 (integration tests)
 
-- [x] Extend `tests/integration/test_persistence.sh`:
-  - D1: Immediate mode — write a key, `kill -9`, restart, read the key; fail if absent.
-  - D2: Batch mode — write a key, `kill -9` before the 5ms flush window, restart, assert the key **may** be absent. The test locks down the documented write-behind contract, not a stronger guarantee. Fails if documentation and code disagree.
+- [x] Rewrite `tests/integration/test_persistence.sh` as a test: every step asserts, non-zero exit on failure. It previously ran `curl | tee` with no assertions, so it passed whatever the server did — including not starting.
+- [x] Make the server honour `--db-path`, `--workers`, `--http-port` and `--admin-port`, and stop deleting its storage directory on every startup. Durability across a restart was impossible before this.
+- [x] Propagate `SyncMode::Immediate` to RocksDB's WAL `sync` flag, and make `/admin/mode/*` actually switch the mode. D1's guarantee was unimplemented and immediate mode was unreachable from the API.
+- [x] D1: immediate mode, `kill -9`, restart, value must be present.
+- [x] D2: write-behind must persist once the window passes (fail-able), and a crash inside the window may lose the write but must leave the store openable and previously-durable keys intact.
+- [x] Wire `make durability`.
 
 #### CI Wiring
 
-- [x] Add to `.github/workflows/`:
-  - `make verify`: blocking, every PR
-  - `make loom`: nightly schedule only (slow)
-  - `make fuzz`: nightly schedule only
-  - `make mutants-core`: weekly, advisory (post score as comment)
-  - `make mutants-all`: weekly, advisory
-  - `make prove` (Creusot, deferred—see 1.2.0): advisory, `continue-on-error: true`
-- Three-strikes rule: a non-blocking job that fails three consecutive nightly runs without a fix is removed from CI. A permanently red job is worse than no job.
+- [x] `make verify` blocking on every PR, with a build cache.
+- [x] `.github/workflows/verification-scheduled.yml`: `loom`, `fuzz` and `durability` nightly; `mutants-all` weekly. Every scheduled job is `continue-on-error`.
+- [x] Remove `loom` and `mutants` from the PR path. They ran on every push with no `continue-on-error`, so the slowest jobs in the suite were also the ones blocking merges — the opposite of ADR-0013 §5.
+- [ ] `make prove` (Creusot) — advisory, wired once V4 confirms Creusot builds.
+- Three-strikes rule: a non-blocking job that fails three consecutive scheduled runs without a fix is removed from CI. A permanently red job is worse than no job.
 
 ### 1.1.0 Acceptance Criteria
 
