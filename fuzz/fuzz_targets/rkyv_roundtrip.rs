@@ -38,6 +38,7 @@ struct ArbVersion {
 #[derive(Arbitrary, Debug)]
 struct ArbInput {
     current_version: u32,
+    oldest_version: u32,
     max_versions: u32,
     cas_required: bool,
     delete_version_after_ms: u64,
@@ -50,6 +51,7 @@ struct ArbInput {
 fuzz_target!(|input: ArbInput| {
     let meta = KeyMetadata {
         current_version: input.current_version,
+        oldest_version: input.oldest_version,
         max_versions: input.max_versions,
         cas_required: input.cas_required,
         delete_version_after_ms: input.delete_version_after_ms,
