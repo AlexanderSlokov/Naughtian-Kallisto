@@ -41,6 +41,14 @@ impl EngineRegistry {
         current.keys().cloned().collect()
     }
 
+    /// Apply a durability mode to every mounted engine.
+    pub async fn set_sync_mode_all(&self, immediate: bool) {
+        let current = self.engines.load();
+        for engine in current.values() {
+            let _ = engine.set_sync_mode(immediate).await;
+        }
+    }
+
     pub async fn flush_all(&self) {
         let current = self.engines.load();
         for engine in current.values() {

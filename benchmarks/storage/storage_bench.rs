@@ -156,6 +156,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
             SecretEntry {
                 key: key.clone(),
                 payload: value,
+                referenced: std::sync::atomic::AtomicBool::new(true),
             },
         );
     }
@@ -177,6 +178,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
                     SecretEntry {
                         key: key.clone(),
                         payload: value,
+                        referenced: std::sync::atomic::AtomicBool::new(true),
                     },
                 );
             } else {
@@ -192,6 +194,7 @@ fn bench_mixed_workload(c: &mut Criterion) {
                             SecretEntry {
                                 key: key.clone(),
                                 payload: val.clone(),
+                                referenced: std::sync::atomic::AtomicBool::new(true),
                             },
                         );
                         black_box(val);

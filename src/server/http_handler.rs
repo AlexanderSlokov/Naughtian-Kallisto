@@ -61,6 +61,59 @@ fn parse_versions_list(body: &[u8]) -> Vec<u32> {
 }
 
 // -----------------------------------------------------------------------------
+// Fuzzing surface (ADR-0013 V3)
+// -----------------------------------------------------------------------------
+
+/// Request-parsing entry points reachable by `cargo-fuzz`.
+///
+/// Gated behind the `fuzzing` feature so the shipped artifact's public API is
+/// unchanged — ADR-0013 forbids widening a public API to satisfy a verification
+/// tool. `cargo fuzz` builds the crate with this feature on; nothing else does.
+#[cfg(feature = "fuzzing")]
+pub mod fuzz_api {
+    use axum::http::Uri;
+    use sonic_rs::Value;
+
+    /// Body parser for `POST /v1/secret/{delete,undelete,destroy}/:path`.
+    pub fn parse_versions_list(body: &[u8]) -> Vec<u32> {
+        super::parse_versions_list(body)
+    }
+
+    /// URI splitter shared by every KV route.
+    pub fn extract_mount_and_path<'a>(
+        uri_path: &'a str,
+        expected_action: &str,
+    ) -> Option<(&'a str, &'a str)> {
+        super::extract_mount_and_path(uri_path, expected_action)
+    }
+
+    /// `?version=N`
+    pub fn extract_version_param(uri: &Uri) -> u32 {
+        super::extract_version_param(uri)
+    }
+
+    /// `?depth=N`
+    pub fn extract_depth_param(uri: &Uri) -> u32 {
+        super::extract_depth_param(uri)
+    }
+
+    /// `?list=true`
+    pub fn extract_list_param(uri: &Uri) -> bool {
+        super::extract_list_param(uri)
+    }
+
+    /// RFC 7396 merge patch, as applied by `PATCH /v1/secret/data/:path`.
+    pub fn json_merge_patch(target: &mut Value, patch: &Value) {
+        super::json_merge_patch(target, patch);
+    }
+
+    /// Subkey projection, as applied by `GET /v1/secret/subkeys/:path`.
+    pub fn strip_to_subkeys(value: &mut Value, current_depth: u32, max_depth: u32) {
+        super::strip_to_subkeys(value, current_depth, max_depth);
+    }
+}
+
+// -----------------------------------------------------------------------------
 // Handlers & Extractors
 // -----------------------------------------------------------------------------
 
@@ -222,13 +275,12 @@ async fn patch_secret(
     json_merge_patch(&mut current_value, patch_data);
 
     let mut options_cas = None;
-    if let Some(opts) = patch_body.pointer(sonic_rs::pointer!["options"]) {
-        if let Some(cas) = opts
+    if let Some(opts) = patch_body.pointer(sonic_rs::pointer!["options"])
+        && let Some(cas) = opts
             .pointer(sonic_rs::pointer!["cas"])
             .and_then(|v| v.as_u64())
-        {
-            options_cas = Some(cas as u32);
-        }
+    {
+        options_cas = Some(cas as u32);
     }
 
     let new_payload = SecretPayload {
@@ -526,6 +578,12 @@ impl IntoResponse for AppError {
                 EngineError::CasMismatch { .. } => {
                     (StatusCode::CONFLICT, "CAS mismatch".to_string())
                 }
+                // The request is missing a required parameter, so this is a 400
+                // rather than the 409 a losing CAS race gets.
+                EngineError::CasRequired => (
+                    StatusCode::BAD_REQUEST,
+                    "check-and-set parameter required for this call".to_string(),
+                ),
                 EngineError::StorageError(msg) => (StatusCode::INTERNAL_SERVER_ERROR, msg),
                 EngineError::QueueFull => (
                     StatusCode::SERVICE_UNAVAILABLE,

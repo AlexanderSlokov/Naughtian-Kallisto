@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+# Runs clippy with the project's quality gate. Arguments are passed through to
+# "cargo clippy".
+#
+# The lint set is adopted from tikv/tikv scripts/clippy (Apache-2.0, revision
+# 1ef0a19, 2026-08-25); see THIRD-PARTY-NOTICES.md. Kallisto-specific
+# deviations are marked below — keep them separated from the inherited set so
+# it stays obvious what we changed and why.
+
+set -euo pipefail
+
+# Inherited from TiKV. Notes on the -A entries are theirs; we kept them as-is
+# rather than re-deriving each one, on the theory that a gate proven against a
+# large production codebase is a better starting point than a fresh guess.
+#
+# - `derive_partial_eq_without_eq` has compilation overhead.
+# - Blocking issue for `result_large_err` is large error enums.
+# - Blocking issue for `large_enum_variant` is message-passing enums.
+CLIPPY_LINTS=(
+    -A clippy::module_inception
+    -A clippy::result_large_err
+    -A clippy::large_enum_variant
+    -A clippy::should_implement_trait
+    -A clippy::too_many_arguments
+    -A clippy::disallowed_names
+    -A clippy::redundant_closure
+    -A clippy::field_reassign_with_default
+    -A clippy::wrong_self_convention
+    -A clippy::needless_range_loop
+    -A clippy::inconsistent_struct_constructor
+    -A clippy::new_ret_no_self
+    -A clippy::unnecessary_sort_by
+    -A clippy::unnecessary_wraps
+    -A clippy::bool_assert_comparison
+    -A clippy::self_named_constructors
+    -A clippy::enum_variant_names
+    -A clippy::type_complexity
+    -A clippy::significant_drop_in_scrutinee
+    -A clippy::derive_partial_eq_without_eq
+    -A clippy::non_canonical_partial_ord_impl
+    -A clippy::arc_with_non_send_sync
+    -A clippy::needless_return_with_question_mark
+    -A clippy::let_underscore_future
+    -A unexpected_cfgs
+    -W clippy::dbg_macro
+    -W clippy::todo
+    -D clippy::upper_case_acronyms
+    -D clippy::disallowed_methods
+    -D rust-2018-idioms
+    -D clippy::assertions_on_result_states
+)
+
+# Async discipline. Inherited from TiKV and doubly relevant here: the data
+# plane runs a single-threaded runtime per core (src/event/worker.rs), so a
+# needless future or an oversized one is paid on the request path with no
+# work-stealing to absorb it.
+# - https://github.com/rust-lang/rust/issues/69826
+# - https://github.com/rust-lang/rust/issues/69663
+# - https://github.com/rust-lang/rust/issues/71407
+CLIPPY_LINTS+=(
+    -D clippy::redundant_async_block
+    -D clippy::unused_async
+    -D clippy::manual_async_fn
+    -D clippy::large_futures
+)
+
+# Kallisto-specific additions go here. Keep each one commented with the reason
+# it exists, and prefer fixing the code over adding an -A entry.
+CLIPPY_LINTS+=()
+
+cargo clippy --workspace --all-targets "$@" -- "${CLIPPY_LINTS[@]}"

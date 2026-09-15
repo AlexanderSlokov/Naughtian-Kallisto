@@ -1,54 +1,35 @@
+# Derived from tikv/tikv (https://github.com/tikv/tikv), Copyright The TiKV
+# Authors, licensed under Apache-2.0. Upstream revision 1ef0a19 (2026-08-25).
+# Modified for Naughtian Kallisto. See THIRD-PARTY-NOTICES.md.
+
 avoid-breaking-exported-api = false
 
-
+# Worker runtimes are built in src/event/worker.rs, which names each thread and
+# pins it to a core with core_affinity before the runtime starts. A start hook
+# registered here runs inside the runtime instead, so it cannot participate in
+# that setup and silently diverges from the thread-per-core layout the data
+# plane depends on. Put the logic in the worker spawn path.
 [[disallowed-methods]]
 path = "tokio::runtime::builder::Builder::on_thread_start"
 reason = """
-Adding hooks directly will omit system hooks, please use
-<tokio::runtime::builder::Builder as tikv_util::sys::thread::ThreadBuildWrapper>::with_sys_and_custom_hooks
-refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tikv/pull/15017 for more details.
+Worker threads are set up in src/event/worker.rs (naming plus core_affinity
+pinning). Register startup work there, not as a runtime hook.
 """
 [[disallowed-methods]]
 path = "tokio::runtime::builder::Builder::on_thread_stop"
 reason = """
-Adding hooks directly will omit system hooks, please use
-<tokio::runtime::builder::Builder as tikv_util::sys::thread::ThreadBuildWrapper>::with_sys_and_custom_hooks
-refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tikv/pull/15017 for more details.
-"""
-[[disallowed-methods]]
-path = "futures_executor::thread_pool::ThreadPoolBuilder::after_start"
-reason = """
-Adding hooks directly will omit system hooks, please use
-<futures_executor::thread_pool::ThreadPoolBuilder as tikv_util::sys::thread::ThreadBuildWrapper>::with_sys_and_custom_hooks
-refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tikv/pull/15017 for more details.
-"""
-[[disallowed-methods]]
-path = "futures_executor::thread_pool::ThreadPoolBuilder::before_stop"
-reason = """
-Adding hooks directly will omit system hooks, please use
-<futures_executor::thread_pool::ThreadPoolBuilder as tikv_util::sys::thread::ThreadBuildWrapper>::with_sys_and_custom_hooks
-refer to https://github.com/tikv/tikv/pull/12442 and https://github.com/tikv/tikv/pull/15017 for more details.
+Worker thread teardown belongs in src/event/worker.rs alongside the spawn path,
+so setup and teardown stay in one place.
 """
 
-# See more about RUSTSEC-2020-0071 in deny.toml.
-[[disallowed-methods]]
-path = "time::now"
-reason = "time::now is unsound, see RUSTSEC-2020-0071"
-[[disallowed-methods]]
-path = "time::at"
-reason = "time::at is unsound, see RUSTSEC-2020-0071"
-[[disallowed-methods]]
-path = "time::at_utc"
-reason = "time::at_utc is unsound, see RUSTSEC-2020-0071"
-
-# See more about RUSTSEC-2023-0072 in deny.toml.
+# RUSTSEC-2023-0072
 [[disallowed-methods]]
 path = "openssl::x509::store::X509StoreRef::objects"
 reason = """
-X509StoreRef::objects is unsound, see RUSTSEC-2020-0071
+X509StoreRef::objects is unsound, see RUSTSEC-2023-0072
 """
 
-# See more about RUSTSEC-2025-0004 in deny.toml.
+# RUSTSEC-2025-0004
 [[disallowed-methods]]
 path = "openssl::ssl::select_next_proto"
 reason = """
@@ -56,7 +37,7 @@ openssl::ssl::select_next_proto may return a buffer use after free, \
 see RUSTSEC-2025-0004
 """
 
-# See more about RUSTSEC-2024-0357 in deny.toml.
+# RUSTSEC-2024-0357
 [[disallowed-types]]
 path = "openssl::bio::MemBio"
 reason = """
@@ -87,7 +68,7 @@ openssl::asn1::Asn1GeneralizedTimeRef may call openssl::bio::MemBio::get_buf, \
 see RUSTSEC-2024-0357
 """
 
-# See more about RUSTSEC-2025-0022 in deny.toml.
+# RUSTSEC-2025-0022
 [[disallowed-methods]]
 path = "openssl::cipher::Cipher::fetch"
 reason = """
@@ -100,6 +81,7 @@ reason = """
 When a Some(...) value was passed to the properties argument of openssl::md::Md::fetch, \
 a use-after-free would result. See RUSTSEC-2025-0022
 """
+
 [[await-holding-invalid-types]]
 path = "dashmap::mapref::one::Ref"
 reason = "https://github.com/tikv/tikv/issues/19238"
