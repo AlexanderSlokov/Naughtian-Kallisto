@@ -1,0 +1,13 @@
+[package]
+name = "kallisto_kv_model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Pure state-transition model for Kallisto KV-v2 semantics. No async, no I/O, no unsafe."
+
+# Deliberately minimal. This crate must stay pure.
+[dependencies]
+thiserror = { workspace = true }
+
+[dev-dependencies]
+proptest = "1"
