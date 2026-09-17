@@ -1,7 +1,11 @@
 use std::{path::PathBuf, sync::Arc};
 
 use control_plane::admin_http::{start_admin_server, stop_admin_server};
-use naughtian_kallisto::{KallistoCore, event::worker::WorkerPool, server::http_handler::AppState};
+use naughtian_kallisto::{
+    KallistoCore,
+    event::worker::WorkerPool,
+    server::http_handler::{AppState, vault_kv_router},
+};
 use reqwest::Client;
 use serde_json::json;
 use tokio::time::{Duration, sleep};
@@ -21,7 +25,9 @@ async fn test_phase4_integration() {
     let data_port = 18200;
     let admin_port = 18202;
 
-    let _pool = WorkerPool::spawn(1, data_port, state.clone());
+    let _pool = WorkerPool::spawn(1, ([127, 0, 0, 1], data_port).into(), move || {
+        vault_kv_router(state.clone())
+    });
     let admin_server = start_admin_server(core.clone(), admin_port);
 
     sleep(Duration::from_millis(500)).await;

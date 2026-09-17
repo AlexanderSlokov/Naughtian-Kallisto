@@ -86,7 +86,14 @@ bench-release:
 # (Sampled on AMD Ryzen 5 3550H, 15th Aug 2026).
 # --------------------------------------------------------------------
 bench-laptop:
-	@bash benchmarks/server/run_release_bench.sh 4 100 10s 30000 30000
+	@bash benchmarks/server/run_duck_bench.sh 4 100 10s 30000
+
+# The duck plan measures the read path at M3 and again at M5, once the
+# in-memory barrier is on it. Same script both times, so the two numbers are
+# comparable.
+bench-duck: build-server
+	@cargo build --release --example seal_fixture
+	@bash benchmarks/server/run_duck_bench.sh
 
 full-bench-server: clean build-server bench-server
 
@@ -105,7 +112,7 @@ docs-build:
         format clippy deny dev \
         e2e benchmark-strict benchmark-batch benchmark-p99 benchmark-throughput \
         benchmark-dos test-atomic benchmark-multithread \
-        bench-server bench-release bench-laptop bench-http \
+        bench-server bench-release bench-laptop bench-duck bench-http \
         docker-build docker-test docker-run \
         devcontainer_cloud_build devcontainer_local_build \
         docs-serve docs-build \
@@ -144,6 +151,7 @@ help:
 	@echo "    make bench-server   - HTTP load test (k6: GET/PUT/MIXED)"
 	@echo "    make bench-release  - Release benchmark (wrk2: raw throughput + latency)"
 	@echo "    make bench-laptop   - Laptop benchmark (wrk2: 30k req/s, expected latency ~1.5ms avg)"
+	@echo "    make bench-duck     - Resolver read path (wrk2, seeded from a sealed file)"
 	@echo "    cargo bench         - Run all in-process Rust Criterion benchmarks"
 	@echo ""
 	@echo "  Run:"

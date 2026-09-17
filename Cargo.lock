@@ -1418,10 +1418,11 @@ name = "kallisto-server"
 version = "1.0.0"
 dependencies = [
  "axum",
- "control_plane",
+ "core_crypto",
  "naughtian-kallisto",
  "tikv-jemallocator",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -1717,6 +1718,7 @@ dependencies = [
  "rocksdb",
  "serde",
  "serde_json",
+ "serde_norway",
  "siphasher",
  "socket2 0.5.10",
  "sonic-rs",
@@ -2796,6 +2798,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde_norway"
+version = "0.9.42"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e408f29489b5fd500fab51ff1484fc859bb655f32c671f307dcd733b72e8168c"
+dependencies = [
+ "indexmap",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml-norway",
+]
+
+[[package]]
 name = "serde_path_to_error"
 version = "0.1.20"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3451,6 +3466,12 @@ name = "unicode-xid"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ebc1c04c71510c7f702b52b7c350734c9ff1295c464a03335b00bb84fc54f853"
+
+[[package]]
+name = "unsafe-libyaml-norway"
+version = "0.2.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b39abd59bf32521c7f2301b52d05a6a2c975b6003521cbd0c6dc1582f0a22104"
 
 [[package]]
 name = "untrusted"

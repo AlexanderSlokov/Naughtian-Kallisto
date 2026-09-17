@@ -298,13 +298,26 @@ VAULT_ADDR=http://127.0.0.1:8200 vault kv put secret/app/db x=y   # phải là 4
 curl -s localhost:8200/v1/sys/health | jq .kallisto_file_version
 ```
 
-Cổng thông lượng, hệ quả trực tiếp của QĐ-3 — đo bằng `make bench-laptop` tại ba điểm:
+Cổng thông lượng, hệ quả trực tiếp của QĐ-3 — đo bằng `make bench-duck` tại ba điểm:
 
-| Điểm đo | Kỳ vọng |
-| --- | --- |
-| M3 (chưa có barrier) | ít nhất bằng số nền của engine cũ; kiến trúc mới ít lớp hơn nên không có lý do tụt |
-| M5 (có barrier trên đường nóng) | mức tụt phải đo được và phải báo cáo |
-| M8 | chạy ca lấy-rồi-huỷ ở rps cao qua nhiều worker |
+| Điểm đo | Kỳ vọng | Đã đo |
+| --- | --- | --- |
+| M3 (chưa có barrier) | ít nhất bằng số nền của engine cũ; kiến trúc mới ít lớp hơn nên không có lý do tụt | ✅ xem dưới |
+| M5 (có barrier trên đường nóng) | mức tụt phải đo được và phải báo cáo | ⬜ |
+| M8 | chạy ca lấy-rồi-huỷ ở rps cao qua nhiều worker | ⬜ |
+
+**Số nền M3**, laptop 8 nhân, 4 worker, 100 connection, wrk2 chạy cùng máy:
+
+| | 30k req/s (đúng tham số `bench-laptop` cũ) | bão hoà, mục tiêu 200k |
+| --- | --- | --- |
+| Thông lượng | 28.3k req/s | **107.0k req/s** |
+| Trung bình | 1.38 ms | 2.21 s |
+| p50 | 1.29 ms | 2.22 s |
+| p99 | 3.51 ms | 4.51 s |
+
+Cột trái so trực tiếp được với engine cũ: `make help` từ trước vẫn ghi kỳ vọng của `bench-laptop` là *"~1.5ms avg"* ở đúng 30k req/s, và đường đọc mới đo được 1.38 ms. Không tụt. Cột phải là trần thật của máy này — wrk2 ngồi chung 8 nhân với 4 worker, nên nó là sàn của trần chứ không phải trần.
+
+Lưu ý về công cụ đo: `run_release_bench.sh` cũ gieo dữ liệu bằng `PUT` qua HTTP, mà mọi `PUT` bây giờ trả 403 theo đúng D1. Nó được thay bằng `benchmarks/server/run_duck_bench.sh`, gieo bằng một file đã seal. Script mới **nâng token bucket lên rất cao trong file config của nó** — nếu để mặc định 20k/s mỗi worker thì thứ được đo là cái bucket, không phải đường đọc.
 
 Sau M8, `make duck` là cổng cuối: ba SDK thật, ca thuận và ca nghịch, ca xấu tường minh.
 

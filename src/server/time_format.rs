@@ -42,6 +42,14 @@ pub fn civil_from_epoch_secs(total_secs: u64) -> CivilTime {
 /// Convert epoch milliseconds to RFC 3339 / ISO 8601 string (UTC).
 /// Pure arithmetic — no chrono dependency, zero intermediate allocations.
 #[inline]
+/// The same format, from the clock type the rest of the program carries.
+pub fn rfc3339_from_system_time(t: std::time::SystemTime) -> String {
+    let ms = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_millis() as u64);
+    epoch_ms_to_rfc3339(ms)
+}
+
 pub fn epoch_ms_to_rfc3339(ms: u64) -> String {
     if ms == 0 {
         return "1970-01-01T00:00:00Z".to_string();

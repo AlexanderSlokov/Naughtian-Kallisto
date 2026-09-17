@@ -1,0 +1,56 @@
+# Kallisto — a local, read-only secrets resolver that speaks Vault KV-v2.
+#
+# This file is meant to be committed. It contains no secret, and there is
+# nowhere in the schema to put one: credentials and the seal key come from the
+# environment, and a key field here fails to parse rather than being ignored.
+#
+#   KALLISTO_SEAL_KEY              the 32-byte seal key, hex-encoded (required)
+#   KALLISTO_S3_ACCESS_KEY_ID      bucket credentials (bucket sources only)
+#   KALLISTO_S3_SECRET_ACCESS_KEY
+#
+# Anything here can be overridden by an environment variable and then by a
+# command-line flag, in that order (ADR-0003).
+
+apiVersion: kallisto/v1
+kind: Resolver
+spec:
+  # Loopback is the default, and a non-loopback address is refused at startup
+  # unless you pass --i-accept-the-risk. Kallisto has no network authentication
+  # story: it is a sidecar for one machine's apps, not a cluster service.
+  listen:
+    address: 127.0.0.1
+    port: 8200
+
+  # One pinned runtime per worker (ADR-0016 QĐ-3). In a CPU-limited pod, set 1.
+  workers: 2
+
+  # The KV-v2 mount your apps already write in their URLs.
+  mount: secret
+
+  source:
+    type: bucket
+    endpoint: https://s3.example.com
+    bucket: kallisto
+    objectKey: prod/payment.kal
+    region: auto
+    # Garage and MinIO want path style; R2 and AWS take virtual-host style.
+    pathStyle: true
+
+    # Or, to read a file shipped with the image instead:
+    #
+    # type: disk
+    # path: /etc/kallisto/secrets.kal
+
+  refresh:
+    intervalSeconds: 30
+
+  # The encrypted copy kept here is what lets an app start when the bucket is
+  # down. It is never written in the clear.
+  cacheDir: /var/lib/kallisto
+
+  # Per worker, not per process — each worker counts its own traffic so the
+  # read path never touches a shared counter. Over the limit is a 429 with
+  # Retry-After, the way Vault answers it.
+  limits:
+    requestsPerSecondPerWorker: 20000
+    burst: 20000

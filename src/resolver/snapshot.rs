@@ -23,6 +23,11 @@ pub struct Snapshot {
     pub version: u64,
     pub etag: Option<String>,
     pub loaded_at: SystemTime,
+    /// Rendered here rather than per response: every KV read carries this
+    /// string, and formatting a timestamp eight thousand times a second to
+    /// produce the same eight thousand identical strings is work the hot path
+    /// does not need to do (ADR-0016 QĐ-3).
+    loaded_at_rfc3339: String,
     /// Path (no `secret/data/` prefix) to its KV-v2 data object, already
     /// rendered as JSON. The read path concatenates this into the response and
     /// never parses anything.
@@ -49,15 +54,21 @@ impl Snapshot {
         let mut sorted_paths: Vec<String> = secrets.keys().cloned().collect();
         sorted_paths.sort();
 
+        let loaded_at = SystemTime::now();
         Self {
             version,
             etag,
-            loaded_at: SystemTime::now(),
+            loaded_at,
+            loaded_at_rfc3339: crate::server::time_format::rfc3339_from_system_time(loaded_at),
             secrets: render_once(secrets),
             policies: policies.into_iter().collect(),
             tokens: tokens.into_iter().collect(),
             sorted_paths,
         }
+    }
+
+    pub fn loaded_at_rfc3339(&self) -> &str {
+        &self.loaded_at_rfc3339
     }
 
     pub fn secret(&self, path: &str) -> Option<&str> {

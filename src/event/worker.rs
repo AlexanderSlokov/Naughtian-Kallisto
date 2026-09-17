@@ -1,9 +1,8 @@
-use std::thread::JoinHandle;
+use std::{net::SocketAddr, thread::JoinHandle};
 
-use crate::server::{
-    http_handler::{AppState, vault_kv_router},
-    listener::bind_reuseport,
-};
+use axum::Router;
+
+use crate::server::listener::bind_reuseport;
 
 /// Manages a pool of Tokio single-threaded runtimes.
 ///
@@ -17,12 +16,21 @@ pub struct WorkerPool {
 impl WorkerPool {
     /// Spawns `num_workers` threads. Each thread runs a localized Tokio runtime
     /// and listens on the same SO_REUSEPORT bound socket.
-    pub fn spawn(num_workers: usize, port: u16, state: AppState) -> Self {
+    ///
+    /// `make_router` is called once per worker, on that worker's own thread.
+    /// That is deliberate: anything a router builds for itself — the rate
+    /// limiter, and later the barrier's decryption buffer — then belongs to one
+    /// core and is never shared, which is the point of thread-per-core
+    /// (ADR-0016 QĐ-3).
+    pub fn spawn<F>(num_workers: usize, addr: SocketAddr, make_router: F) -> Self
+    where
+        F: Fn() -> Router + Clone + Send + 'static,
+    {
         let core_ids = core_affinity::get_core_ids().unwrap_or_default();
 
         let handles = (0..num_workers)
             .map(|worker_idx| {
-                let state = state.clone();
+                let make_router = make_router.clone();
                 // Pick a core to pin to (round-robin if there are more workers than cores)
                 let core_id = if !core_ids.is_empty() {
                     Some(core_ids[worker_idx % core_ids.len()])
@@ -47,11 +55,11 @@ impl WorkerPool {
                         rt.block_on(async move {
                             // SO_REUSEPORT allows multiple threads to bind to the same port
                             // The kernel load balances incoming TCP connections among them
-                            let std_listener = bind_reuseport(port).expect("Failed to bind port");
+                            let std_listener = bind_reuseport(addr).expect("Failed to bind port");
                             std_listener.set_nonblocking(true).unwrap();
 
                             let listener = tokio::net::TcpListener::from_std(std_listener).unwrap();
-                            let app = vault_kv_router(state);
+                            let app = make_router();
 
                             axum::serve(listener, app).await.unwrap();
                         });

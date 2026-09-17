@@ -40,6 +40,10 @@ zeroize = { version = "1.7", features = ["derive"] }
 # keeps a FIPS-validated module underneath. See the comment in deny.toml.
 aws-lc-rs = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# serde_yaml is archived; ADR-0003 names this fork as the replacement to
+# evaluate. Picked over serde_yaml_ng because it is the one that kept taking
+# releases after the archive.
+serde_norway = "0.9"
 
 [dependencies]
 tokio = { workspace = true }
@@ -65,6 +69,7 @@ aws-lc-rs = { workspace = true }
 url = "2"
 reqwest = { workspace = true }
 kallisto_queue = { path = "components/kallisto_queue" }
+serde_norway = { workspace = true }
 
 [features]
 # Exposes internal request parsers to the fuzz targets only (ADR-0013 V3).
