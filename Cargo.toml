@@ -17,7 +17,7 @@ edition = "2024"
 license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
-tokio = { version = "1.x", features = ["rt", "net", "macros", "sync"] }
+tokio = { version = "1.x", features = ["rt", "net", "macros", "sync", "time"] }
 axum = "0.7"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
@@ -33,6 +33,16 @@ sonic-rs = "0.3"
 rkyv = "0.7"
 socket2 = { version = "0.5", features = ["all"] }
 core_affinity = "0.8"
+zeroize = { version = "1.7", features = ["derive"] }
+# AEAD + keyed hashing for the sealed secret file (ADR-0015 D13/D15, ADR-0016
+# QĐ-1). Chosen over RustCrypto because rustls already pulls aws-lc-rs in as its
+# default provider for the bucket's HTTPS, so this costs no new dependency and
+# keeps a FIPS-validated module underneath. See the comment in deny.toml.
+aws-lc-rs = "1"
+# Signs S3 GETs without dragging in the official AWS SDK, which ADR-0015 D2
+# rules out on binary size. Brings no HTTP client of its own, which is the point.
+rusty-s3 = "0.5"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [dependencies]
 tokio = { workspace = true }
@@ -53,6 +63,9 @@ socket2 = { workspace = true }
 core_affinity = { workspace = true }
 siphasher = "1.0.3"
 kallisto_kv_model = { path = "components/kallisto_kv_model" }
+core_crypto = { path = "components/kallisto_crypto" }
+rusty-s3 = { workspace = true }
+reqwest = { workspace = true }
 kallisto_queue = { path = "components/kallisto_queue" }
 
 [features]
@@ -63,7 +76,9 @@ fuzzing = []
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tower = { version = "0.5", features = ["util"] }
-reqwest = { version = "0.12", features = ["json"] }
+# Must track the workspace entry: default features would pull native-tls, and
+# with it OpenSSL, back into the test binary through feature unification.
+reqwest = { workspace = true, features = ["json"] }
 control_plane = { path = "components/kallisto_cluster" }
 walkdir = "2.5.0"
 
