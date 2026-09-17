@@ -146,17 +146,24 @@ impl Refresher {
             return Tick::Unchanged;
         }
 
-        let contents = match core_crypto::open(&bytes, &self.key, held) {
-            Ok(contents) => contents,
+        let opened = match core_crypto::open(&bytes, &self.key, held) {
+            Ok(opened) => opened,
             // Forged, rolled back, or sealed with a different key. Keep the
             // table we have — ADR-0015 D10 step 3.
             Err(e) => return Tick::Rejected(e.into()),
         };
 
-        let version = contents.version;
-        let snapshot = match Snapshot::build(contents, etag.clone()) {
+        let version = opened.content_version();
+        // `view` borrows the cleartext, which `opened` wipes at the end of this
+        // block. The snapshot it builds owns only sealed bytes (ADR-0015 D13),
+        // so nothing readable survives past here.
+        let snapshot = match opened
+            .view()
+            .map_err(Into::into)
+            .and_then(|view| Snapshot::build(view, etag.clone()).map_err(RefreshError::from))
+        {
             Ok(snapshot) => snapshot,
-            Err(e) => return Tick::Rejected(e.into()),
+            Err(e) => return Tick::Rejected(e),
         };
         for name in snapshot.unknown_policies() {
             // Not fatal — an undefined policy grants nothing — but the operator
@@ -294,7 +301,11 @@ mod tests {
         );
         assert_eq!(slot.version(), Some(7), "the good table must survive");
         assert_eq!(
-            slot.load().unwrap().secret("app/db"),
+            slot.load()
+                .unwrap()
+                .with_secret("app/db", ToString::to_string)
+                .map(Result::unwrap)
+                .as_deref(),
             Some(r#"{"pass":"new"}"#)
         );
     }

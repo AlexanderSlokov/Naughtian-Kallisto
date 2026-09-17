@@ -119,7 +119,7 @@ mod tests {
     use super::*;
     use crate::{
         config::ResolvedLimits,
-        resolver::snapshot::{Snapshot, SnapshotSlot},
+        resolver::snapshot::SnapshotSlot,
         server::vault_api::{Resolver, router as api_router},
     };
 
@@ -161,7 +161,13 @@ mod tests {
     fn app_of(loaded: bool, guarded: bool) -> Router {
         let slot = Arc::new(SnapshotSlot::empty());
         if loaded {
-            slot.store(Snapshot::build(contents(guarded), Some("\"tag-42\"".to_string())).unwrap());
+            slot.store(
+                crate::resolver::snapshot::from_contents(
+                    &contents(guarded),
+                    Some("\"tag-42\"".to_string()),
+                )
+                .unwrap(),
+            );
         }
         api_router(Resolver {
             slot,

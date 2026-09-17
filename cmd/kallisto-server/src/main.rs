@@ -56,6 +56,17 @@ fn env(name: &str) -> Option<String> {
 }
 
 fn run() -> Result<(), Startup> {
+    // Before anything has read a secret: no core file, and no ptrace. ADR-0015
+    // D13's three small things — the third, locking the barrier key into RAM,
+    // happens where the key is made.
+    let hardening = core_crypto::harden_process();
+    if !hardening.complete() {
+        eprintln!(
+            "kallisto: could not fully harden this process ({hardening:?}); a crash here may \
+             write memory to a core file"
+        );
+    }
+
     let cli = config::parse_args(std::env::args().skip(1))?;
     let environment = config::from_env(env);
 

@@ -85,10 +85,16 @@ tower = { version = "0.5", features = ["util"] }
 reqwest = { workspace = true, features = ["json"] }
 control_plane = { path = "components/kallisto_cluster" }
 walkdir = "2.5.0"
+zeroize = { workspace = true }
 
 [[bench]]
 name = "storage_bench"
 path = "benchmarks/storage/storage_bench.rs"
+harness = false
+
+[[bench]]
+name = "barrier_bench"
+path = "benchmarks/barrier/barrier_bench.rs"
 harness = false
 
 [[bench]]

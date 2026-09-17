@@ -24,6 +24,7 @@ use aws_lc_rs::{
     rand::{SecureRandom, SystemRandom},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::value::RawValue;
 use zeroize::Zeroizing;
 
 use crate::key::SealKey;
@@ -206,7 +207,11 @@ pub fn seal(contents: &Contents, key: &SealKey) -> Result<Vec<u8>, SealError> {
 /// `held` is the content version this process is already serving, if any.
 /// Anything older is refused before the decryption runs — see the module
 /// comment for why that check cannot live in the bucket instead.
-pub fn open(bytes: &[u8], key: &SealKey, held: Option<u64>) -> Result<Contents, SealError> {
+///
+/// Returns the plaintext still in its own wiped-on-drop buffer rather than a
+/// parsed structure. See [`Opened`] for why that distinction is the whole
+/// point.
+pub fn open(bytes: &[u8], key: &SealKey, held: Option<u64>) -> Result<Opened, SealError> {
     let header = Header::parse(bytes)?;
     if let Some(held) = held
         && header.content_version < held
@@ -219,27 +224,99 @@ pub fn open(bytes: &[u8], key: &SealKey, held: Option<u64>) -> Result<Contents, 
 
     let mut in_out = Zeroizing::new(bytes[HEADER_LEN..].to_vec());
     let aad: [u8; HEADER_LEN] = Header::write(header.content_version, &header.nonce);
-    let plain = aead(key)?
+    let plain_len = aead(key)?
         .open_in_place(
             Nonce::assume_unique_for_key(header.nonce),
             Aad::from(aad),
             &mut in_out,
         )
-        .map_err(|_| SealError::AuthFailed)?;
+        .map_err(|_| SealError::AuthFailed)?
+        .len();
+    in_out.truncate(plain_len);
 
-    let contents: Contents = serde_json::from_slice(plain).map_err(|_| SealError::MalformedBody)?;
-    if contents.version != header.content_version {
+    let opened = Opened {
+        plaintext: in_out,
+        content_version: header.content_version,
+    };
+    // Parse once here purely to reject a body that disagrees with its own
+    // header before the caller ever sees it. The borrowed view is dropped
+    // immediately; nothing it points at outlives `opened`.
+    let version = opened.view()?.version;
+    if version != header.content_version {
         return Err(SealError::VersionMismatch {
             header: header.content_version,
-            body: contents.version,
+            body: version,
         });
     }
-    Ok(contents)
+    Ok(opened)
 }
 
-/// `LessSafeKey` is the right tool here despite the name: it is "less safe"
-/// only in that the caller supplies the nonce, which we must do because the
-/// nonce travels in the file rather than being derived from a counter.
+/// An authenticated file's plaintext, still in the buffer that wipes itself.
+///
+/// The reason this type exists instead of `open` simply returning [`Contents`]:
+/// `serde_json` deserialising into owned `String`s and `Value`s makes a second
+/// copy of every secret in the file, on the heap, which nothing zeroes when it
+/// is dropped. That copy survives in freed memory, and freed memory is exactly
+/// what ends up in a core dump or a swapped-out page — the two accidents
+/// ADR-0015 D13's RAM half exists to prevent. Re-sealing each secret into an
+/// in-memory barrier while leaving that copy behind would have been decoration.
+///
+/// So the plaintext stays in one `Zeroizing` buffer, [`Self::view`] hands out
+/// borrows into it, and the caller re-seals straight from those borrows. The
+/// only copy of a secret that outlives this buffer is the sealed one.
+pub struct Opened {
+    plaintext: Zeroizing<Vec<u8>>,
+    content_version: u64,
+}
+
+impl Opened {
+    pub fn content_version(&self) -> u64 {
+        self.content_version
+    }
+
+    pub fn view(&self) -> Result<View<'_>, SealError> {
+        serde_json::from_slice(&self.plaintext).map_err(|_| SealError::MalformedBody)
+    }
+}
+
+/// Counts nothing, because it owns nothing worth counting — but a `{:?}` on it
+/// would otherwise print the whole file.
+impl fmt::Debug for Opened {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Opened")
+            .field("content_version", &self.content_version)
+            .field(
+                "plaintext",
+                &format_args!("<{} REDACTED>", self.plaintext.len()),
+            )
+            .finish()
+    }
+}
+
+/// The decrypted body, borrowed rather than owned.
+///
+/// Secret values stay as [`RawValue`] — the exact JSON text as it appears in
+/// the file, pointing into the buffer that wipes itself. Nothing re-serialises
+/// them, which removes a copy *and* removes the chance of a re-render that
+/// differs from what the operator wrote.
+///
+/// `policies` and `tokens` are owned, deliberately: they hold path patterns,
+/// policy names and keyed hashes, none of which is secret material. The token
+/// *key* is borrowed, because it is.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct View<'a> {
+    pub version: u64,
+    #[serde(default, borrow)]
+    pub secrets: BTreeMap<&'a str, &'a RawValue>,
+    #[serde(default)]
+    pub policies: BTreeMap<String, Vec<PolicyRule>>,
+    #[serde(default)]
+    pub tokens: BTreeMap<String, Vec<String>>,
+    #[serde(default, borrow)]
+    pub token_key: Option<&'a str>,
+}
+
 fn aead(key: &SealKey) -> Result<LessSafeKey, SealError> {
     let unbound = UnboundKey::new(&AES_256_GCM, key.expose()).map_err(|_| SealError::AuthFailed)?;
     Ok(LessSafeKey::new(unbound))
@@ -277,7 +354,14 @@ mod tests {
         let sealed = seal(&sample(), &key()).unwrap();
         assert_eq!(&sealed[..MAGIC.len()], &MAGIC);
         assert_eq!(peek_version(&sealed).unwrap(), 7);
-        assert_eq!(open(&sealed, &key(), None).unwrap(), sample());
+        let opened = open(&sealed, &key(), None).unwrap();
+        let view = opened.view().unwrap();
+        assert_eq!(view.version, 7);
+        assert_eq!(
+            view.secrets["app/db"].get(),
+            r#"{"pass":"s3cr3t","user":"admin"}"#
+        );
+        assert_eq!(view.token_key, Some("ab".repeat(32).as_str()));
     }
 
     /// Sealing the same contents twice must not produce the same bytes, or the

@@ -329,20 +329,20 @@ fn e3_policy_deny_overrides_allow() {
 #[test]
 fn e3_deny_is_enforced_by_the_snapshot_not_just_the_matcher() {
     let key = token_key();
-    let snapshot = Snapshot::build(
-        Contents {
-            version: 1,
-            secrets: BTreeMap::from([
-                ("app/db".to_string(), serde_json::json!({"k": SECRET})),
-                ("app/other".to_string(), serde_json::json!({"k": "fine"})),
-            ]),
-            policies: policies(),
-            tokens: BTreeMap::from([(key.hash_hex(TOKEN), vec!["narrowed".to_string()])]),
-            token_key: Some(key.expose_as_hex()),
-        },
-        None,
-    )
-    .unwrap();
+    let contents = Contents {
+        version: 1,
+        secrets: BTreeMap::from([
+            ("app/db".to_string(), serde_json::json!({"k": SECRET})),
+            ("app/other".to_string(), serde_json::json!({"k": "fine"})),
+        ]),
+        policies: policies(),
+        tokens: BTreeMap::from([(key.hash_hex(TOKEN), vec!["narrowed".to_string()])]),
+        token_key: Some(key.expose_as_hex()),
+    };
+    // The file's journey in miniature: serialise, then parse back through the
+    // borrowed view production uses.
+    let json = serde_json::to_string(&contents).unwrap();
+    let snapshot = Snapshot::build(serde_json::from_str(&json).unwrap(), None).unwrap();
 
     assert!(snapshot.enforces());
     assert!(snapshot.permits(Some(TOKEN), "secret/data/app/other", Capability::Read));

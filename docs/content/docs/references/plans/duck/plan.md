@@ -232,6 +232,64 @@ Test kiểm được: quét toàn bộ byte của `Snapshot` đang sống, khẳ
 
 Chạy lại `make bench-laptop` và so với số nền của M3. Mức tụt là con số phải báo cáo, không phải con số để giấu.
 
+**Đã thi hành. Một chỗ sửa đi ngược lên M1, và nó là chỗ quan trọng nhất của mốc này:**
+
+Kế hoạch nói "xoá sạch bản chữ trần của cả file". M1 đã làm đúng phần đó — bộ đệm giải mã là `Zeroizing<Vec<u8>>`. Nhưng ngay sau đó `serde_json::from_slice` **dựng một bản sao thứ hai của mọi secret** thành `String` và `Value` sở hữu, trên heap, và không ai xoá chúng khi drop. Bản sao đó sống sót trong vùng nhớ đã free — tức là đúng thứ chui vào core dump và vào swap, hai tai nạn mà nửa bảo vệ RAM sinh ra để chặn. Dựng barrier mà để nguyên bản sao đó thì barrier chỉ là đồ trang trí.
+
+Nên `open()` không trả `Contents` sở hữu nữa. Nó trả `Opened` — plaintext còn nằm trong chính bộ đệm tự xoá — và `Opened::view()` cho mượn vào đó: `secrets: BTreeMap<&str, &RawValue>`, `token_key: Option<&str>`. Snapshot seal thẳng từ những lát mượn ấy. Không có bước render lại, không có bản sao sở hữu nào của chữ trần được tạo ra bao giờ. `policies` và `tokens` vẫn sở hữu — chúng là path pattern, tên policy và hash có khoá, không phải secret.
+
+Phần còn lại đúng kế hoạch: khoá ngẫu nhiên **theo từng snapshot** (không phải theo tiến trình — file mới là khoá mới, và khoá cũ bị zeroize cùng snapshot cũ), nonce đếm tăng (khoá tươi nên bộ đếm là đủ và không cần gọi RNG mỗi secret), bộ đệm giải mã `thread_local` không chia sẻ không khoá, `mlock` trang chứa `LessSafeKey` với `munlock` lúc drop — thiếu cái `munlock` thì mỗi lần đổi file lại bỏ lại một trang bị khoá cho tới khi `RLIMIT_MEMLOCK` từ chối, và cái hỏng sẽ là khoá barrier âm thầm không còn được ghim nữa.
+
+**Số đo.** Laptop 8 nhân, 4 worker, wrk2 chạy cùng máy.
+
+Lần đo đầu cho ra kết quả vô lý: M5 **nhanh hơn** M3 ở điểm bão hoà (118–120k so với 107k). Thêm một phép AES-GCM mỗi request mà nhanh lên thì không phải kết quả, đó là lỗi phương pháp — M5 được đo lúc máy còn nguội, M3 đo sau đó khi máy đã nóng. Cách chữa là **chạy xen kẽ hai binary trong cùng một vòng**, và con số đổi hẳn:
+
+| Bão hoà (mục tiêu 200k) | M3 | M5 |
+| --- | --- | --- |
+| vòng 1 | 98.8k | 100.6k |
+| vòng 2 | 99.1k | 97.5k |
+| vòng 3 | 98.9k | 98.6k |
+| **trung bình** | **98.9k req/s** | **98.9k req/s** |
+
+Bằng nhau. Ở 30k req/s, đo hai vòng xen kẽ, độ trễ có một khác biệt nhỏ nhưng **lặp lại được**:
+
+| 30k req/s | M3 | M5 |
+| --- | --- | --- |
+| p50 | 1.27 ms | 1.28–1.29 ms |
+| p99 | 3.49 ms | 3.69–3.71 ms |
+
+Đuôi p99 tụt khoảng **0.2 ms (~6%)**; p50 gần như không đổi. Đó là mức tụt phải báo cáo.
+
+Chi phí đo riêng bằng `cargo bench --bench barrier_bench`, cùng một response body dựng từ hai phía:
+
+| | thời gian |
+| --- | --- |
+| Dựng body từ chữ trần (hình dạng M3) | ~400 ns |
+| Mở rồi dựng body (hình dạng M5) | ~836 ns |
+| Chỉ phép mở | ~349 ns |
+| Seal cả file 64 secret (chạy 2 lần/phút) | ~36 µs |
+
+**Barrier tốn khoảng 350–430 ns mỗi request.** Ở trần ~99k req/s trên 4 worker, mỗi worker có ~40 µs cho một request, nên đây là dưới 1% ngân sách — chìm dưới nhiễu ở thông lượng, và chỉ ló ra ở đuôi p99. Không cần đến phương án tắt barrier qua config mà phần rủi ro đã dự phòng.
+
+**Quét bộ nhớ tiến trình thật** (`cargo run --example cleartext_scan`), đọc mọi vùng anonymous và heap của chính nó:
+
+| | số bản chữ trần trong RAM |
+| --- | --- |
+| nền, trước khi mở file | baseline |
+| sau khi dựng snapshot | **+0** |
+| trong lúc một response body còn sống | +2 |
+| sau khi body đó bị drop | +2 |
+
+Dòng thứ hai là điều M5 phải chứng minh, và example `assert!` đúng vào nó. Hai dòng cuối là điều D13 đã nói thẳng: thân response mang chữ trần, và `free()` không phải `zeroize` — bản sao ấy còn nằm đó cho tới khi có thứ khác ghi đè.
+
+Bản thân công cụ quét cũng có một bài học: bản đầu tiên cấp phát vài MB mỗi lần quét, và chính những lần đọc đó rơi trúng các block vừa được free mà nó sắp nhìn vào — nên nó báo "sạch" với mọi đầu vào. Bản hiện tại cấp phát hết mọi bộ đệm trước phép đo đầu tiên và sau đó không cấp phát nữa.
+
+Và một câu tôi đã viết sai rồi phải rút lại, ghi ở đây vì nó là loại sai dễ lặp: phép quét bộ nhớ **từ ngoài vào** bị từ chối, và tôi quy cho `prctl(PR_SET_DUMPABLE, 0)`. Kiểm lại bằng hai tiến trình chỉ khác nhau đúng lời gọi đó thì **quyền sở hữu `/proc/<pid>` giống hệt nhau** — kernel hiện tại không đổi owner nữa. Thứ thật sự chặn là Yama `ptrace_scope = 1` của máy này: chỉ tiến trình cha mới được attach. Một `/proc/<pid>/mem` bị từ chối **không** phải bằng chứng rằng `PR_SET_DUMPABLE` đã có tác dụng, và đó cũng là lý do example phải quét từ *bên trong* tiến trình.
+
+Cái kiểm được chắc chắn là `RLIMIT_CORE`: `/proc/<pid>/limits` của server đang chạy ghi `Max core file size 0`.
+
+**Nói rõ cái barrier này không làm được**, ngoài điều ADR đã nói về root: **thân response mang secret dưới dạng chữ trần** từ lúc được dựng cho tới khi socket lấy đi. Đó là bản chất của việc phục vụ một secret, và D13 nói đúng câu đó — "tại mọi thời điểm chỉ có vài secret đang được gửi đi là ở dạng chữ trần".
+
 ### M6 — Access log và error log
 
 **Xoá `components/kallisto_telemetry/src/audit_log.rs`.** D15 cấm dùng chữ "audit" ở tên biến, tên file, config key và tài liệu; file rỗng mang cái tên đó là cái bẫy đầu tiên phải dọn.

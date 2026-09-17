@@ -75,8 +75,8 @@ fn an_older_file_is_refused_even_though_it_is_genuine() {
     let old = seal(&contents(5), &key(1)).unwrap();
 
     // It is perfectly valid on its own terms.
-    assert_eq!(open(&old, &key(1), None).unwrap().version, 5);
-    assert_eq!(open(&old, &key(1), Some(5)).unwrap().version, 5);
+    assert_eq!(open(&old, &key(1), None).unwrap().content_version(), 5);
+    assert_eq!(open(&old, &key(1), Some(5)).unwrap().content_version(), 5);
 
     let err = open(&old, &key(1), Some(7)).unwrap_err();
     assert!(
@@ -183,5 +183,5 @@ fn no_error_variant_carries_secret_material() {
 fn header_and_body_versions_are_cross_checked() {
     let sealed = seal(&contents(4), &key(1)).unwrap();
     let opened = open(&sealed, &key(1), None).unwrap();
-    assert_eq!(opened.version, peek_version(&sealed).unwrap());
+    assert_eq!(opened.content_version(), peek_version(&sealed).unwrap());
 }

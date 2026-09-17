@@ -506,6 +506,7 @@ name = "core_crypto"
 version = "1.0.0"
 dependencies = [
  "aws-lc-rs",
+ "libc",
  "secrecy",
  "serde",
  "serde_json",
@@ -1728,6 +1729,7 @@ dependencies = [
  "tower",
  "url",
  "walkdir",
+ "zeroize",
 ]
 
 [[package]]

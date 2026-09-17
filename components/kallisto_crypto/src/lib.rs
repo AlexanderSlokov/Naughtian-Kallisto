@@ -6,9 +6,13 @@
 //! owns that boundary and nothing else: it knows the file format, the key, and
 //! the freshness rule, and it knows nothing about HTTP, buckets, or policy.
 
+pub mod barrier;
+pub mod hardening;
 pub mod hex;
 pub mod key;
 pub mod sealed_file;
 
+pub use barrier::{Barrier, Sealed};
+pub use hardening::{Hardening, harden_process};
 pub use key::{KEY_LEN, KeyError, SealKey};
-pub use sealed_file::{Contents, PolicyRule, SealError, open, peek_version, seal};
+pub use sealed_file::{Contents, Opened, PolicyRule, SealError, View, open, peek_version, seal};

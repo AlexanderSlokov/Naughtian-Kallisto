@@ -267,10 +267,19 @@ async fn data(
         return absent();
     }
 
-    match snapshot.secret(path) {
-        Some(value) => json(
-            StatusCode::OK,
-            responses::kv_data(value, snapshot.version, snapshot.loaded_at_rfc3339()),
+    // The response body is built *inside* the barrier's callback, so the
+    // cleartext exists in this worker's buffer for exactly as long as it takes
+    // to copy it into the body and no longer (ADR-0015 D13).
+    match snapshot.with_secret(path, |value| {
+        responses::kv_data(value, snapshot.version, snapshot.loaded_at_rfc3339())
+    }) {
+        Some(Ok(body)) => json(StatusCode::OK, body),
+        // The barrier could not open ciphertext it produced itself. That is
+        // memory corruption, not anything the request did, and it must not read
+        // as "no such secret".
+        Some(Err(_)) => json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            responses::errors("internal error"),
         ),
         None => absent(),
     }
@@ -327,7 +336,9 @@ async fn metadata(
         return denied();
     }
 
-    if snapshot.secret(path).is_none() {
+    // Metadata carries no secret value, so this answers without opening
+    // anything.
+    if !snapshot.has_secret(path) {
         return absent();
     }
     json(
@@ -438,12 +449,15 @@ mod tests {
 
     fn loaded() -> Router {
         app_with(Some(
-            Snapshot::build(contents(12), Some("\"etag\"".into())).unwrap(),
+            crate::resolver::snapshot::from_contents(&contents(12), Some("\"etag\"".into()))
+                .unwrap(),
         ))
     }
 
     fn guarded() -> Router {
-        app_with(Some(Snapshot::build(guarded_contents(), None).unwrap()))
+        app_with(Some(
+            crate::resolver::snapshot::from_contents(&guarded_contents(), None).unwrap(),
+        ))
     }
 
     async fn send(app: Router, method: &str, uri: &str) -> (StatusCode, serde_json::Value) {
@@ -483,6 +497,20 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["data"]["data"]["password"], "hunter2");
         assert_eq!(body["data"]["metadata"]["version"], 12);
+    }
+
+    /// ADR-0015 D13: after the body has been built, the worker's decryption
+    /// buffer holds nothing. The response itself carries the secret in the
+    /// clear — that is what a response *is* — but nothing else does.
+    #[tokio::test]
+    async fn serving_a_secret_leaves_no_cleartext_behind_it() {
+        let (status, body) = send(loaded(), "GET", "/v1/secret/data/app/db").await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["data"]["password"], "hunter2");
+        assert!(
+            core_crypto::barrier::scratch_is_wiped(),
+            "the worker's buffer still holds the secret after the response"
+        );
     }
 
     #[tokio::test]
@@ -598,7 +626,7 @@ mod tests {
     #[tokio::test]
     async fn over_the_limit_is_a_429_with_a_retry_after() {
         let slot = Arc::new(SnapshotSlot::empty());
-        slot.store(Snapshot::build(contents(1), None).unwrap());
+        slot.store(crate::resolver::snapshot::from_contents(&contents(1), None).unwrap());
         let app = router(Resolver {
             slot,
             mount: "secret".into(),
@@ -724,7 +752,7 @@ mod tests {
     #[tokio::test]
     async fn refused_requests_are_rate_limited_too() {
         let slot = Arc::new(SnapshotSlot::empty());
-        slot.store(Snapshot::build(guarded_contents(), None).unwrap());
+        slot.store(crate::resolver::snapshot::from_contents(&guarded_contents(), None).unwrap());
         let app = router(Resolver {
             slot,
             mount: "secret".into(),
