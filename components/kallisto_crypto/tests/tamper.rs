@@ -163,7 +163,7 @@ fn no_error_variant_carries_secret_material() {
         &key(1),
     )
     .unwrap();
-    assert!(open(&junk, &key(1), None).is_ok());
+    open(&junk, &key(1), None).unwrap();
 
     for err in &errs {
         let rendered = format!("{err} / {err:?}");

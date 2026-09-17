@@ -207,7 +207,7 @@ pub fn open(bytes: &[u8], key: &SealKey, held: Option<u64>) -> Result<Contents, 
         .open_in_place(
             Nonce::assume_unique_for_key(header.nonce),
             Aad::from(aad),
-            &mut *in_out,
+            &mut in_out,
         )
         .map_err(|_| SealError::AuthFailed)?;
 

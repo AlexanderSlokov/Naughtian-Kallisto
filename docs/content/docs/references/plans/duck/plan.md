@@ -1,6 +1,6 @@
 # Plan "duck" — Thi hành ADR-0015
 
-Duyệt ngày 2026-09-17. Bốn quyết định QĐ-1..QĐ-4 được chốt trong lúc lập kế hoạch; QĐ-3 và QĐ-4 sửa đổi ADR-0015 và được ghi lại thành ADR-0016.
+Duyệt ngày 2026-09-17. QĐ-1..QĐ-4 chốt lúc lập kế hoạch, QĐ-5 chốt trong lúc thi hành M2. QĐ-3 và QĐ-4 sửa đổi ADR-0015 và được ghi lại thành ADR-0016.
 
 ## Bối cảnh
 
@@ -16,9 +16,9 @@ Code hiện tại chưa đi theo hướng đó. Đo đạc thực tế:
 
 Ngân sách ADR đặt ra: runtime ~1.500–2.000 dòng, phần test ít nhất tương đương. Nghĩa là công việc này **xoá nhiều hơn viết**, nhưng phần viết nằm gần như hoàn toàn ở chỗ mới.
 
-## Bốn quyết định chốt trong lúc lập kế hoạch
+## Năm quyết định chốt trong lúc lập kế hoạch
 
-QĐ-1 và QĐ-2 làm rõ ADR. **QĐ-3 và QĐ-4 sửa đổi ADR** — chúng đảo lại D9.1 và một nửa D10, nên phải được ghi lại ở chỗ người đọc ADR-0015 nhìn thấy (xem M0).
+QĐ-1, QĐ-2 và QĐ-5 làm rõ ADR. **QĐ-3 và QĐ-4 sửa đổi ADR** — chúng đảo lại D9.1 và một nửa D10, nên phải được ghi lại ở chỗ người đọc ADR-0015 nhìn thấy (xem M0).
 
 ### QĐ-1: AES-256-GCM qua `aws-lc-rs`, không phải ChaCha20-Poly1305 thuần Rust
 
@@ -32,7 +32,7 @@ D13 viết "ví dụ ChaCha20-Poly1305". Chọn AES-256-GCM thay thế, vì:
 
 Giá phải trả: aws-lc-rs biên dịch C/asm nên cần `cmake` + `clang` lúc build. Vẫn nhẹ hơn RocksDB rất nhiều và đã được trả sẵn bởi yêu cầu TLS.
 
-`deny.toml` nới đúng hai dòng: `{ name = "rustls" }` và `{ name = "ring" }`, kèm comment ghi rõ lý do và rằng phần còn lại của danh sách TiKV vẫn giữ nguyên.
+`deny.toml` nới đúng hai dòng: `{ name = "rustls" }` và `{ name = "ring" }`, kèm comment ghi rõ lý do và rằng phần còn lại của danh sách TiKV vẫn giữ nguyên. Kiểm chứng ngày 2026-09-17, sau khi M1 và M2 đã dựng xong: `cargo deny check` cho `bans ok` — rustls, reqwest và aws-lc-rs không chạm vào một lệnh cấm nào. Chỉ phải thêm `CDLA-Permissive-2.0` vào allow-list license, vì `webpki-roots` là bundle CA của Mozilla chứ không phải code.
 
 Nonce 96-bit sinh ngẫu nhiên. Với tần suất seal của ta (vài nghìn lần trong cả đời dự án) xác suất trùng nonce là không đáng kể, và mỗi lần xoay data key là một khoá mới.
 
@@ -78,6 +78,16 @@ D10 bỏ hexagonal toàn phần và nói "hai hàm là đủ — không cần po
 Tinh thần: *giữ lại kiến trúc đã chạy được, hàn chính thức vào lõi, bỏ trừu tượng hoá, xem thế nào đã.*
 
 **Điều kiện xét lại:** nếu việc hàn cổng ra làm một thay đổi sau này trở nên khó, ta đã biết đường may nằm ở đâu — nó là ranh giới giữa `vault_api.rs` và `Snapshot`.
+
+### QĐ-5: Tự ký SigV4 thay vì dùng `rusty-s3`
+
+Phát hiện trong lúc thi hành M2: `rusty-s3` kéo theo `hmac`, `sha2`, `digest` và `md-5` của RustCrypto để ký SigV4 — **cả bốn đều nằm trong danh sách cấm của `deny.toml`**, và cả bốn vi phạm đều truy về đúng một crate đó. Nó cũng là crate duy nhất buộc phải thêm license BSD-2-Clause.
+
+Chọn **tự ký**: `src/resolver/sigv4.rs` hiện thực SigV4 presigned URL cho đúng một lệnh `GET`, bằng `aws_lc_rs::hmac` và `aws_lc_rs::digest::SHA256` đã có sẵn trong cây. Khoảng 150 dòng, kiểm bằng bộ test vector AWS công bố (khoá ký `c4afb1cc...` cho us-east-1/iam ngày 2015-08-30).
+
+Lý do phạm vi đủ nhỏ để tự nuôi: không POST, không multipart, không chunked upload, không object lock. Dùng xác thực bằng query string nên chỉ phải ký mỗi header `host`, và `GET` không có thân nên payload hash là hằng `UNSIGNED-PAYLOAD`.
+
+Đổi lại: `deny.toml` giữ nguyên bốn lệnh cấm, bớt một dependency khỏi một công cụ bán bằng tính audit được, và bớt một ngoại lệ license. Ký sai thì bucket trả 403 ngay lập tức — hỏng to tiếng, không hỏng âm thầm.
 
 ## Hình dạng đích
 
@@ -146,7 +156,7 @@ trait SecretSource {
 enum Fetched { NotModified, Body { bytes: Vec<u8>, etag: Option<String> }, Unavailable(SourceError) }
 ```
 
-`BucketSource` dùng conditional GET với `If-None-Match` (D2 bắt buộc), ký request bằng `rusty-s3`, gửi bằng `reqwest` cấu hình `default-features = false, features = ["rustls-tls"]` — tránh AWS SDK chính thức đúng như D2 dặn. `DiskSource` đọc file, dùng cho test và cho bản dự phòng.
+`BucketSource` dùng conditional GET với `If-None-Match` (D2 bắt buộc), ký request bằng `sigv4.rs` của chính dự án (**QĐ-5**), gửi bằng `reqwest` cấu hình `default-features = false, features = ["rustls-tls"]` — tránh AWS SDK chính thức đúng như D2 dặn. `DiskSource` đọc file, dùng cho test và cho bản dự phòng.
 
 `snapshot.rs` — `ArcSwapOption<Snapshot>`. `None` nghĩa là chưa sẵn sàng → mọi request trả 503, tương đương Vault *sealed* (D14). Không bao giờ thoát tiến trình vì bucket chết.
 

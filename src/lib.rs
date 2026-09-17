@@ -1,5 +1,6 @@
 pub mod engine;
 pub mod event;
+pub mod resolver;
 pub mod server;
 pub mod storage;
 

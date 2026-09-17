@@ -82,7 +82,11 @@ ignore = [
 version = 2
 private = { ignore = false }
 # Allow licenses in Category A
-allow = ["Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "AGPL-3.0-or-later", "Unicode-3.0"]
+# CDLA-Permissive-2.0 covers webpki-roots, which is Mozilla's CA root bundle
+# rather than code. It is a permissive *data* licence: no copyleft, no
+# attribution obligation on downstream recipients, so it combines into an
+# AGPL work on the same terms as the rest of this list.
+allow = ["Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "AGPL-3.0-or-later", "Unicode-3.0", "CDLA-Permissive-2.0"]
 
 [sources]
 unknown-git = "deny"

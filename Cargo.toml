@@ -17,7 +17,7 @@ edition = "2024"
 license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
-tokio = { version = "1.x", features = ["rt", "net", "macros", "sync", "time"] }
+tokio = { version = "1.x", features = ["rt", "net", "macros", "sync", "time", "fs"] }
 axum = "0.7"
 parking_lot = "0.12"
 crossbeam-channel = "0.5"
@@ -39,9 +39,6 @@ zeroize = { version = "1.7", features = ["derive"] }
 # default provider for the bucket's HTTPS, so this costs no new dependency and
 # keeps a FIPS-validated module underneath. See the comment in deny.toml.
 aws-lc-rs = "1"
-# Signs S3 GETs without dragging in the official AWS SDK, which ADR-0015 D2
-# rules out on binary size. Brings no HTTP client of its own, which is the point.
-rusty-s3 = "0.5"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 [dependencies]
@@ -64,7 +61,8 @@ core_affinity = { workspace = true }
 siphasher = "1.0.3"
 kallisto_kv_model = { path = "components/kallisto_kv_model" }
 core_crypto = { path = "components/kallisto_crypto" }
-rusty-s3 = { workspace = true }
+aws-lc-rs = { workspace = true }
+url = "2"
 reqwest = { workspace = true }
 kallisto_queue = { path = "components/kallisto_queue" }
 
