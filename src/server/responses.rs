@@ -118,6 +118,11 @@ pub fn health(
     file_version: Option<u64>,
     etag: Option<&str>,
     loaded_at: Option<&str>,
+    // `Some(false)` is the sidecar deployment of ADR-0015 D8, where the file
+    // carries no token table and every read is permitted. That is a legitimate
+    // configuration and a dangerous one to be in by accident, so it is reported
+    // rather than left to be discovered.
+    enforces: Option<bool>,
 ) -> String {
     let mut out = String::with_capacity(512);
     out.push_str(r#"{"initialized":true,"sealed":"#);
@@ -147,6 +152,12 @@ pub fn health(
     out.push_str(r#","kallisto_loaded_at":"#);
     match loaded_at {
         Some(t) => push_json_string(&mut out, t),
+        None => out.push_str("null"),
+    }
+    out.push_str(r#","kallisto_authorization":"#);
+    match enforces {
+        Some(true) => out.push_str(r#""enforced""#),
+        Some(false) => out.push_str(r#""none""#),
         None => out.push_str("null"),
     }
     out.push('}');
@@ -264,15 +275,22 @@ mod tests {
             Some(12),
             Some("\"abc\""),
             Some("2026-09-17T00:00:00Z"),
+            Some(true),
         ));
         assert_eq!(body["sealed"], false);
         assert_eq!(body["kallisto_file_version"], 12);
         assert_eq!(body["kallisto_etag"], "\"abc\"");
         assert_eq!(body["version"], VAULT_COMPAT_VERSION);
+        assert_eq!(body["kallisto_authorization"], "enforced");
 
-        let empty = json(&health(true, 0, None, None, None));
+        let empty = json(&health(true, 0, None, None, None, None));
         assert_eq!(empty["sealed"], true);
         assert!(empty["kallisto_file_version"].is_null());
+
+        // The state an operator has to be able to spot: serving happily, with
+        // no token table at all.
+        let open = json(&health(false, 0, Some(1), None, Some("t"), Some(false)));
+        assert_eq!(open["kallisto_authorization"], "none");
     }
 
     #[test]

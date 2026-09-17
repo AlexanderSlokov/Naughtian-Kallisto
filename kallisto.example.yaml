@@ -27,6 +27,15 @@ spec:
   # The KV-v2 mount your apps already write in their URLs.
   mount: secret
 
+  # Authorization is not configured here. Tokens and policies live *inside* the
+  # sealed file, encrypted with everything else (ADR-0015 D8): write permission
+  # on the bucket and possession of the key are two different things, and a
+  # policy table in the clear would let whoever holds the first grant themselves
+  # the second. A file with no token table serves every read to anyone who can
+  # reach the port — legitimate for a single-app sidecar, and reported as
+  # `"kallisto_authorization": "none"` on /v1/sys/health so it is never a
+  # surprise.
+
   source:
     type: bucket
     endpoint: https://s3.example.com

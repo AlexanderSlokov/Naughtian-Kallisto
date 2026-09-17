@@ -12,6 +12,8 @@ use std::fmt;
 use aws_lc_rs::rand::{SecureRandom, SystemRandom};
 use zeroize::{Zeroize, ZeroizeOnDrop};
 
+use crate::hex;
+
 /// AES-256 takes a 256-bit key.
 pub const KEY_LEN: usize = 32;
 
@@ -38,17 +40,11 @@ impl SealKey {
     /// an environment variable. Never accept a key as a command-line argument —
     /// arguments are visible to every process on the host through `ps`.
     pub fn from_hex(text: &str) -> Result<Self, KeyError> {
-        let text = text.trim();
-        if text.len() != KEY_LEN * 2 {
-            return Err(KeyError::WrongLength { got: text.len() });
-        }
-
         let mut bytes = [0u8; KEY_LEN];
-        for (i, pair) in text.as_bytes().chunks_exact(2).enumerate() {
-            let hi = hex_digit(pair[0]).ok_or(KeyError::NotHex { at: i * 2 })?;
-            let lo = hex_digit(pair[1]).ok_or(KeyError::NotHex { at: i * 2 + 1 })?;
-            bytes[i] = (hi << 4) | lo;
-        }
+        hex::decode_into(text, &mut bytes).map_err(|e| match e {
+            hex::HexError::WrongLength { got, .. } => KeyError::WrongLength { got },
+            hex::HexError::NotHex { at } => KeyError::NotHex { at },
+        })?;
         Ok(Self(bytes))
     }
 
@@ -69,21 +65,7 @@ impl SealKey {
     /// Renders the key for an operator to store. The name is deliberately
     /// blunt: every call site should read as a decision to put a key somewhere.
     pub fn expose_as_hex(&self) -> String {
-        let mut out = String::with_capacity(KEY_LEN * 2);
-        for byte in &self.0 {
-            out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-            out.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
-        }
-        out
-    }
-}
-
-fn hex_digit(c: u8) -> Option<u8> {
-    match c {
-        b'0'..=b'9' => Some(c - b'0'),
-        b'a'..=b'f' => Some(c - b'a' + 10),
-        b'A'..=b'F' => Some(c - b'A' + 10),
-        _ => None,
+        hex::encode(&self.0)
     }
 }
 

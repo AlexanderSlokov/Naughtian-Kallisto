@@ -1713,6 +1713,7 @@ dependencies = [
  "kallisto_kv_model",
  "kallisto_queue",
  "parking_lot",
+ "policy_engine",
  "reqwest",
  "rkyv 0.7.46",
  "rocksdb",
@@ -2000,6 +2001,12 @@ dependencies = [
 [[package]]
 name = "policy_engine"
 version = "1.0.0"
+dependencies = [
+ "aws-lc-rs",
+ "core_crypto",
+ "thiserror 1.0.69",
+ "zeroize",
+]
 
 [[package]]
 name = "portable-atomic"

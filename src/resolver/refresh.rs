@@ -14,7 +14,7 @@ use core_crypto::{SealError, SealKey};
 use tokio::sync::Notify;
 
 use super::{
-    snapshot::{Snapshot, SnapshotSlot},
+    snapshot::{Snapshot, SnapshotError, SnapshotSlot},
     source::{Fetched, SecretSource, SourceError},
 };
 
@@ -24,6 +24,10 @@ pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(30);
 pub enum RefreshError {
     #[error("sealed file refused: {0}")]
     Seal(#[from] SealError),
+    /// The file was genuine but describes something unservable — so far, only a
+    /// token table that could never authenticate anyone.
+    #[error("sealed file refused: {0}")]
+    Unservable(#[from] SnapshotError),
 }
 
 /// What one poll did. Returned rather than logged in place so the loop is
@@ -150,7 +154,18 @@ impl Refresher {
         };
 
         let version = contents.version;
-        self.slot.store(Snapshot::build(contents, etag.clone()));
+        let snapshot = match Snapshot::build(contents, etag.clone()) {
+            Ok(snapshot) => snapshot,
+            Err(e) => return Tick::Rejected(e.into()),
+        };
+        for name in snapshot.unknown_policies() {
+            // Not fatal — an undefined policy grants nothing — but the operator
+            // has a typo they cannot see any other way.
+            eprintln!(
+                "kallisto: a token refers to policy {name:?}, which the file does not define"
+            );
+        }
+        self.slot.store(snapshot);
         self.etag = etag;
 
         let cached = if write_cache {
@@ -197,6 +212,7 @@ mod tests {
             )]),
             policies: BTreeMap::new(),
             tokens: BTreeMap::new(),
+            token_key: None,
         }
     }
 

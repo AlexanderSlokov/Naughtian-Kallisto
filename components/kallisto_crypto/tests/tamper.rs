@@ -27,6 +27,7 @@ fn contents(version: u64) -> Contents {
             }],
         )]),
         tokens: BTreeMap::new(),
+        token_key: None,
     }
 }
 
@@ -159,6 +160,7 @@ fn no_error_variant_carries_secret_material() {
             secrets: BTreeMap::new(),
             policies: BTreeMap::new(),
             tokens: BTreeMap::new(),
+            token_key: None,
         },
         &key(1),
     )

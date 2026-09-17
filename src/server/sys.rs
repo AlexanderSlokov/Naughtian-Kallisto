@@ -17,14 +17,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use axum::{
     Router,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::Response,
     routing::{any, get},
 };
 
 use super::{
     responses,
-    vault_api::{ApiState, json},
+    vault_api::{ApiState, denied, json, presented_token, sealed},
 };
 
 pub fn router() -> Router<ApiState> {
@@ -61,8 +61,9 @@ async fn health(State(state): State<ApiState>) -> Response {
             Some(s.version),
             s.etag.as_deref(),
             Some(s.loaded_at_rfc3339()),
+            Some(s.enforces()),
         ),
-        None => responses::health(true, now_secs(), None, None, None),
+        None => responses::health(true, now_secs(), None, None, None, None),
     };
     json(status, body)
 }
@@ -83,18 +84,27 @@ async fn ui_mounts(State(state): State<ApiState>) -> Response {
 }
 
 /// `lookup-self` and `renew-self` answer the same thing, because nothing here
-/// expires: the token is a key into a table in the sealed file, and the file
-/// is the only thing that changes.
+/// expires: the token is a key into a table in the sealed file, and the file is
+/// the only thing that changes. `renew-self` therefore renews nothing, and says
+/// so by reporting a zero TTL, which is what a non-renewable token looks like
+/// to a client that knows how to read the answer.
 ///
-/// Until M4 lands there is no token table consulted here, so this reports the
-/// `default` policy for anyone who asks. That is not an authorisation
-/// decision — no read path consults this answer — but it does mean the
-/// endpoint currently tells a client less than it will.
-async fn token_self() -> Response {
-    json(
-        StatusCode::OK,
-        responses::token_lookup(&["default".to_string()]),
-    )
+/// A file with no token table reports `root`: that is Vault's word for a token
+/// with no restrictions, and with no table there are none.
+async fn token_self(State(state): State<ApiState>, headers: HeaderMap) -> Response {
+    let Some(snapshot) = state.snapshot() else {
+        return sealed();
+    };
+    if !snapshot.enforces() {
+        return json(
+            StatusCode::OK,
+            responses::token_lookup(&["root".to_string()]),
+        );
+    }
+    match snapshot.grant(presented_token(&headers)) {
+        Some(grant) => json(StatusCode::OK, responses::token_lookup(grant.policies)),
+        None => denied(),
+    }
 }
 
 #[cfg(test)]
@@ -102,7 +112,8 @@ mod tests {
     use std::{collections::BTreeMap, sync::Arc};
 
     use axum::{body::Body, http::Request};
-    use core_crypto::Contents;
+    use core_crypto::{Contents, PolicyRule};
+    use policy_engine::TokenKey;
     use tower::ServiceExt;
 
     use super::*;
@@ -112,18 +123,45 @@ mod tests {
         server::vault_api::{Resolver, router as api_router},
     };
 
+    const TOKEN: &str = "s.apptoken";
+
+    fn token_key() -> TokenKey {
+        TokenKey::from_bytes([5u8; 32])
+    }
+
+    fn contents(guarded: bool) -> Contents {
+        let key = token_key();
+        Contents {
+            version: 42,
+            secrets: BTreeMap::from([("a".to_string(), serde_json::json!({"k": "v"}))]),
+            policies: if guarded {
+                BTreeMap::from([(
+                    "reader".to_string(),
+                    vec![PolicyRule {
+                        path: "secret/data/*".to_string(),
+                        capabilities: vec!["read".to_string()],
+                    }],
+                )])
+            } else {
+                BTreeMap::new()
+            },
+            tokens: if guarded {
+                BTreeMap::from([(key.hash_hex(TOKEN), vec!["reader".to_string()])])
+            } else {
+                BTreeMap::new()
+            },
+            token_key: guarded.then(|| key.expose_as_hex()),
+        }
+    }
+
     fn app(loaded: bool) -> Router {
+        app_of(loaded, false)
+    }
+
+    fn app_of(loaded: bool, guarded: bool) -> Router {
         let slot = Arc::new(SnapshotSlot::empty());
         if loaded {
-            slot.store(Snapshot::build(
-                Contents {
-                    version: 42,
-                    secrets: BTreeMap::from([("a".to_string(), serde_json::json!({"k": "v"}))]),
-                    policies: BTreeMap::new(),
-                    tokens: BTreeMap::new(),
-                },
-                Some("\"tag-42\"".to_string()),
-            ));
+            slot.store(Snapshot::build(contents(guarded), Some("\"tag-42\"".to_string())).unwrap());
         }
         api_router(Resolver {
             slot,
@@ -136,8 +174,16 @@ mod tests {
     }
 
     async fn get_json(loaded: bool, uri: &str) -> (StatusCode, serde_json::Value) {
-        let response = app(loaded)
-            .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        send(app(loaded), uri, None).await
+    }
+
+    async fn send(app: Router, uri: &str, token: Option<&str>) -> (StatusCode, serde_json::Value) {
+        let mut request = Request::builder().uri(uri);
+        if let Some(token) = token {
+            request = request.header("x-vault-token", token);
+        }
+        let response = app
+            .oneshot(request.body(Body::empty()).unwrap())
             .await
             .unwrap();
         let status = response.status();
@@ -157,6 +203,56 @@ mod tests {
         assert_eq!(body["kallisto_file_version"], 42);
         assert_eq!(body["kallisto_etag"], "\"tag-42\"");
         assert!(body["kallisto_loaded_at"].is_string());
+    }
+
+    /// A file with no token table serves everything to everyone, which is a
+    /// legitimate deployment and a bad surprise. `sys/health` says which one
+    /// this machine is in.
+    #[tokio::test]
+    async fn health_says_whether_authorization_is_being_enforced() {
+        let (_, open) = send(app_of(true, false), "/v1/sys/health", None).await;
+        assert_eq!(open["kallisto_authorization"], "none");
+
+        let (_, guarded) = send(app_of(true, true), "/v1/sys/health", None).await;
+        assert_eq!(guarded["kallisto_authorization"], "enforced");
+    }
+
+    /// Several SDKs call this before anything else and give up if it fails.
+    #[tokio::test]
+    async fn lookup_self_reports_the_policies_the_token_actually_carries() {
+        let (status, body) = send(
+            app_of(true, true),
+            "/v1/auth/token/lookup-self",
+            Some(TOKEN),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let policies: Vec<String> =
+            serde_json::from_value(body["data"]["policies"].clone()).unwrap();
+        assert_eq!(policies, vec!["reader".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn lookup_self_refuses_a_token_the_file_does_not_carry() {
+        let (status, _) = send(
+            app_of(true, true),
+            "/v1/auth/token/lookup-self",
+            Some("s.nope"),
+        )
+        .await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+
+        let (missing, _) = send(app_of(true, true), "/v1/auth/token/lookup-self", None).await;
+        assert_eq!(missing, StatusCode::FORBIDDEN);
+    }
+
+    /// With no table there are no restrictions, and `root` is Vault's word for
+    /// that.
+    #[tokio::test]
+    async fn lookup_self_reports_root_when_no_table_exists() {
+        let (status, body) = send(app_of(true, false), "/v1/auth/token/lookup-self", None).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["data"]["policies"][0], "root");
     }
 
     #[tokio::test]

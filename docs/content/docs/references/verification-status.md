@@ -159,24 +159,43 @@ in-flight key and nothing else.
 
 Covered by `make verify-security` (blocking).
 
-| ID                                                       | Status       | Check                                       | Fails if you                                                             |
-|----------------------------------------------------------|--------------|---------------------------------------------|--------------------------------------------------------------------------|
-| E1 no plaintext secrets in `Debug`/`Display`/errors/logs | Proven       | six tests in `tests/security_invariants.rs` | replace `SecretPayload`'s hand-written `Debug` with `#[derive(Debug)]`   |
-| E2 token comparison is constant-time                     | **Unproven** | —                                           | blocked: no token authentication exists in this workspace                |
-| E3 explicit `deny` overrides `allow`                     | **Unproven** | —                                           | blocked: `components/kallisto_policy` is a 3-line stub with no evaluator |
+| ID                                                       | Status | Check                                                                  | Fails if you                                                                          |
+|----------------------------------------------------------|--------|------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
+| E1 no plaintext secrets in `Debug`/`Display`/errors/logs | Proven | six tests in `tests/security_invariants.rs`                              | replace `SecretPayload`'s hand-written `Debug` with `#[derive(Debug)]`                |
+| E2 token comparison is constant-time                     | Proven | three `e2_*` tests, against `policy_engine::TokenTable::lookup`          | compare a prefix, suffix or truncation of the hash; store a bare digest of the token   |
+| E3 explicit `deny` overrides `allow`                     | Proven | two `e3_*` tests, against `RuleSet::allows` and `Snapshot::permits`      | let a grant win over a `deny` that matches the same path, in either written order      |
 
 E1 covers `{:?}`, `{:#?}`, nesting inside a derived `Debug`, every `EngineError`
 variant's `Display`, and the absence of any payload-carrying field on
 `KeyMetadata`.
 
-E2 and E3 have **no tests at all**, deliberately. ADR-0013 marks Group E as
-blocking, so the temptation is to write something that passes — and that is what
-was there before: `e2_token_comparison_uses_ct_eq` grepped the source tree, found
-nothing, printed a warning and passed; `e3_policy_deny_overrides_allow` had an
-empty body with a `TODO`. A test that cannot fail reports a gate that does not
-exist, and inflates the mutation score with a target nothing can kill. Both are
-now absent and recorded here. They become writable the moment token auth and a
-policy evaluator land, and they must land together with them.
+E2 and E3 were blocked until the features they constrain existed. They landed
+with `components/kallisto_policy` in M4 of the duck plan, and the tests landed
+with them, as ADR-0013 required.
+
+**What E2 proves, and what it does not.** `e2_token_comparison_does_not_match_on_a_partial_hash`
+builds a table containing nothing but near misses — the real token's hash with a
+single bit flipped, at five positions across its width — and asserts the real
+token matches none of them. That kills a prefix compare, a suffix compare and a
+truncated compare. `e2_the_stored_form_of_a_token_is_keyed` kills a bare
+SHA-256 of the token, which would make the file's plaintext a dictionary attack
+away from every token in the fleet.
+
+The remaining half of the property — that `lookup` visits *every* entry rather
+than returning at the first hit — is **not** mechanically tested, and saying so
+here is the point. No assertion over return values can distinguish an early
+return from a full scan, and a timing assertion over a handful of table entries
+would measure CI noise. It is held by the implementation, which accumulates into
+a local and returns after the loop, and by review. If that loop ever grows a
+`break` or a `return` inside it, no test in this repository will notice.
+
+An earlier version of the E2 test asserted that three tokens at three positions
+in the table each resolved correctly. A deliberately broken implementation
+comparing only the first four bytes of the hash **passed it**. That is recorded
+because it is the same failure ADR-0013 was written about: asserting that the
+right answers come back does not constrain how the answer is reached. Every
+`e2_*` and `e3_*` test here was checked by breaking the implementation on
+purpose and confirming it failed.
 
 ## Tiers 2 and 3
 

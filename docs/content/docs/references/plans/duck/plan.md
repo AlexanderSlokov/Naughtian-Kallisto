@@ -16,9 +16,11 @@ Code hiện tại chưa đi theo hướng đó. Đo đạc thực tế:
 
 Ngân sách ADR đặt ra: runtime ~1.500–2.000 dòng, phần test ít nhất tương đương. Nghĩa là công việc này **xoá nhiều hơn viết**, nhưng phần viết nằm gần như hoàn toàn ở chỗ mới.
 
-## Năm quyết định chốt trong lúc lập kế hoạch
+## Sáu quyết định
 
-QĐ-1, QĐ-2 và QĐ-5 làm rõ ADR. **QĐ-3 và QĐ-4 sửa đổi ADR** — chúng đảo lại D9.1 và một nửa D10, nên phải được ghi lại ở chỗ người đọc ADR-0015 nhìn thấy (xem M0).
+QĐ-1..QĐ-4 chốt lúc lập kế hoạch; QĐ-5 chốt trong lúc thi hành M2; QĐ-6 chốt trong lúc thi hành M4.
+
+QĐ-1, QĐ-2, QĐ-5 và QĐ-6 làm rõ ADR. **QĐ-3 và QĐ-4 sửa đổi ADR** — chúng đảo lại D9.1 và một nửa D10, nên phải được ghi lại ở chỗ người đọc ADR-0015 nhìn thấy (xem M0).
 
 ### QĐ-1: AES-256-GCM qua `aws-lc-rs`, không phải ChaCha20-Poly1305 thuần Rust
 
@@ -88,6 +90,17 @@ Chọn **tự ký**: `src/resolver/sigv4.rs` hiện thực SigV4 presigned URL c
 Lý do phạm vi đủ nhỏ để tự nuôi: không POST, không multipart, không chunked upload, không object lock. Dùng xác thực bằng query string nên chỉ phải ký mỗi header `host`, và `GET` không có thân nên payload hash là hằng `UNSIGNED-PAYLOAD`.
 
 Đổi lại: `deny.toml` giữ nguyên bốn lệnh cấm, bớt một dependency khỏi một công cụ bán bằng tính audit được, và bớt một ngoại lệ license. Ký sai thì bucket trả 403 ngay lập tức — hỏng to tiếng, không hỏng âm thầm.
+
+### QĐ-6: Khoá băm token nằm **trong** file, không dẫn xuất từ seal key
+
+D8 nói file chỉ lưu `hash(token)`, nhưng không nói khoá của phép băm đó ở đâu. Hai lựa chọn, và lựa chọn hiển nhiên là lựa chọn sai:
+
+* **Dẫn xuất từ seal key.** Không thêm gì vào định dạng. Nhưng xoay seal key sẽ **giết sạch mọi token trong fleet**: operator cầm trong tay các *hash*, không cầm token, nên không có gì để tính lại. Một thao tác vận hành bình thường trở thành sự cố toàn hệ thống.
+* **Nằm trong file** (`token_key`, hex, `#[serde(default)]`). Xoay seal key chỉ là seal lại đúng bảng đó; mọi token tiếp tục chạy. Khoá được bảo vệ bởi chính lớp mã hoá của file, và được zeroize khi drop.
+
+Chọn cái thứ hai. Kèm một ràng buộc toàn vẹn: file có `tokens` mà **không** có `token_key` thì không token nào có thể xác thực được — đó là file hỏng, và resolver **từ chối** nó thay vì phục vụ với phân quyền tắt âm thầm. Không có cả hai là trường hợp sidecar của D8, hợp lệ, và `sys/health` báo `kallisto_authorization: "none"` để nó không phải là thứ phải tự phát hiện.
+
+Băm là HMAC-SHA256 có nhãn phân tách miền (`kallisto/token/v1\0`), không phải digest trần: bản plaintext của file đi qua editor, git và một job CI trước khi được seal, nên hash trần của một token ngắn chỉ cách từ điển một bước.
 
 ## Hình dạng đích
 
@@ -198,7 +211,14 @@ So sánh HMAC bằng hàm constant-time. Việc này **mở khoá E2 của ADR-0
 
 Không có token, hoặc token lạ → 403 `permission denied` (Vault trả 403 chứ không phải 401).
 
-Bảng token dựng sẵn thành `HashMap` lúc tráo Snapshot, để đường nóng chỉ còn một phép HMAC và một lần tra bảng.
+Bảng token dựng sẵn lúc tráo Snapshot, để đường nóng chỉ còn một phép HMAC và một lần tra bảng.
+
+**Đã thi hành, có hai chỗ lệch khỏi kế hoạch — cả hai đã ghi vào bảng D7 của ADR-0015:**
+
+* Bảng token **không** là `HashMap` mà là một `Vec` quét tuyến tính bằng `constant_time::verify_slices_are_equal`. `HashMap::get` thoát sớm và so sánh chuỗi theo kiểu ngắt giữa chừng, tức là phép so sánh mà E2 nói tới sẽ không tồn tại — nó chỉ còn là một lời chú thích. Với vài chục token (đúng cỡ D11 đặt ra) phép quét rẻ hơn chính phép HMAC đứng trước nó; vài nghìn token thì cần hình dạng khác, và cũng có nghĩa Kallisto đang bị dùng sai.
+* **`deny` thắng tuyệt đối** thay vì thua một đường dẫn cụ thể hơn như Vault thật. Khác biệt chỉ xuất hiện với policy tự mâu thuẫn, và Kallisto lệch về phía **từ chối**.
+
+E2 và E3 của ADR-0013 chuyển từ *blocked* sang **proven**, và mỗi test đều đã được kiểm bằng cách phá hỏng implementation cho nó fail. Một chi tiết đáng ghi: bản E2 đầu tiên — ba token ở ba vị trí, khẳng định mỗi cái resolve đúng — **sống sót** một implementation chỉ so 4 byte đầu của hash. Bản hiện tại dựng một bảng chỉ gồm *near miss* (hash thật lật một bit ở năm vị trí) và khẳng định không cái nào khớp. Giới hạn còn lại — rằng vòng lặp duyệt hết mọi entry chứ không return ở lần khớp đầu — **không** kiểm được bằng test, và `verification-status.md` nói thẳng điều đó.
 
 ### M5 — Nửa bảo vệ RAM
 

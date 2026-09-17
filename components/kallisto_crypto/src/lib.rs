@@ -6,6 +6,7 @@
 //! owns that boundary and nothing else: it knows the file format, the key, and
 //! the freshness rule, and it knows nothing about HTTP, buckets, or policy.
 
+pub mod hex;
 pub mod key;
 pub mod sealed_file;
 

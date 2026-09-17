@@ -65,6 +65,7 @@ core_affinity = { workspace = true }
 siphasher = "1.0.3"
 kallisto_kv_model = { path = "components/kallisto_kv_model" }
 core_crypto = { path = "components/kallisto_crypto" }
+policy_engine = { path = "components/kallisto_policy" }
 aws-lc-rs = { workspace = true }
 url = "2"
 reqwest = { workspace = true }

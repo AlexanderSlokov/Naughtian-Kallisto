@@ -91,6 +91,21 @@ pub struct Contents {
     /// Keyed hash of a token to the policy names it carries (ADR-0015 D8).
     #[serde(default)]
     pub tokens: BTreeMap<String, Vec<String>>,
+    /// The key the hashes in `tokens` were computed with, hex-encoded.
+    ///
+    /// It lives *inside* the file rather than being derived from the seal key,
+    /// and that is the whole point: rotating the seal key then re-seals the
+    /// same table and every token keeps working. Derive it from the seal key
+    /// instead and a key rotation silently invalidates every token in the
+    /// fleet — the operator holds the hashes, not the tokens, so there would be
+    /// no way to recompute them.
+    ///
+    /// Absent means no token authentication (ADR-0015 D8's sidecar case, where
+    /// the bucket credential is the boundary). Absent *with* a non-empty
+    /// `tokens` table is a malformed file, and the resolver refuses it rather
+    /// than serving with authorization silently switched off.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_key: Option<String>,
 }
 
 /// Counts, never contents. A `{:?}` on this reaches logs and panic messages.
@@ -104,6 +119,7 @@ impl fmt::Debug for Contents {
             )
             .field("policies", &format_args!("<{} names>", self.policies.len()))
             .field("tokens", &format_args!("<{} entries>", self.tokens.len()))
+            .field("token_key", &"<REDACTED>")
             .finish()
     }
 }
@@ -248,6 +264,7 @@ mod tests {
                 }],
             )]),
             tokens: BTreeMap::from([("deadbeef".to_string(), vec!["payment".to_string()])]),
+            token_key: Some("ab".repeat(32)),
         }
     }
 
