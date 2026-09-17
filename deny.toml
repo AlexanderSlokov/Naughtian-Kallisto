@@ -34,10 +34,25 @@ deny = [
     { name = "ed25519" },
     # Message authentication codes
     { name = "hmac"},
-    # We prefer the system native TLS or OpenSSL.
-    # gcp_v2 enables rustls only to install and require the aws-lc-rs FIPS provider at runtime.
-    { name = "rustls" },
-    { name = "ring" },
+    # `rustls` and `ring` were on this list upstream because TiKV prefers system
+    # native TLS or OpenSSL. Kallisto removed them in ADR-0015/ADR-0016 (plan
+    # "duck", 2026-09-17). Three reasons, in order of weight:
+    #
+    #  1. Kallisto must fetch its sealed secret file over HTTPS from an
+    #     S3-compatible bucket (ADR-0015 D2), so it needs TLS in-process. Linking
+    #     OpenSSL would put a C library back in the way of the static musl binary
+    #     and the few-MB distroless image that ADR-0015 D12 exists to produce.
+    #  2. rustls 0.23 defaults to the aws-lc-rs provider, which wraps AWS-LC — the
+    #     same module that carries the FIPS 140-3 validation. So this is not the
+    #     "unvalidated pure-Rust crypto" the rest of this list guards against; the
+    #     upstream comment two lines above already names aws-lc-rs as the FIPS path.
+    #  3. Because aws-lc-rs is in the tree for TLS regardless, ADR-0015 D13's
+    #     encryption barrier uses `aws_lc_rs::aead::AES_256_GCM` and D15's keyed
+    #     hashing uses `aws_lc_rs::hmac`. That adds no dependency, and it is why
+    #     `aes-gcm`, `hmac`, `sha2` and friends stay banned below — Kallisto does
+    #     not need them.
+    #
+    # Everything else on this list is inherited unchanged and still applies.
     # Ban trait crates from RustCrypto.
     { name = "aead" },
     { name = "cipher" },
