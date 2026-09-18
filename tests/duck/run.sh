@@ -195,7 +195,9 @@ code() { curl -s -o /dev/null -w '%{http_code}' -H "X-Vault-Token: ${2:-}" "http
     && pass "no token is refused" || fail "no token is refused"
 [ "$(code /v1/secret/data/app/db "s.notatoken")" = 403 ] \
     && pass "an unknown token is refused" || fail "an unknown token is refused"
-[ "$(code /v1/secret/data/nope "$APP_TOKEN")" = 404 ] \
+# Inside the granted namespace, so a missing secret really is a 404. A path
+# outside it is 403 whether or not it exists, which is the next assertion.
+[ "$(code /v1/secret/data/app/nothing-here "$APP_TOKEN")" = 404 ] \
     && pass "a permitted but missing path is 404" || fail "a permitted but missing path is 404"
 # A refusal must not be an existence oracle: an unauthorized read of a path that
 # does not exist answers the same as one that does.
@@ -221,20 +223,40 @@ else
     fail "a revoked token stops working" "version=$(served_version)"
 fi
 
-# A forged file: correct shape, one byte flipped. The tag catches it and the
-# previous table stays in place.
-cp "$WORK/secrets.kal" "$WORK/forged.kal"
+# A same-numbered forgery. The version check runs before the tag, so this file
+# is never even opened — "we do not look at it" is the property, and it means
+# there is nothing to report. Asserting a log line here was wrong the first time
+# this suite ran, and the failure was the test's, not the server's.
+cp "$WORK/secrets.kal" "$WORK/forged-same.kal"
+printf '\x01' | dd of="$WORK/forged-same.kal" bs=1 seek=40 conv=notrunc status=none
+reupload forged-same.kal
+sleep 5
+if [ "$(served_version)" = 2 ] && [ "$(code /v1/secret/data/app/db "$APP_TOKEN")" = 200 ]; then
+    pass "a same-numbered forgery cannot displace the table (never opened)"
+else
+    fail "a same-numbered forgery cannot displace the table" "version=$(served_version)"
+fi
+
+# A forgery that *does* raise the counter, so it gets opened and fails the tag.
+# This is the one an operator must hear about.
+write_plain 3 no
+"$CTL" seal --in "$WORK/plain.json" --out "$WORK/forged.kal" --force >/dev/null
 printf '\x01' | dd of="$WORK/forged.kal" bs=1 seek=40 conv=notrunc status=none
 reupload forged.kal
 sleep 5
 if [ "$(served_version)" = 2 ] && [ "$(code /v1/secret/data/app/db "$APP_TOKEN")" = 200 ]; then
-    pass "a forged file is refused and the previous table keeps serving"
+    pass "a forged file at a higher version is refused, and serving continues"
 else
-    fail "a forged file is refused" "version=$(served_version)"
+    fail "a forged file at a higher version is refused" "version=$(served_version)"
 fi
+# The refresh loop discarded its own result until this suite caught it, so every
+# rejection after startup was invisible. This is the assertion that noticed.
 grep -qi "refused the file" "$WORK/error.log" \
-    && pass "and the refusal is on the error log" \
-    || fail "and the refusal is on the error log"
+    && pass "and the refusal reaches the error log" \
+    || fail "and the refusal reaches the error log" "$(tail -3 "$WORK/error.log")"
+[ "$(curl -s "http://127.0.0.1:$PORT/v1/sys/metrics" | grep '^kallisto_refresh_failures_total ' | awk '{print $2}')" -gt 0 ] \
+    && pass "and increments kallisto_refresh_failures_total" \
+    || fail "and increments kallisto_refresh_failures_total"
 
 # A genuine, correctly sealed, *older* file put back by someone who can write to
 # the bucket. Encryption cannot see anything wrong with it; only the held

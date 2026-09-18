@@ -121,7 +121,17 @@ impl Refresher {
         }
     }
 
-    pub async fn run(mut self) {
+    /// Polls until the process ends, handing every outcome to `observe`.
+    ///
+    /// `observe` is not optional and the result is not discarded, which it was
+    /// until the duck suite noticed. The startup polls were reported and the
+    /// loop's were thrown away, so a forged file, a rollback attempt or a dead
+    /// bucket produced **nothing** after the first thirty seconds: no error
+    /// line, no `kallisto_refresh_failures_total`. The resolver went on serving
+    /// the last good table — which is right, ADR-0015 D14 — but silently, which
+    /// is the opposite of what D4 and D14 are for. Somebody putting a forged
+    /// file in the bucket every minute would have been invisible.
+    pub async fn run(mut self, mut observe: impl FnMut(Tick)) {
         let wake = Arc::clone(&self.wake);
         let mut ticker = tokio::time::interval(self.interval);
         loop {
@@ -129,7 +139,7 @@ impl Refresher {
                 _ = ticker.tick() => {}
                 () = wake.notified() => {}
             }
-            let _ = self.poll_once().await;
+            observe(self.poll_once().await);
         }
     }
 
@@ -249,6 +259,69 @@ mod tests {
             Refresher::new(source, key(), Arc::clone(&slot), cache),
             slot,
         )
+    }
+
+    /// The loop must report what it did, not just do it.
+    ///
+    /// This is a regression test for a bug the duck suite found: `run` called
+    /// `let _ = self.poll_once().await`, so only the two startup polls were
+    /// ever reported. Every poll after that — including a forged file, a
+    /// rollback attempt, or a bucket that had stopped answering — produced no
+    /// error line and never incremented `kallisto_refresh_failures_total`. The
+    /// resolver kept serving the last good table, which ADR-0015 D14 requires,
+    /// but it did so silently, which is what D4 and D14 exist to prevent.
+    ///
+    /// Asserting on the *observations* rather than on the served version is the
+    /// point: the served version was correct the whole time, which is exactly
+    /// why no other test noticed.
+    #[tokio::test]
+    async fn the_poll_loop_reports_every_tick_including_the_bad_ones() {
+        let file = scratch("observed.kal");
+        std::fs::write(&file, seal(&contents(5, "first"), &key()).unwrap()).unwrap();
+
+        let (mut r, slot) = refresher(&file, None);
+        assert!(matches!(
+            r.poll_once().await,
+            Tick::Loaded { version: 5, .. }
+        ));
+
+        let seen = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let recorder = Arc::clone(&seen);
+        let wake = r.waker();
+
+        let looping = tokio::spawn(async move {
+            r.every(std::time::Duration::from_millis(20))
+                .run(move |tick| recorder.lock().unwrap().push(tick))
+                .await;
+        });
+
+        // A forged file: authentic shape, one byte flipped.
+        let mut forged = seal(&contents(6, "second"), &key()).unwrap();
+        forged[30] ^= 0x01;
+        std::fs::write(&file, &forged).unwrap();
+        wake.notify_one();
+
+        // Give the loop a few ticks to see it.
+        for _ in 0..50 {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            if seen
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|t| matches!(t, Tick::Rejected(_)))
+            {
+                break;
+            }
+        }
+        looping.abort();
+
+        let observed = seen.lock().unwrap();
+        assert!(
+            observed.iter().any(|t| matches!(t, Tick::Rejected(_))),
+            "the loop swallowed a rejected file: {observed:?}"
+        );
+        // And it kept serving the good one throughout.
+        assert_eq!(slot.version(), Some(5));
     }
 
     #[tokio::test]

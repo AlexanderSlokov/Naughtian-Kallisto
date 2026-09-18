@@ -181,6 +181,21 @@ pub fn seal_status(sealed: bool) -> String {
     out
 }
 
+/// `GET /v1/sys/init`.
+///
+/// Always initialised. There is no unseal ceremony and no key-shard dance to be
+/// part-way through: either a file has loaded or it has not, and `sys/health`
+/// and `sys/seal-status` are where that shows.
+///
+/// This exists because an SDK asks for it before it asks for anything useful —
+/// `hvac`'s `is_initialized()` is a `GET /v1/sys/init` — and a 404 there stops
+/// a client on its first call. It was missing until the duck suite caught it,
+/// which is the entire argument for testing against real SDKs rather than
+/// against our own idea of what they send.
+pub fn init_status() -> String {
+    r#"{"initialized":true}"#.to_string()
+}
+
 /// `GET /v1/sys/mounts`. One mount, KV version 2, because that is all there is.
 pub fn mounts(mount: &str) -> String {
     let mut out = String::with_capacity(320);

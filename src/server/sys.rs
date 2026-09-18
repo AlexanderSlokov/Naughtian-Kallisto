@@ -30,6 +30,7 @@ use super::{
 pub fn router() -> Router<ApiState> {
     Router::new()
         .route("/v1/sys/health", get(health))
+        .route("/v1/sys/init", get(init_status))
         .route("/v1/sys/metrics", get(metrics))
         .route("/v1/sys/seal-status", get(seal_status))
         .route("/v1/sys/mounts", get(mounts))
@@ -107,6 +108,14 @@ async fn metrics(State(state): State<ApiState>) -> Response {
         telemetry::render(&telemetry.workers, &status),
     )
         .into_response()
+}
+
+/// Answers whether the *store* is initialised, which here is always yes. An
+/// SDK calls this before anything else and gives up on a 404; several of them
+/// do it inside their own `is_initialized()` helper, so the failure looks like
+/// "the server is broken" rather than "one route is missing".
+async fn init_status() -> Response {
+    json(StatusCode::OK, responses::init_status())
 }
 
 async fn seal_status(State(state): State<ApiState>) -> Response {
@@ -332,6 +341,7 @@ mod tests {
     async fn the_startup_calls_an_sdk_makes_all_answer() {
         for uri in [
             "/v1/sys/health",
+            "/v1/sys/init",
             "/v1/sys/seal-status",
             "/v1/sys/mounts",
             "/v1/sys/internal/ui/mounts/secret",

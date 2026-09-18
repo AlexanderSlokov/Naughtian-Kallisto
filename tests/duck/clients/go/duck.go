@@ -99,8 +99,10 @@ func main() {
 		return nil
 	})
 
+	// Inside the namespace this token may read. A path outside it answers 403
+	// whether or not it exists — a 404 there would be an existence oracle.
 	check("missing secret is ErrSecretNotFound", func() error {
-		_, err := kv.Get(ctx, "nope/nothing")
+		_, err := kv.Get(ctx, "app/nothing-here")
 		if err == nil {
 			return fmt.Errorf("a missing secret was served")
 		}

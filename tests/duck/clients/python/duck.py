@@ -87,13 +87,34 @@ def read_other_version_is_absent():
 
 
 def missing_secret_is_invalid_path():
+    # Inside the namespace this token is allowed to read. A path *outside* it
+    # answers 403 whether or not it exists, deliberately — a 404 there would be
+    # an existence oracle — so testing with one would assert the wrong thing.
     try:
         client.secrets.kv.v2.read_secret_version(
-            path="nope/nothing", mount_point="secret", raise_on_deleted_version=True
+            path="app/nothing-here", mount_point="secret", raise_on_deleted_version=True
         )
     except hvac.exceptions.InvalidPath:
         return
     raise AssertionError("a missing secret did not raise InvalidPath")
+
+
+def an_unreadable_path_is_403_whether_or_not_it_exists():
+    # The anti-oracle property, from the client's side: `other/thing` exists and
+    # `other/absent` does not, and the token may read neither. They must be
+    # indistinguishable.
+    codes = []
+    for path in ("other/thing", "other/absent"):
+        try:
+            client.secrets.kv.v2.read_secret_version(
+                path=path, mount_point="secret", raise_on_deleted_version=True
+            )
+            codes.append(200)
+        except hvac.exceptions.Forbidden:
+            codes.append(403)
+        except hvac.exceptions.InvalidPath:
+            codes.append(404)
+    assert codes == [403, 403], f"existence leaked through the status code: {codes}"
 
 
 def list_secrets():
@@ -171,6 +192,7 @@ for name, fn in [
     ("read ?version=<current>", read_current_version_explicitly),
     ("read ?version=<other> is 404", read_other_version_is_absent),
     ("missing secret is InvalidPath", missing_secret_is_invalid_path),
+    ("an unreadable path hides whether it exists", an_unreadable_path_is_403_whether_or_not_it_exists),
     ("list", list_secrets),
     ("read metadata", read_metadata),
     ("every write is refused", every_write_is_refused),

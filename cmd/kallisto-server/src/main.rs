@@ -214,7 +214,12 @@ fn start_refresher(
                 // (ADR-0015 D5).
                 report("cache", refresher.warm_from_cache().await, &failures);
                 report("source", refresher.poll_once().await, &failures);
-                refresher.run().await;
+                // Every later poll is reported too. Discarding these is how a
+                // forged file in the bucket becomes invisible after the first
+                // thirty seconds.
+                refresher
+                    .run(|tick| report("source", tick, &failures))
+                    .await;
             });
         })
         .expect("failed to start the refresh thread");

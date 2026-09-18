@@ -19,7 +19,10 @@ require __DIR__ . '/vendor/autoload.php';
 
 use Vault\Client;
 use Vault\AuthenticationStrategies\TokenAuthenticationStrategy;
+use GuzzleHttp\Client as GuzzleClient;
 use Laminas\Diactoros\Uri;
+use Laminas\Diactoros\RequestFactory;
+use Laminas\Diactoros\StreamFactory;
 
 $addr = getenv('VAULT_ADDR');
 $token = getenv('VAULT_TOKEN') ?: null;
@@ -39,8 +42,23 @@ function check(string $name, callable $fn): void {
 
 echo "php / csharpru/vault-php\n";
 
-$client = new Client(new Uri($addr));
+// v4 of this client takes its HTTP stack by injection: a PSR-7 URI, a PSR-18
+// client, and PSR-17 factories. Spelling it out is the point — an application
+// wiring Kallisto in will pass exactly these, and if any of Kallisto's
+// responses are the wrong shape the failure surfaces through this stack rather
+// than through a convenience wrapper that papers over it.
+$client = new Client(
+    new Uri($addr),
+    new GuzzleClient(['http_errors' => false, 'timeout' => 10]),
+    new RequestFactory(),
+    new StreamFactory()
+);
 if ($token !== null && $token !== '') {
+    // The library's own path: the strategy builds the Auth model and
+    // `authenticate()` stores it. Constructing the token model by hand — which
+    // this file did briefly — produces the wrong type and fails on the first
+    // read, which is a good illustration of why this suite uses real clients
+    // idiomatically rather than poking their internals.
     $client->setAuthenticationStrategy(new TokenAuthenticationStrategy($token));
     $client->authenticate();
 }
@@ -64,7 +82,15 @@ check('read a nested secret', function () use ($client) {
 });
 
 check('list', function () use ($client) {
-    $data = $client->list('/secret/metadata/app')->getData();
+    // This library is inconsistent with itself: `read()` runs the path through
+    // `buildPath()`, which prepends `/v1`, while `list()` sits on the base
+    // class and sends the path verbatim. So the caller has to prepend it.
+    //
+    // Worth leaving visible rather than smoothing over, because it is the
+    // reason a third-party client is in this suite at all: it was written by
+    // reading Vault's HTTP API rather than by the people who built the server,
+    // and it makes assumptions the official SDKs do not.
+    $data = $client->list($client->buildPath('/secret/metadata/app'))->getData();
     $keys = $data['keys'] ?? [];
     if (!in_array('db', $keys, true)) {
         throw new RuntimeException('db missing from the listing: ' . json_encode($keys));

@@ -2,7 +2,16 @@
   "require": {
     "csharpru/vault-php": "^4.2",
     "php-http/guzzle7-adapter": "^1.0",
-    "guzzlehttp/guzzle": "^7.8"
+    "guzzlehttp/guzzle": "^7.8",
+    "laminas/laminas-diactoros": "^3.3"
   },
-  "config": { "allow-plugins": { "php-http/discovery": true } }
+  "config": {
+    "allow-plugins": {
+      "php-http/discovery": true
+    },
+    "_comment": "Resolve against the PHP that will RUN this, not the one in the composer image. Without it composer picks packages needing 8.4 and the 8.3 runtime refuses to start.",
+    "platform": {
+      "php": "8.3.0"
+    }
+  }
 }
