@@ -13,6 +13,7 @@ use std::{collections::HashMap, sync::Arc, time::SystemTime};
 use arc_swap::ArcSwapOption;
 use core_crypto::{Barrier, SealError, Sealed, View};
 use policy_engine::{Capability, Grant, TokenError, TokenTable};
+use telemetry::{Id, LogKey};
 
 pub struct Snapshot {
     /// The sealed file's content version. Also what `sys/health` reports, so an
@@ -29,7 +30,7 @@ pub struct Snapshot {
     /// [`Self::barrier`]. The bytes here are the file's own JSON text, not a
     /// re-rendering of it, and nothing in this process holds the cleartext
     /// between requests (ADR-0015 D13).
-    secrets: HashMap<String, Sealed>,
+    secrets: HashMap<String, Entry>,
     /// A key that exists only in this process, only for this snapshot, and is
     /// never written anywhere. A new file means a new key; the old one is
     /// zeroed when the old snapshot is dropped.
@@ -43,6 +44,26 @@ pub struct Snapshot {
     /// Every path, sorted, so a LIST can find a prefix range by binary search
     /// rather than scanning.
     sorted_paths: Vec<String>,
+    /// The key the access log's path identifiers are computed under.
+    ///
+    /// Derived from the file's token key (QĐ-7) so identifiers survive a
+    /// restart; `None` when the file carries no token table, and the server
+    /// then falls back to a key that lives only as long as the process.
+    log_key: Option<LogKey>,
+}
+
+/// One secret: the sealed bytes, and the log identifier for its path.
+struct Entry {
+    sealed: Sealed,
+    /// Computed once here rather than per request.
+    ///
+    /// This is what keeps the access log off the cost side of the read path.
+    /// An HMAC is roughly what the whole M5 barrier costs — paying one per
+    /// request to write a log line would have made observing a read more
+    /// expensive than serving it. The set of paths is known at this point: it
+    /// is the file's own key set, hashed twice a minute instead of eight
+    /// thousand times a second.
+    path_id: Id,
 }
 
 /// A file that parsed and authenticated but cannot be turned into a servable
@@ -86,11 +107,22 @@ impl Snapshot {
             }
         };
 
+        let log_key = tokens
+            .as_ref()
+            .map(|table| LogKey::from_bytes(table.derive(policy_engine::LOG_LABEL)));
+
         let barrier = Barrier::new()?;
         let mut sealed = HashMap::with_capacity(secrets.len());
         let mut sorted_paths = Vec::with_capacity(secrets.len());
         for (path, value) in secrets {
-            sealed.insert(path.to_string(), barrier.seal(value.get().as_bytes())?);
+            let path_id = log_key.as_ref().map_or(Id::NONE, |key| key.id(path));
+            sealed.insert(
+                path.to_string(),
+                Entry {
+                    sealed: barrier.seal(value.get().as_bytes())?,
+                    path_id,
+                },
+            );
             sorted_paths.push(path.to_string());
         }
         // `secrets` came from a `BTreeMap`, so this is already ordered; sorting
@@ -107,6 +139,7 @@ impl Snapshot {
             barrier,
             tokens,
             sorted_paths,
+            log_key,
         })
     }
 
@@ -134,14 +167,42 @@ impl Snapshot {
         path: &str,
         f: impl FnOnce(&str) -> R,
     ) -> Option<Result<R, SealError>> {
-        let sealed = self.secrets.get(path)?;
-        Some(self.barrier.with_plaintext(sealed, f))
+        let entry = self.secrets.get(path)?;
+        Some(self.barrier.with_plaintext(&entry.sealed, f))
     }
 
     /// The sealed bytes, for the test that walks a live snapshot looking for
     /// cleartext.
     pub fn sealed_secrets(&self) -> impl Iterator<Item = &Sealed> {
-        self.secrets.values()
+        self.secrets.values().map(|entry| &entry.sealed)
+    }
+
+    /// The access log's identifier for `path`.
+    ///
+    /// Free for a path the file carries, because it was computed when the file
+    /// was loaded. A path the file does *not* carry is hashed here — that is
+    /// the attacker-chosen case, it ends in a 404, and it has already passed
+    /// the rate limiter.
+    ///
+    /// `fallback` is the process-lifetime key, used when the file has no token
+    /// table to derive one from.
+    pub fn path_id(&self, path: &str, fallback: &LogKey) -> Id {
+        match (self.secrets.get(path), &self.log_key) {
+            (Some(entry), Some(_)) => entry.path_id,
+            (_, Some(key)) => key.id(path),
+            (_, None) => fallback.id(path),
+        }
+    }
+
+    /// The access log's identifier for a presented token.
+    ///
+    /// `Id::NONE` when no token was presented or the file enforces nothing —
+    /// there is no identity to record in either case.
+    pub fn token_id(&self, presented: Option<&str>) -> Id {
+        let (Some(table), Some(presented)) = (&self.tokens, presented) else {
+            return Id::NONE;
+        };
+        Id::from_bytes(&table.token_id(presented))
     }
 
     /// Whether this file asks for tokens at all (ADR-0015 D8).
@@ -454,6 +515,62 @@ mod tests {
         slot.store(build(contents()));
         assert_eq!(slot.version(), Some(12));
         assert_eq!(slot.load().unwrap().secret_count(), 4);
+    }
+
+    /// The access log's identifiers, from both sides.
+    ///
+    /// A path the file carries gets the identifier computed when the file
+    /// loaded; a path it does not carry gets one computed on the spot. If those
+    /// two ever disagreed the log would be quietly useless — a known path and
+    /// an unknown one would be hashed differently and nothing else would
+    /// notice. The expectation is derived from the token key directly rather
+    /// than through the snapshot, so it cannot drift along with the code.
+    #[test]
+    fn a_stored_path_and_an_unknown_one_are_identified_under_the_same_key() {
+        let snap = build(contents());
+        let fallback = LogKey::random();
+        let expected = LogKey::derived_from(&token_key());
+
+        assert_eq!(snap.path_id("app/db", &fallback), expected.id("app/db"));
+        assert_eq!(snap.path_id("not-here", &fallback), expected.id("not-here"));
+        assert_ne!(
+            snap.path_id("app/db", &fallback),
+            snap.path_id("app/web", &fallback)
+        );
+    }
+
+    /// With no token table there is no key in the file, so identifiers come
+    /// from the process-lifetime fallback instead — and the file must not be
+    /// silently substituting `Id::NONE`, which would make every line
+    /// indistinguishable.
+    #[test]
+    fn a_file_without_a_token_table_falls_back_to_the_process_key() {
+        let snap = build(unguarded());
+        let fallback = LogKey::random();
+
+        let id = snap.path_id("app/db", &fallback);
+        assert_eq!(id, fallback.id("app/db"));
+        assert_ne!(id, Id::NONE);
+        assert_ne!(id, snap.path_id("app/web", &fallback));
+    }
+
+    /// The token identifier written to the log is the file's own row key
+    /// (QĐ-7), so an operator reads a line against the file with no step in
+    /// between.
+    #[test]
+    fn the_token_identifier_is_the_key_of_that_tokens_row_in_the_file() {
+        let snap = build(contents());
+        let in_file = token_key().hash_hex("s.apptoken");
+        let logged = snap.token_id(Some("s.apptoken"));
+        assert!(
+            in_file.starts_with(logged.as_str()),
+            "logged {logged}, file holds {in_file}"
+        );
+
+        // Nothing to identify: no token presented, or no table to identify it
+        // against.
+        assert_eq!(snap.token_id(None), Id::NONE);
+        assert_eq!(build(unguarded()).token_id(Some("s.apptoken")), Id::NONE);
     }
 
     #[test]

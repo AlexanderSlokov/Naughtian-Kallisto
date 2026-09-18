@@ -17,14 +17,19 @@ impl WorkerPool {
     /// Spawns `num_workers` threads. Each thread runs a localized Tokio runtime
     /// and listens on the same SO_REUSEPORT bound socket.
     ///
-    /// `make_router` is called once per worker, on that worker's own thread.
-    /// That is deliberate: anything a router builds for itself — the rate
-    /// limiter, and later the barrier's decryption buffer — then belongs to one
-    /// core and is never shared, which is the point of thread-per-core
-    /// (ADR-0016 QĐ-3).
+    /// `make_router` is called once per worker, on that worker's own thread,
+    /// and is given that worker's index. That is deliberate: anything a router
+    /// builds or claims for itself — the rate limiter, the barrier's decryption
+    /// buffer, and since M6 the access-log producer and the metrics counters —
+    /// then belongs to one core and is never shared, which is the point of
+    /// thread-per-core (ADR-0016 QĐ-3).
+    ///
+    /// The index is what lets a worker claim *its* slice of state that was
+    /// allocated up front, rather than registering itself into something shared
+    /// at startup.
     pub fn spawn<F>(num_workers: usize, addr: SocketAddr, make_router: F) -> Self
     where
-        F: Fn() -> Router + Clone + Send + 'static,
+        F: Fn(usize) -> Router + Clone + Send + 'static,
     {
         let core_ids = core_affinity::get_core_ids().unwrap_or_default();
 
@@ -59,7 +64,7 @@ impl WorkerPool {
                             std_listener.set_nonblocking(true).unwrap();
 
                             let listener = tokio::net::TcpListener::from_std(std_listener).unwrap();
-                            let app = make_router();
+                            let app = make_router(worker_idx);
 
                             axum::serve(listener, app).await.unwrap();
                         });

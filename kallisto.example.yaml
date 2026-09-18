@@ -63,3 +63,24 @@ spec:
   limits:
     requestsPerSecondPerWorker: 20000
     burst: 20000
+
+  # The access log, on stdout, one line per request.
+  #
+  # It is NOT an audit log, and the difference is the design rather than the
+  # wording (ADR-0015 D15). An audit log records before it serves, so a full
+  # queue means refusing to serve. This one records afterwards and drops when
+  # it falls behind, so a flood costs log lines instead of availability.
+  #
+  # Dropped lines are counted and exposed as kallisto_access_log_dropped_total
+  # on /v1/sys/metrics. Alert on it: a non-zero value means something is
+  # driving enough load at this process that it is shedding its own
+  # bookkeeping to keep answering.
+  #
+  # Paths and tokens appear as keyed hashes, never as themselves. The key comes
+  # from the token key inside the sealed file, so the identifiers still line up
+  # after a restart and an operator holding the file can work out which line is
+  # which. A file with no token table gets a random key that lasts as long as
+  # the process, and the server says so at startup.
+  log:
+    queueCapacity: 8192
+    enabled: true

@@ -300,6 +300,64 @@ Hàng đợi đầy thì **drop, không bao giờ chặn đường đọc**, và
 
 Vệ sinh: không bao giờ ghi giá trị secret; token và đường dẫn đi qua **HMAC có khoá**, áp cho **cả** access log lẫn error log.
 
+**Đã thi hành.** Hai quyết định chốt trước khi viết, cả hai đều đổi hình dạng của mốc:
+
+**QĐ-7 — khoá HMAC của log lấy từ `token_key` trong sealed file.** Định danh token trong log **chính là** khoá của hàng đó trong map `tokens`: operator mở file ra là đọc được dòng log thuộc entry nào, không cần kho khoá thứ hai, không đổi định dạng file, và ổn định qua restart.
+
+Nhưng đường dẫn **không** được băm dưới cùng nhãn với token, và đây là chỗ suýt trượt. Đường dẫn là **do người gọi chọn**: ai gửi được `GET /v1/secret/data/<gì cũng được>` rồi đọc access log sẽ có trong tay một oracle sinh `HMAC(token_key, chuỗi tuỳ ý)` — đúng vật liệu để dựng bảng tra ngược đánh vào cột token của file. Nên `token_id` giữ nhãn cũ (khớp thẳng với file), còn `path_id` đi dưới `LogKey = HMAC(token_key, "kallisto/log/v1\0")`. Hai PRF khác nhau. File không có token table thì `LogKey` là khoá ngẫu nhiên theo tiến trình, và server nói rõ điều đó.
+
+**QĐ-8 — số dòng bị drop phải scrape được.** Không giấu vào `sys/health`. Hàng đợi tràn nghĩa là daemon đang vứt bớt sổ sách để giữ cho secret vẫn được phục vụ; đó là quyết định đúng, và cũng là thứ operator phải bị đánh thức để xem cái gì đang ném tải vào một tiến trình chịu được hàng chục nghìn read mỗi giây. Một metric scrape được thì bắn được alert; một trường JSON thì không. Nên có `GET /v1/sys/metrics` (đúng đường của Vault), Prometheus text exposition, **tự viết** — crate `prometheus` dùng `RwLock<HashMap>` cho registry, tăng bộ đếm qua nó là đặt cache line dùng chung vào giữa đường đọc, đúng thứ QĐ-3 tồn tại để tránh; nó còn kéo `protobuf` cho một định dạng Prometheus đã bỏ. Bộ đếm là **một mảng, mỗi worker một ô**, dựng trước lúc spawn: worker chỉ ghi ô của mình, còn scrape (rơi vào worker nào là ngẫu nhiên vì `SO_REUSEPORT`) cộng cả mảng.
+
+**Chỗ lệch kế hoạch: HMAC không được nằm trên đường nóng.** Một phép HMAC-SHA256 tốn cỡ đúng bằng cả cái barrier của M5. Trả nó mỗi request để ghi một dòng log là làm việc quan sát đắt hơn việc phục vụ. Không cần trả: tập đường dẫn **đã biết trước** — nó là khoá của map `secrets` — nên `path_id` được tính sẵn lúc dựng Snapshot, hai lần một phút, cất cạnh mỗi secret đã seal. Đường dẫn lạ (404, và mọi chuỗi kẻ tấn công bịa ra) mới băm tại chỗ, và nhánh đó đã có token bucket chặn trước. `token_id` thì tái dùng phép băm `TokenTable::lookup` vốn đã tính từ M4.
+
+Kèm theo đó là một phát hiện ngược lên M4: **`TokenKey::hash` đang dựng lại `hmac::Key` ở mỗi lần gọi**, tức mỗi request từ M4 tới giờ đều trả tiền cho phép dẫn xuất ipad/opad trước khi băm. Giữ sẵn `hmac::Key` làm cả đường phân quyền lẫn đường log rẻ đi. Phần dư đã ghi nhận chứ không giấu: `aws_lc_rs::hmac::Key` giữ khối ipad/opad và không tự zeroize — cùng loại phần dư mà `LessSafeKey` để lại trong barrier.
+
+**Access log là một layer, không phải lời gọi trong từng handler.** Giá trị của access log nằm ở chỗ **mọi** request đều có mặt; rải ra mười hai nhánh thì cái nhánh bị quên là cái vô hình — test vẫn xanh, log vẫn trông khoẻ mạnh, và những request biến mất đúng là những request đáng xem. Một chỗ duy nhất, và không route mới nào lách qua được. Giá phải trả là một lần `ArcSwap` load nữa và một future bị box mỗi request.
+
+**Dòng log không cấp phát**: `[u8; 192]` nội tuyến, mọi trường có biên trên biết trước. Người ghi là một `std::thread` thường (không phải task tokio), dequeue theo lô, backoff tới ~1 ms khi rỗng — không Condvar, vì đánh thức bằng Condvar là đặt một mutex lên đường đọc.
+
+**Ràng buộc "không bao giờ gọi là audit log" giờ là một gate.** `d15_nothing_in_the_code_is_named_audit` quét `src/`, `components/*/src/`, `cmd/*/src/`, `*.yaml`, `*.toml` và fail nếu chữ đó xuất hiện ngoài comment. Nó **bắt được lỗi ngay lần chạy đầu tiên** — trường `description` trong `Cargo.toml` của chính crate telemetry, do tôi viết, câu "Not an audit log". Lời hứa trong tài liệu thì mục ruỗng theo thời gian; cái này thì không.
+
+**Một test đã sống sót mutation và phải viết lại**, đúng vết xe của E2 ở M4: bản đầu của `the_logged_path_identifier_matches_the_key_the_file_carries` lấy giá trị kỳ vọng bằng cách gọi `snapshot.path_id(...)` — tức là so implementation với chính nó. Cho `path_id` tính sẵn băm nhầm chuỗi (`secret/data/app/db` thay vì `app/db`) thì **cả hai vế đổi theo nhau và test vẫn xanh**. Bản hiện tại dẫn `LogKey` thẳng từ token key trong test, và nó giết mutation đó.
+
+**Một lỗi thiết kế bắt được lúc viết:** `log.enabled: false` mà vẫn enqueue thì hàng đợi đầy rồi **mọi dòng bị tính là drop** — tức là tắt log sẽ kéo `kallisto_access_log_dropped_total` lên, đúng cái alarm nghĩa là "có thứ gì đó đang flood tiến trình này". Producer bị tắt giờ không ghi gì cả.
+
+**stdout từ M6 chỉ còn là access log.** Banner khởi động và dòng "loaded version N" chuyển sang stderr, để log shipper đọc stdout như một luồng đúng một hình dạng thay vì một hình dạng lẫn văn xuôi.
+
+**Số đo.** Laptop 8 nhân, 4 worker, wrk2 cùng máy, hai binary **chạy xen kẽ trong cùng một vòng** (bài học M5).
+
+Ở 30k req/s, 4 vòng:
+
+| 30k req/s | M5 | M6 |
+| --- | --- | --- |
+| p50 | 1.31 / 1.35 / 1.31 / 1.32 ms | 1.32 / 1.36 / 1.31 / 1.32 ms |
+| p99 | 3.51 / 3.38 / 3.44 / 3.72 ms | 3.50 / 3.63 / 3.44 / 3.58 ms |
+
+**Không phân biệt được.** Chênh lệch nhỏ hơn dao động giữa các vòng của chính M5 (p99 của nó trải 3.38–3.72).
+
+Ở bão hoà, 8 vòng mỗi bên:
+
+| Bão hoà (mục tiêu 200k) | M5 | M6 |
+| --- | --- | --- |
+| trung bình | **118.2k** | **111.6k req/s** |
+| trung vị | 119.5k | 112.2k |
+| min – max | 111.8k – 123.9k | 104.6k – 116.8k |
+| độ lệch chuẩn | 5.0k | 5.1k |
+
+**Tụt ~6%.** Ở mức đó, M6 đang ghi ~110 nghìn dòng mỗi giây ra đĩa — **drop 0 dòng**, writer theo kịp hoàn toàn. 6% ấy phần lớn là I/O thật của việc có access log, không phải chi phí của hàng đợi.
+
+**Ca QĐ-8, đo end-to-end.** Bỏ đói writer bằng cách đẩy stdout vào một consumer chỉ đọc ~200 dòng/giây, rồi bắn 60k req/s vào trong 15 giây:
+
+| | |
+| --- | --- |
+| Request phục vụ | **892.624** |
+| Thông lượng | 59.5k req/s |
+| p50 / p99 | **1.34 ms / 4.72 ms** |
+| Dòng log bị vứt | **881.520** (98,8%) |
+| Non-2xx | **0** |
+
+Hàng đợi đầy gần như suốt cả lượt chạy, độ trễ **không đổi**, và `kallisto_access_log_dropped_total` nói đúng con số. Đó chính là câu D15 viết ra để bảo vệ, chứng minh bằng đo chứ không bằng lập luận: **log bỏ cuộc trước, server thì không.**
+
 ### M7 — CLI
 
 `cmd/kallisto-ctl` đang là stub `ratatui`. Bỏ TUI (ADR-0004 vẫn `suspended`), đổi binary thành `kallisto-ctl`:
@@ -381,7 +439,8 @@ Cổng thông lượng, hệ quả trực tiếp của QĐ-3 — đo bằng `mak
 | Điểm đo | Kỳ vọng | Đã đo |
 | --- | --- | --- |
 | M3 (chưa có barrier) | ít nhất bằng số nền của engine cũ; kiến trúc mới ít lớp hơn nên không có lý do tụt | ✅ xem dưới |
-| M5 (có barrier trên đường nóng) | mức tụt phải đo được và phải báo cáo | ⬜ |
+| M5 (có barrier trên đường nóng) | mức tụt phải đo được và phải báo cáo | ✅ xem mục M5 |
+| M6 (có access log trên đường đọc) | mức tụt phải đo được; hàng đợi đầy không được làm tụt thông lượng | ✅ xem mục M6 |
 | M8 | chạy ca lấy-rồi-huỷ ở rps cao qua nhiều worker | ⬜ |
 
 **Số nền M3**, laptop 8 nhân, 4 worker, 100 connection, wrk2 chạy cùng máy:

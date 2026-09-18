@@ -10,4 +10,4 @@ pub mod matcher;
 pub mod token;
 
 pub use matcher::{Capability, CompiledRule, RuleSet};
-pub use token::{Grant, TOKEN_KEY_LEN, TokenError, TokenKey, TokenTable};
+pub use token::{Grant, HASH_LEN, LOG_LABEL, TOKEN_KEY_LEN, TokenError, TokenKey, TokenTable};

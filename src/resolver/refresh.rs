@@ -43,6 +43,14 @@ pub enum Tick {
         /// so this machine has lost its cold-start fallback (ADR-0015 D5) even
         /// though it is serving correctly right now.
         cached: bool,
+        /// Whether the file carries a token table (ADR-0015 D8).
+        ///
+        /// Reported because two things change when it does not: every read is
+        /// permitted, and the access log's identifiers fall back to a key that
+        /// lives only as long as this process, so they stop lining up across a
+        /// restart (D15, QĐ-7). Both are legitimate for a single-app sidecar
+        /// and neither should be discovered rather than told.
+        enforces: bool,
     },
     /// The file arrived and was rejected. The previous table is still in place.
     Rejected(RefreshError),
@@ -172,6 +180,7 @@ impl Refresher {
                 "kallisto: a token refers to policy {name:?}, which the file does not define"
             );
         }
+        let enforces = snapshot.enforces();
         self.slot.store(snapshot);
         self.etag = etag;
 
@@ -180,7 +189,11 @@ impl Refresher {
         } else {
             true
         };
-        Tick::Loaded { version, cached }
+        Tick::Loaded {
+            version,
+            cached,
+            enforces,
+        }
     }
 
     /// Stores the file **still encrypted**. ADR-0001, as amended by ADR-0015
@@ -249,7 +262,8 @@ mod tests {
             r.poll_once().await,
             Tick::Loaded {
                 version: 3,
-                cached: true
+                cached: true,
+                ..
             }
         ));
         assert_eq!(slot.version(), Some(3));

@@ -31,6 +31,13 @@ pub const DEFAULT_WORKERS: usize = 2;
 pub const DEFAULT_MOUNT: &str = "secret";
 /// Per worker, not per process — see [`Limits`].
 pub const DEFAULT_RPS: u64 = 20_000;
+/// Access log lines buffered before the process starts dropping them.
+///
+/// 8192 lines is roughly a tenth of a second at this machine's measured
+/// ceiling, which is the right order: long enough to ride out a disk hiccup,
+/// short enough that a sustained flood shows up as dropped lines — the signal
+/// QĐ-8 wants raised — rather than as a slowly growing buffer.
+pub const DEFAULT_LOG_QUEUE: usize = 8192;
 
 /// The environment variable holding the 32-byte seal key, hex-encoded.
 ///
@@ -93,6 +100,8 @@ pub struct Spec {
     pub cache_dir: Option<PathBuf>,
     #[serde(default)]
     pub limits: Option<Limits>,
+    #[serde(default)]
+    pub log: Option<Log>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -121,6 +130,23 @@ pub struct Limits {
     pub requests_per_second_per_worker: Option<u64>,
     #[serde(default)]
     pub burst: Option<u64>,
+}
+
+/// The access log (ADR-0015 D15).
+///
+/// There is no setting here to make it an audit log, and there will not be
+/// one: an audit log has to record before it serves, which means a full queue
+/// stops the machine. That is a different product decision, not a flag. See the
+/// module docs of the `telemetry` crate.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+pub struct Log {
+    /// Lines buffered between the workers and the writer. When it fills, lines
+    /// are dropped and counted — never queued elsewhere, never waited on.
+    #[serde(default)]
+    pub queue_capacity: Option<usize>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
 }
 
 /// Tagged so that a bucket field under a disk source fails to parse, which is
@@ -164,6 +190,13 @@ pub struct Config {
     pub refresh_interval: Duration,
     pub cache_path: Option<PathBuf>,
     pub limits: ResolvedLimits,
+    pub log: ResolvedLog,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResolvedLog {
+    pub queue_capacity: usize,
+    pub enabled: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -419,6 +452,15 @@ impl Config {
                 // herd of sidecars restarting together, not enough to hide a
                 // runaway loop.
                 burst: limits.and_then(|l| l.burst).unwrap_or(rps),
+            },
+            log: ResolvedLog {
+                queue_capacity: spec
+                    .log
+                    .as_ref()
+                    .and_then(|l| l.queue_capacity)
+                    .unwrap_or(DEFAULT_LOG_QUEUE)
+                    .max(2),
+                enabled: spec.log.as_ref().and_then(|l| l.enabled).unwrap_or(true),
             },
         })
     }

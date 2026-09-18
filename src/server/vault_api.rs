@@ -14,12 +14,14 @@ use std::sync::Arc;
 
 use axum::{
     Router,
-    extract::State,
+    extract::{Request, State},
     http::{HeaderMap, Method, StatusCode, Uri, header},
+    middleware::{self, Next},
     response::{IntoResponse, Response},
     routing::any,
 };
 use policy_engine::Capability;
+use telemetry::{AccessLog, Id, LogKey, Outcome, Producer, Record, WorkerMetrics};
 
 use super::{rate_limit::RateLimiter, responses, sys};
 use crate::{
@@ -34,6 +36,41 @@ pub struct Resolver {
     pub slot: Arc<SnapshotSlot>,
     pub mount: Arc<str>,
     pub limits: ResolvedLimits,
+    /// The observability side, allocated once for the whole process and then
+    /// sliced per worker in [`router`].
+    pub telemetry: Arc<Telemetry>,
+}
+
+/// Process-wide observability state, laid out so that a worker only ever
+/// touches its own entry on the read path (ADR-0016 QĐ-3).
+pub struct Telemetry {
+    pub log: AccessLog,
+    /// One per worker, allocated up front. A scrape lands on whichever worker
+    /// `SO_REUSEPORT` gave the connection to, so every worker has to be able to
+    /// read every counter — but only ever writes its own.
+    pub workers: Vec<Arc<WorkerMetrics>>,
+    /// The key used when the file carries no token table, and for anything
+    /// refused before a file loaded at all. Process-lifetime only.
+    pub fallback_log_key: LogKey,
+    pub refresh_failures: Arc<std::sync::atomic::AtomicU64>,
+}
+
+impl Telemetry {
+    pub fn new(queue_capacity: usize, workers: usize) -> Self {
+        Self::with_log(queue_capacity, workers, true)
+    }
+
+    pub fn with_log(queue_capacity: usize, workers: usize, log_enabled: bool) -> Self {
+        let workers = workers.max(1);
+        Self {
+            log: AccessLog::with_enabled(queue_capacity, workers, log_enabled),
+            workers: (0..workers)
+                .map(|_| Arc::new(WorkerMetrics::default()))
+                .collect(),
+            fallback_log_key: LogKey::random(),
+            refresh_failures: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+        }
+    }
 }
 
 /// What one worker's router holds. The limiter is created inside [`router`],
@@ -43,6 +80,9 @@ pub struct Resolver {
 pub struct ApiState {
     pub resolver: Resolver,
     pub limiter: Arc<RateLimiter>,
+    /// This worker's end of the access log and its own counters.
+    pub producer: Arc<Producer>,
+    pub metrics: Arc<WorkerMetrics>,
 }
 
 impl ApiState {
@@ -52,11 +92,23 @@ impl ApiState {
 }
 
 pub fn router(resolver: Resolver) -> Router {
+    router_for_worker(resolver, 0)
+}
+
+pub fn router_for_worker(resolver: Resolver, worker: usize) -> Router {
     let limiter = Arc::new(RateLimiter::new(
         resolver.limits.requests_per_second,
         resolver.limits.burst,
     ));
-    let state = ApiState { resolver, limiter };
+    let producer = resolver.telemetry.log.producer(worker);
+    let metrics =
+        Arc::clone(&resolver.telemetry.workers[worker % resolver.telemetry.workers.len()]);
+    let state = ApiState {
+        resolver,
+        limiter,
+        producer,
+        metrics,
+    };
 
     Router::new()
         .route("/v1/:mount/data/*path", any(data))
@@ -69,7 +121,90 @@ pub fn router(resolver: Resolver) -> Router {
         .route("/v1/:mount/destroy/*path", any(read_only))
         .merge(sys::router())
         .fallback(no_handler)
+        .layer(middleware::from_fn_with_state(
+            state.clone(),
+            observe,
+        ))
         .with_state(state)
+}
+
+/// One access-log line and one counter per request, for every route.
+///
+/// A layer rather than a call in each handler, deliberately. An access log's
+/// entire value is that *every* request appears in it; spread across a dozen
+/// branches, the one that gets forgotten is invisible — the tests still pass,
+/// the log still looks healthy, and the missing requests are the interesting
+/// ones. Here there is one place, and it cannot be bypassed by adding a route.
+///
+/// The cost is one extra `ArcSwap` load per request (the handler loads the
+/// snapshot too) and a boxed future for the layer. Both are measured against
+/// the M5 numbers rather than assumed.
+async fn observe(State(state): State<ApiState>, request: Request, next: Next) -> Response {
+    // Everything identifying is turned into a fixed-size `Id` *before* the
+    // request is handed on. Doing it afterwards would mean keeping the token as
+    // an owned `String` across the await — one heap allocation per request, on
+    // the path this log exists not to burden. It also means one `ArcSwap` load
+    // instead of two, since the handler loads the snapshot for itself anyway.
+    let snapshot = state.snapshot();
+    let fallback = &state.resolver.telemetry.fallback_log_key;
+
+    let (action, secret_path) = classify(request.method(), request.uri());
+    let (path_id, token_id) = match (&snapshot, secret_path) {
+        (Some(snapshot), Some(path)) => (
+            snapshot.path_id(path, fallback),
+            snapshot.token_id(presented_token(request.headers())),
+        ),
+        (None, Some(path)) => (fallback.id(path), Id::NONE),
+        (_, None) => (Id::NONE, Id::NONE),
+    };
+    let enforced = snapshot.as_ref().is_some_and(|s| s.enforces());
+    // Cheap for every standard verb; `LIST` is an extension method and is the
+    // one spelling that allocates here.
+    let method = request.method().clone();
+    drop(snapshot);
+
+    let response = next.run(request).await;
+
+    let status = response.status();
+    state.metrics.observe(Outcome::of(status.as_u16()));
+    state.producer.record(&Record {
+        method: method.as_str(),
+        action,
+        path: path_id,
+        token: token_id,
+        status: status.as_u16(),
+        enforced,
+    });
+
+    response
+}
+
+/// What kind of request this was, and which secret path it named.
+///
+/// The action is drawn from a fixed set of words, never from the URI, so no
+/// caller-supplied text can reach a log line unhashed. The path comes back as a
+/// borrow for the caller to identify; it is never logged as itself.
+fn classify<'a>(method: &Method, uri: &'a Uri) -> (&'static str, Option<&'a str>) {
+    let listing = is_list_method(method) || wants_list(uri);
+    for action in ["data", "metadata"] {
+        if let Some((_, path)) = extract_mount_and_path(uri.path(), action) {
+            let label = if action == "metadata" && listing {
+                "list"
+            } else {
+                action
+            };
+            return (label, Some(path));
+        }
+    }
+    for action in ["subkeys", "delete", "undelete", "destroy"] {
+        if let Some((_, path)) = extract_mount_and_path(uri.path(), action) {
+            return ("write", Some(path));
+        }
+    }
+    if uri.path().starts_with("/v1/sys/") || uri.path().starts_with("/v1/auth/") {
+        return ("sys", None);
+    }
+    ("-", None)
 }
 
 // -----------------------------------------------------------------------------
@@ -433,6 +568,12 @@ mod tests {
     }
 
     fn app_with(snapshot: Option<Snapshot>) -> Router {
+        observed_app_with(snapshot, Arc::new(Telemetry::new(64, 1)))
+    }
+
+    /// Same router, but the caller keeps the [`Telemetry`] so it can read back
+    /// what the request produced on the log and the counters.
+    fn observed_app_with(snapshot: Option<Snapshot>, telemetry: Arc<Telemetry>) -> Router {
         let slot = Arc::new(SnapshotSlot::empty());
         if let Some(s) = snapshot {
             slot.store(s);
@@ -440,11 +581,19 @@ mod tests {
         router(Resolver {
             slot,
             mount: "secret".into(),
+            telemetry,
             limits: ResolvedLimits {
                 requests_per_second: 100_000,
                 burst: 100_000,
             },
         })
+    }
+
+    fn observed(telemetry: Arc<Telemetry>) -> Router {
+        observed_app_with(
+            Some(crate::resolver::snapshot::from_contents(&guarded_contents(), None).unwrap()),
+            telemetry,
+        )
     }
 
     fn loaded() -> Router {
@@ -630,6 +779,7 @@ mod tests {
         let app = router(Resolver {
             slot,
             mount: "secret".into(),
+            telemetry: Arc::new(Telemetry::new(64, 1)),
             limits: ResolvedLimits {
                 requests_per_second: 1,
                 burst: 1,
@@ -756,6 +906,7 @@ mod tests {
         let app = router(Resolver {
             slot,
             mount: "secret".into(),
+            telemetry: Arc::new(Telemetry::new(64, 1)),
             limits: ResolvedLimits {
                 requests_per_second: 1,
                 burst: 1,
@@ -791,5 +942,281 @@ mod tests {
         );
         assert_eq!(version_param(&"/x?version=abc".parse().unwrap()), None);
         assert_eq!(version_param(&"/x".parse().unwrap()), None);
+    }
+
+    // -------------------------------------------------------------------------
+    // The access log and the counters (ADR-0015 D15)
+    // -------------------------------------------------------------------------
+
+    fn drain(telemetry: &Telemetry) -> Vec<String> {
+        let sink = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let handle = telemetry.log.spawn_writer(TestSink(Arc::clone(&sink)));
+        std::thread::sleep(std::time::Duration::from_millis(40));
+        telemetry.log.stop();
+        handle.join().unwrap();
+        String::from_utf8(sink.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(str::to_owned)
+            .collect()
+    }
+
+    struct TestSink(Arc<std::sync::Mutex<Vec<u8>>>);
+    impl std::io::Write for TestSink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// The property that makes an access log worth having: every request is in
+    /// it. A layer rather than a call per handler is what guarantees this, and
+    /// this is the assertion that would catch a route added without one.
+    #[tokio::test]
+    async fn every_route_produces_exactly_one_line() {
+        let telemetry = Arc::new(Telemetry::new(256, 1));
+
+        for (method, uri) in [
+            ("GET", "/v1/secret/data/app/db"),
+            ("GET", "/v1/secret/data/nope"),
+            ("PUT", "/v1/secret/data/app/db"),
+            ("LIST", "/v1/secret/metadata/app"),
+            ("GET", "/v1/secret/metadata/app/db"),
+            ("DELETE", "/v1/secret/destroy/app/db"),
+            ("GET", "/v1/sys/health"),
+            ("GET", "/v1/nonsense"),
+        ] {
+            let _ = send_as(observed(Arc::clone(&telemetry)), method, uri, Some(TOKEN)).await;
+        }
+
+        let lines = drain(&telemetry);
+        assert_eq!(lines.len(), 8, "{lines:#?}");
+        for line in &lines {
+            assert!(line.contains("status="), "{line}");
+            assert!(line.contains("path="), "{line}");
+        }
+    }
+
+    /// The identifier written for a served path is the *precomputed* one, and
+    /// it matches what the same key produces on demand. If these ever diverged
+    /// the log would be useless while every other test stayed green.
+    #[tokio::test]
+    async fn the_logged_path_identifier_matches_the_key_the_file_carries() {
+        let telemetry = Arc::new(Telemetry::new(64, 1));
+        let (status, _) = send_as(
+            observed(Arc::clone(&telemetry)),
+            "GET",
+            "/v1/secret/data/app/db",
+            Some(TOKEN),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+
+        // Derived here from the token key alone, *not* by asking the snapshot —
+        // a check that routes through `path_id` would move with the thing it
+        // is checking, and pass no matter what either side hashed. (The M4 E2
+        // test made exactly that mistake and survived a broken implementation.)
+        let expected = telemetry::LogKey::derived_from(&token_key()).id("app/db");
+
+        let lines = drain(&telemetry);
+        assert!(
+            lines[0].contains(&format!("path={expected}")),
+            "expected {expected} in {}",
+            lines[0]
+        );
+        assert!(lines[0].contains("action=data"));
+        assert!(lines[0].contains("status=200"));
+    }
+
+    /// QĐ-7's payoff: the token identifier in a log line is byte-for-byte the
+    /// key of that token's row in the sealed file, so an operator holding the
+    /// file reads the line without reversing anything.
+    #[tokio::test]
+    async fn the_logged_token_identifier_is_the_files_own_token_hash() {
+        let telemetry = Arc::new(Telemetry::new(64, 1));
+        let _ = send_as(
+            observed(Arc::clone(&telemetry)),
+            "GET",
+            "/v1/secret/data/app/db",
+            Some(TOKEN),
+        )
+        .await;
+
+        let in_file = token_key().hash_hex(TOKEN);
+        let lines = drain(&telemetry);
+        let logged = lines[0]
+            .split(" token=")
+            .nth(1)
+            .and_then(|rest| rest.split(' ').next())
+            .unwrap();
+        assert!(
+            in_file.starts_with(logged),
+            "log wrote {logged}, file holds {in_file}"
+        );
+    }
+
+    /// Nothing a caller controls reaches a line as text.
+    #[tokio::test]
+    async fn a_caller_chosen_path_is_hashed_rather_than_written() {
+        let telemetry = Arc::new(Telemetry::new(64, 1));
+        let _ = send_as(
+            observed(Arc::clone(&telemetry)),
+            "GET",
+            "/v1/secret/data/looking-for/../../etc/passwd",
+            Some(TOKEN),
+        )
+        .await;
+
+        let lines = drain(&telemetry);
+        assert!(!lines[0].contains("passwd"), "{}", lines[0]);
+        assert!(!lines[0].contains("looking-for"), "{}", lines[0]);
+    }
+
+    /// D15: a full queue costs log lines, never a served request. This is the
+    /// difference between this and an audit log, asserted rather than asserted
+    /// about.
+    #[tokio::test]
+    async fn a_full_log_queue_never_stops_a_read() {
+        // Two slots and no writer running, so the queue fills immediately.
+        let telemetry = Arc::new(Telemetry::new(2, 1));
+
+        for _ in 0..40 {
+            let (status, body) = send_as(
+                observed(Arc::clone(&telemetry)),
+                "GET",
+                "/v1/secret/data/app/db",
+                Some(TOKEN),
+            )
+            .await;
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body["data"]["data"]["user"], "admin");
+        }
+
+        assert!(
+            telemetry.log.dropped() > 0,
+            "a queue of two absorbed forty lines"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_metrics_endpoint_counts_what_was_served() {
+        let telemetry = Arc::new(Telemetry::new(256, 1));
+        let _ = send_as(
+            observed(Arc::clone(&telemetry)),
+            "GET",
+            "/v1/secret/data/app/db",
+            Some(TOKEN),
+        )
+        .await;
+        let _ = send_as(
+            observed(Arc::clone(&telemetry)),
+            "GET",
+            "/v1/secret/data/app/db",
+            Some("s.wrong"),
+        )
+        .await;
+
+        let response = observed(Arc::clone(&telemetry))
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/sys/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CONTENT_TYPE)
+                .unwrap()
+                .to_str()
+                .unwrap(),
+            "text/plain; version=0.0.4; charset=utf-8"
+        );
+
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+
+        assert!(
+            text.contains("kallisto_access_log_dropped_total 0"),
+            "{text}"
+        );
+        assert!(
+            text.contains("kallisto_requests_total{outcome=\"ok\"} 1"),
+            "{text}"
+        );
+        assert!(
+            text.contains("kallisto_requests_total{outcome=\"denied\"} 1"),
+            "{text}"
+        );
+        assert!(text.contains("kallisto_sealed 0"), "{text}");
+        // The scrape itself is counted too, so the numbers add up for anyone
+        // reading them rather than quietly excluding one route.
+        assert!(text.contains("kallisto_authorization_enforced 1"), "{text}");
+    }
+
+    /// QĐ-8, end to end: the number an alert fires on has to reach a scrape.
+    #[tokio::test]
+    async fn dropped_lines_reach_the_metrics_endpoint() {
+        let telemetry = Arc::new(Telemetry::new(2, 1));
+        for _ in 0..40 {
+            let _ = send_as(
+                observed(Arc::clone(&telemetry)),
+                "GET",
+                "/v1/secret/data/app/db",
+                Some(TOKEN),
+            )
+            .await;
+        }
+
+        let response = observed(Arc::clone(&telemetry))
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/sys/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+
+        let dropped: u64 = text
+            .lines()
+            .find_map(|l| l.strip_prefix("kallisto_access_log_dropped_total "))
+            .unwrap()
+            .parse()
+            .unwrap();
+        assert!(dropped > 0, "the drop count never reached the scrape");
+    }
+
+    /// A sealed process still answers a scrape — that is when it matters most.
+    #[tokio::test]
+    async fn metrics_answer_while_sealed() {
+        let telemetry = Arc::new(Telemetry::new(64, 1));
+        let response = observed_app_with(None, Arc::clone(&telemetry))
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/sys/metrics")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let text = String::from_utf8(bytes.to_vec()).unwrap();
+        assert!(text.contains("kallisto_sealed 1"), "{text}");
     }
 }

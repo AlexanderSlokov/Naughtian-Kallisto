@@ -25,7 +25,7 @@ async fn test_phase4_integration() {
     let data_port = 18200;
     let admin_port = 18202;
 
-    let _pool = WorkerPool::spawn(1, ([127, 0, 0, 1], data_port).into(), move || {
+    let _pool = WorkerPool::spawn(1, ([127, 0, 0, 1], data_port).into(), move |_worker| {
         vault_kv_router(state.clone())
     });
     let admin_server = start_admin_server(core.clone(), admin_port);

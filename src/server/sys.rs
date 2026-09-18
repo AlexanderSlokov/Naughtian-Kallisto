@@ -18,7 +18,7 @@ use axum::{
     Router,
     extract::State,
     http::{HeaderMap, StatusCode},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{any, get},
 };
 
@@ -30,6 +30,7 @@ use super::{
 pub fn router() -> Router<ApiState> {
     Router::new()
         .route("/v1/sys/health", get(health))
+        .route("/v1/sys/metrics", get(metrics))
         .route("/v1/sys/seal-status", get(seal_status))
         .route("/v1/sys/mounts", get(mounts))
         .route("/v1/sys/internal/ui/mounts/*path", get(ui_mounts))
@@ -66,6 +67,46 @@ async fn health(State(state): State<ApiState>) -> Response {
         None => responses::health(true, now_secs(), None, None, None, None),
     };
     json(status, body)
+}
+
+/// Prometheus text exposition (ADR-0015 D15, QĐ-8).
+///
+/// The counter this exists for is `kallisto_access_log_dropped_total`. A
+/// non-zero value means the process chose to lose log lines rather than stop
+/// serving secrets — the right call, and one an operator has to be told about,
+/// because something is driving load at a daemon that handles tens of thousands
+/// of reads a second without noticing.
+///
+/// Unauthenticated, like `sys/health`: it carries counts and a file version,
+/// never a path, a token or a value — and the listener is loopback-only by
+/// construction (`Config::resolve` refuses anything else without an explicit
+/// risk flag). Vault serves this route too, so a scrape config written for
+/// Vault finds it where it expects.
+async fn metrics(State(state): State<ApiState>) -> Response {
+    let telemetry = &state.resolver.telemetry;
+    let snapshot = state.snapshot();
+
+    let status = telemetry::Status {
+        sealed: snapshot.is_none(),
+        file_version: snapshot.as_ref().map(|s| s.version),
+        secrets: snapshot.as_ref().map_or(0, |s| s.secret_count()),
+        tokens: snapshot.as_ref().map_or(0, |s| s.token_count()),
+        enforces: snapshot.as_ref().is_some_and(|s| s.enforces()),
+        log_dropped: telemetry.log.dropped(),
+        refresh_failures: telemetry
+            .refresh_failures
+            .load(std::sync::atomic::Ordering::Relaxed),
+    };
+
+    (
+        StatusCode::OK,
+        [(
+            axum::http::header::CONTENT_TYPE,
+            "text/plain; version=0.0.4; charset=utf-8",
+        )],
+        telemetry::render(&telemetry.workers, &status),
+    )
+        .into_response()
 }
 
 async fn seal_status(State(state): State<ApiState>) -> Response {
@@ -120,7 +161,7 @@ mod tests {
     use crate::{
         config::ResolvedLimits,
         resolver::snapshot::SnapshotSlot,
-        server::vault_api::{Resolver, router as api_router},
+        server::vault_api::{Resolver, Telemetry, router as api_router},
     };
 
     const TOKEN: &str = "s.apptoken";
@@ -172,6 +213,7 @@ mod tests {
         api_router(Resolver {
             slot,
             mount: "secret".into(),
+            telemetry: Arc::new(Telemetry::new(64, 1)),
             limits: ResolvedLimits {
                 requests_per_second: 10_000,
                 burst: 10_000,

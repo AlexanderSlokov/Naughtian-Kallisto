@@ -70,6 +70,7 @@ aws-lc-rs = { workspace = true }
 url = "2"
 reqwest = { workspace = true }
 kallisto_queue = { path = "components/kallisto_queue" }
+telemetry = { path = "components/kallisto_telemetry" }
 serde_norway = { workspace = true }
 
 [features]

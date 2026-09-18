@@ -37,6 +37,16 @@ pub const HASH_LEN: usize = 32;
 /// purpose and produce a value that means something here.
 const LABEL: &[u8] = b"kallisto/token/v1\x00";
 
+/// The label the access log's key is derived under (ADR-0015 D15, QĐ-7).
+///
+/// This is not decoration. Paths are *chosen by the caller*: anyone who can
+/// send `GET /v1/secret/data/<anything>` and read the access log would, under a
+/// shared label, hold an oracle producing `HMAC(token_key, arbitrary string)` —
+/// which is precisely the material for a reverse table against the token
+/// column of the file. Deriving a separate key gives the log its own PRF, so
+/// what the oracle emits says nothing about what a token hashes to.
+pub const LOG_LABEL: &[u8] = b"kallisto/log/v1\x00";
+
 #[derive(Debug, thiserror::Error)]
 pub enum TokenError {
     #[error(
@@ -51,40 +61,72 @@ pub enum TokenError {
 }
 
 /// The key the token hashes were computed with.
+///
+/// Carries the raw bytes *and* a prepared `hmac::Key`. The prepared form is
+/// what makes this cheap: `hmac::Key::new` runs the ipad/opad key derivation,
+/// two compression functions, and doing that once per request — which is what
+/// this type used to do — cost more than the hash it was preparing for. The
+/// authorization path (one `hash` per request since M4) and the access log
+/// (one more, M6) both get that back.
+///
+/// The residual, recorded rather than hidden: `zeroize` clears [`Self::raw`],
+/// but `aws_lc_rs::hmac::Key` holds the derived ipad/opad blocks and does not
+/// zeroize itself. Those blocks are key-equivalent material. This is the same
+/// residual `LessSafeKey` leaves in the barrier, and it is why ADR-0015 D13 is
+/// written as making a memory dump *less* rewarding rather than as a guarantee.
 #[derive(Zeroize, ZeroizeOnDrop)]
-pub struct TokenKey([u8; TOKEN_KEY_LEN]);
+pub struct TokenKey {
+    raw: [u8; TOKEN_KEY_LEN],
+    #[zeroize(skip)]
+    prepared: hmac::Key,
+}
 
 impl TokenKey {
     pub fn from_bytes(bytes: [u8; TOKEN_KEY_LEN]) -> Self {
-        Self(bytes)
+        Self {
+            prepared: hmac::Key::new(HMAC_SHA256, &bytes),
+            raw: bytes,
+        }
     }
 
     pub fn from_hex(text: &str) -> Result<Self, hex::HexError> {
         let mut bytes = [0u8; TOKEN_KEY_LEN];
         hex::decode_into(text, &mut bytes)?;
-        Ok(Self(bytes))
+        Ok(Self::from_bytes(bytes))
     }
 
     /// For the tool that mints a token table. Named bluntly on purpose: every
     /// call site should read as a decision to write a key somewhere.
     pub fn expose_as_hex(&self) -> String {
-        hex::encode(&self.0)
+        hex::encode(&self.raw)
     }
 
     /// What goes in the file's `tokens` table for a given token.
     pub fn hash(&self, token: &str) -> [u8; HASH_LEN] {
-        let key = hmac::Key::new(HMAC_SHA256, &self.0);
-        let mut context = hmac::Context::with_key(&key);
-        context.update(LABEL);
-        context.update(token.as_bytes());
-
-        let mut out = [0u8; HASH_LEN];
-        out.copy_from_slice(context.sign().as_ref());
-        out
+        self.tagged(LABEL, token.as_bytes())
     }
 
     pub fn hash_hex(&self, token: &str) -> String {
         hex::encode(&self.hash(token))
+    }
+
+    /// A subkey for another purpose entirely, bound to `label`.
+    ///
+    /// The only caller is the access log ([`LOG_LABEL`]). Everything derived
+    /// this way is a different PRF from [`Self::hash`], which is the whole
+    /// point — see the comment on `LOG_LABEL`.
+    pub fn derive(&self, label: &[u8]) -> [u8; HASH_LEN] {
+        self.tagged(label, b"")
+    }
+
+    fn tagged(&self, label: &[u8], message: &[u8]) -> [u8; HASH_LEN] {
+        let mut context = hmac::Context::with_key(&self.prepared);
+        context.update(label);
+        context.update(message);
+
+        let mut out = [0u8; HASH_LEN];
+        out.copy_from_slice(context.sign().as_ref());
+        out
     }
 }
 
@@ -107,6 +149,14 @@ struct Entry {
 pub struct Grant<'a> {
     pub rules: &'a RuleSet,
     pub policies: &'a [String],
+    /// The keyed hash of the token that produced this grant — the same value
+    /// that keys the `tokens` map in the sealed file.
+    ///
+    /// Handed back rather than recomputed because [`TokenTable::lookup`] has
+    /// just calculated it, and the access log wants exactly this number
+    /// (ADR-0015 D15, QĐ-7). An operator reading a log line can look the value
+    /// up in the file directly; nothing has to be reversed.
+    pub token_id: [u8; HASH_LEN],
 }
 
 /// The token table, with every token's policies already flattened into one
@@ -172,6 +222,15 @@ impl TokenTable {
         &self.unknown_policies
     }
 
+    /// A subkey under `label`, for a subsystem that needs one bound to this
+    /// file rather than to this process. The access log is the only caller
+    /// (ADR-0015 D15, QĐ-7): deriving from the file's own key is what makes a
+    /// log identifier mean the same thing after a restart, and what lets an
+    /// operator holding the file work out which line is which.
+    pub fn derive(&self, label: &[u8]) -> [u8; HASH_LEN] {
+        self.key.derive(label)
+    }
+
     /// The rules the presented token carries, or `None`.
     ///
     /// ADR-0013 E2. Every entry is examined on every call and the comparison is
@@ -194,10 +253,20 @@ impl TokenTable {
                 found = Some(Grant {
                     rules: &entry.rules,
                     policies: &entry.policies,
+                    token_id: computed,
                 });
             }
         }
         found
+    }
+
+    /// What the access log records for a token that matched nothing.
+    ///
+    /// A miss still gets an identifier, because "someone is hammering us with
+    /// one unknown token" and "someone is spraying thousands" are different
+    /// incidents and the log has to be able to tell them apart.
+    pub fn token_id(&self, presented: &str) -> [u8; HASH_LEN] {
+        self.key.hash(presented)
     }
 }
 

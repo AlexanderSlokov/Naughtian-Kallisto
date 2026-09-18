@@ -164,6 +164,9 @@ Covered by `make verify-security` (blocking).
 | E1 no plaintext secrets in `Debug`/`Display`/errors/logs | Proven | six tests in `tests/security_invariants.rs`                              | replace `SecretPayload`'s hand-written `Debug` with `#[derive(Debug)]`                |
 | E2 token comparison is constant-time                     | Proven | three `e2_*` tests, against `policy_engine::TokenTable::lookup`          | compare a prefix, suffix or truncation of the hash; store a bare digest of the token   |
 | E3 explicit `deny` overrides `allow`                     | Proven | two `e3_*` tests, against `RuleSet::allows` and `Snapshot::permits`      | let a grant win over a `deny` that matches the same path, in either written order      |
+| D15 nothing in the code is named an audit log            | Proven | `d15_nothing_in_the_code_is_named_audit`                                 | name a file, type, field or config key `audit` anywhere outside a comment              |
+| D15 log identifiers are keyed and domain-separated       | Proven | `d15_path_identifiers_cannot_be_used_against_the_token_table`            | hash a path under the token label, or with the token key directly                      |
+| D15 no log line carries cleartext                        | Proven | `d15_a_rendered_log_line_carries_no_cleartext`                           | write a path, token or value into a line instead of its identifier                     |
 
 E1 covers `{:?}`, `{:#?}`, nesting inside a derived `Debug`, every `EngineError`
 variant's `Display`, and the absence of any payload-carrying field on
@@ -196,6 +199,46 @@ because it is the same failure ADR-0013 was written about: asserting that the
 right answers come back does not constrain how the answer is reached. Every
 `e2_*` and `e3_*` test here was checked by breaking the implementation on
 purpose and confirming it failed.
+
+### ADR-0015 D15, the log path
+
+These are not ADR-0013 Group E invariants, but they live in the same file and
+run under the same blocking target, because they are the same kind of property:
+a constraint that decays silently if nothing checks it.
+
+**The naming gate earned itself immediately.** `d15_nothing_in_the_code_is_named_audit`
+scans `src/`, `components/*/src/`, `cmd/*/src/` and every `.yaml`/`.toml`, and
+fails on the word outside a comment. On its first run it failed — on the
+`description` field of the telemetry crate's own `Cargo.toml`, written minutes
+earlier in the same session, reading "Not an audit log". The constraint is that
+the word must not *name* anything; a machine-readable field describing the crate
+that way is exactly the surface D15 is worried about, and prose alone would not
+have caught it.
+
+**What the domain-separation test protects.** Log path identifiers are keyed
+with `HMAC(token_key, "kallisto/log/v1\0")`, not with the token key under the
+token label. Paths are chosen by the caller, so a shared PRF would turn the
+access log into an oracle emitting `HMAC(token_key, arbitrary string)` — the
+material for a reverse table against the file's own token column. The test
+hashes the same text both ways and asserts they disagree; it was confirmed by
+substituting the forbidden simplification and watching it fail.
+
+**A test that survived its mutation, and what fixed it.** The first version of
+`the_logged_path_identifier_matches_the_key_the_file_carries` obtained its
+expected value by calling `Snapshot::path_id` — the function under test. Making
+the precomputed identifier hash the wrong string moved both sides together and
+the test stayed green. It now derives the key from the token key directly, and
+kills that mutation. This is the second time in this plan the same mistake has
+been caught (see the E2 note above); both are recorded because the pattern —
+comparing an implementation against itself — is not visible from a passing test
+run.
+
+**What is not proven here.** That the access log records *every* request is
+enforced structurally, by an axum layer rather than a call in each handler, and
+asserted for the routes that exist today
+(`every_route_produces_exactly_one_line`). A future route added outside that
+layer would not be caught by any test, in the same way E2's full-scan property
+is not.
 
 ## Tiers 2 and 3
 

@@ -228,7 +228,9 @@ verify-miri-rkyv:
 verify-proptest:
 	cargo test -p kallisto_kv_model
 
-# Group E — secret redaction. E2/E3 are not covered; see verification-status.md.
+# Group E — secret redaction, constant-time token comparison, deny-overrides.
+# Also carries ADR-0015 D15's naming gate: nothing in the code may be called an
+# audit log, because this one drops lines and an audit log may not.
 verify-security:
 	cargo test --test security_invariants
 

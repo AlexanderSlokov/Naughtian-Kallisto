@@ -14,8 +14,9 @@ use naughtian_kallisto::{
         BucketConfig, BucketSource, DiskSource, Refresher, SecretSource, SnapshotSlot,
         refresh::Tick,
     },
-    server::vault_api::{self, Resolver},
+    server::vault_api::{self, Resolver, Telemetry},
 };
+use telemetry::error_log;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
@@ -61,9 +62,9 @@ fn run() -> Result<(), Startup> {
     // happens where the key is made.
     let hardening = core_crypto::harden_process();
     if !hardening.complete() {
-        eprintln!(
-            "kallisto: could not fully harden this process ({hardening:?}); a crash here may \
-             write memory to a core file"
+        error_log!(
+            "hardening",
+            "incomplete ({hardening:?}); a crash here may write memory to a core file"
         );
     }
 
@@ -96,7 +97,10 @@ fn run() -> Result<(), Startup> {
     let source = build_source(&cfg)?;
     let slot = Arc::new(SnapshotSlot::empty());
 
-    println!(
+    // Operational messages go to stderr, not stdout. Since M6 stdout carries
+    // the access log and nothing else, so a log shipper can read it as a stream
+    // of one shape instead of one shape with prose mixed in.
+    eprintln!(
         "kallisto: serving {} on http://{} with {} worker(s), reading {}",
         cfg.mount,
         cfg.listen,
@@ -104,15 +108,38 @@ fn run() -> Result<(), Startup> {
         source.describe()
     );
 
-    start_refresher(&cfg, source, key, Arc::clone(&slot));
+    // stdout is the access log and nothing else from here on.
+    let telemetry = Arc::new(Telemetry::with_log(
+        cfg.log.queue_capacity,
+        cfg.workers,
+        cfg.log.enabled,
+    ));
+    let _writer = if cfg.log.enabled {
+        Some(telemetry.log.spawn_writer(std::io::stdout()))
+    } else {
+        error_log!(
+            "access log",
+            "disabled by configuration; no reads will be recorded"
+        );
+        None
+    };
+
+    start_refresher(
+        &cfg,
+        source,
+        key,
+        Arc::clone(&slot),
+        Arc::clone(&telemetry.refresh_failures),
+    );
 
     let resolver = Resolver {
         slot,
         mount: cfg.mount.as_str().into(),
         limits: cfg.limits,
+        telemetry,
     };
-    let pool = WorkerPool::spawn(cfg.workers, cfg.listen, move || {
-        vault_api::router(resolver.clone())
+    let pool = WorkerPool::spawn(cfg.workers, cfg.listen, move |worker| {
+        vault_api::router_for_worker(resolver.clone(), worker)
     });
     pool.join_all();
     Ok(())
@@ -165,6 +192,7 @@ fn start_refresher(
     source: Arc<dyn SecretSource>,
     key: core_crypto::SealKey,
     slot: Arc<SnapshotSlot>,
+    failures: Arc<std::sync::atomic::AtomicU64>,
 ) {
     let cache_path = cfg.cache_path.clone();
     let interval = cfg.refresh_interval;
@@ -184,31 +212,56 @@ fn start_refresher(
                 // first, so the version it finds becomes the floor for the
                 // anti-rollback check before the bucket is ever asked
                 // (ADR-0015 D5).
-                report("cache", refresher.warm_from_cache().await);
-                report("source", refresher.poll_once().await);
+                report("cache", refresher.warm_from_cache().await, &failures);
+                report("source", refresher.poll_once().await, &failures);
                 refresher.run().await;
             });
         })
         .expect("failed to start the refresh thread");
 }
 
-/// Until the access log lands (M6) this is the whole of the operator's view.
+/// What one poll of the source produced, on the error log.
 ///
-/// `Tick` is safe to print: ADR-0015 D15 and the tamper tests hold every error
-/// variant to carrying no secret material, no path and no key bytes.
-fn report(origin: &str, tick: Tick) {
+/// `Tick` is safe to render: ADR-0015 D15 requires the error log to observe the
+/// same hygiene as the access log, and the tamper tests hold every error
+/// variant to carrying counts and positions rather than secret material, paths
+/// or key bytes. That is what makes this call site safe, and it is checked
+/// there rather than assumed here.
+///
+/// A rejection or an outage also increments the counter behind
+/// `kallisto_refresh_failures_total`, so "this machine has been serving a stale
+/// file for an hour" is something a scrape notices rather than something
+/// somebody reads the logs to discover.
+fn report(origin: &str, tick: Tick, failures: &std::sync::atomic::AtomicU64) {
     match tick {
-        Tick::Loaded { version, cached } => {
-            println!("kallisto: loaded version {version} from {origin}");
-            if !cached {
+        Tick::Loaded {
+            version,
+            cached,
+            enforces,
+        } => {
+            eprintln!("kallisto: loaded version {version} from {origin}");
+            if !enforces {
                 eprintln!(
-                    "kallisto: could not write the encrypted fallback copy — this machine \
-                     will start sealed if the source is down"
+                    "kallisto: this file carries no token table, so every read is permitted and \
+                     access log identifiers are keyed per process — they will not line up across \
+                     a restart"
+                );
+            }
+            if !cached {
+                error_log!(
+                    "fallback copy",
+                    "could not be written — this machine will start sealed if the source is down"
                 );
             }
         }
         Tick::Unchanged => {}
-        Tick::Rejected(e) => eprintln!("kallisto: refused the file offered by {origin}: {e}"),
-        Tick::SourceDown(e) => eprintln!("kallisto: {origin} unavailable: {e}"),
+        Tick::Rejected(e) => {
+            failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            error_log!("source", "refused the file offered by {origin}: {e}");
+        }
+        Tick::SourceDown(e) => {
+            failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            error_log!("source", "{origin} unavailable: {e}");
+        }
     }
 }

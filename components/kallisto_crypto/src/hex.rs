@@ -34,13 +34,28 @@ pub fn decode_into(text: &str, out: &mut [u8]) -> Result<(), HexError> {
 }
 
 pub fn encode(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(char::from_digit(u32::from(byte >> 4), 16).unwrap_or('0'));
-        out.push(char::from_digit(u32::from(byte & 0x0f), 16).unwrap_or('0'));
-    }
-    out
+    let mut out = vec![0u8; bytes.len() * 2];
+    encode_into(bytes, &mut out);
+    String::from_utf8(out).unwrap_or_default()
 }
+
+/// Hex into a caller-owned buffer, which must be exactly twice as long as
+/// `bytes`. Anything else writes nothing.
+///
+/// Exists because the access log renders an identifier for every request, and
+/// [`encode`]'s `String` would be one heap allocation per line on the read path
+/// (ADR-0015 D15: the log never burdens the path it observes).
+pub fn encode_into(bytes: &[u8], out: &mut [u8]) {
+    if out.len() != bytes.len() * 2 {
+        return;
+    }
+    for (byte, pair) in bytes.iter().zip(out.chunks_exact_mut(2)) {
+        pair[0] = NIBBLE[usize::from(byte >> 4)];
+        pair[1] = NIBBLE[usize::from(byte & 0x0f)];
+    }
+}
+
+const NIBBLE: &[u8; 16] = b"0123456789abcdef";
 
 fn digit(c: u8) -> Option<u8> {
     match c {
@@ -80,6 +95,24 @@ mod tests {
             decode_into("deadbeeZ", &mut out).unwrap_err(),
             HexError::NotHex { at: 7 }
         ));
+    }
+
+    #[test]
+    fn encoding_into_a_buffer_matches_the_allocating_form() {
+        let bytes = [0x00, 0x0f, 0xa5, 0xff];
+        let mut out = [0u8; 8];
+        encode_into(&bytes, &mut out);
+        assert_eq!(&out, b"000fa5ff");
+        assert_eq!(std::str::from_utf8(&out).unwrap(), encode(&bytes));
+    }
+
+    /// A wrong-sized buffer writes nothing rather than half an answer: a
+    /// truncated identifier in a log line would silently alias other paths.
+    #[test]
+    fn encoding_into_a_wrong_sized_buffer_writes_nothing() {
+        let mut out = [b'.'; 4];
+        encode_into(&[0xab, 0xcd, 0xef], &mut out);
+        assert_eq!(&out, b"....");
     }
 
     #[test]
