@@ -1,7 +1,0 @@
-# Seeds for failure cases proptest has generated in the past. It is
-# automatically read and these particular cases re-run before any
-# novel cases are generated.
-#
-# It is recommended to check this file in to source control so that
-# everyone who runs the test benefits from these saved cases.
-cc 39616b9d863d87c868370ecc64ea315e6e66b822590f4c54bb6f711c835671a4 # shrinks to ops = [Put { payload_len: 0, cas: None }, Put { payload_len: 0, cas: None }, Put { payload_len: 0, cas: None }, UpdateMeta { max_versions: 1, cas_required: false, delete_version_after_ms: 0 }]

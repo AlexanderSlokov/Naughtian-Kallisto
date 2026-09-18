@@ -3,15 +3,46 @@ title: "Kallisto Project Roadmap & History"
 weight: 10
 ---
 
+> [!IMPORTANT]
+> **Most of this document describes a product that no longer exists.**
+>
+> ADR-0015 (accepted 2026-09-16) redefined the problem Kallisto solves: not a
+> high-performance secrets *server*, but a local read-only **resolver** that
+> speaks Vault KV-v2 over one encrypted file on an S3-compatible bucket.
+> ADR-0016 amended two of its decisions. The plan that executed them is
+> `plans/duck/plan.md`, and it is the accurate account of the current system.
+>
+> The storage engine, the RocksDB backend, the cuckoo cache, the write path, the
+> gossip control plane and the admin port are all deleted. Everything below
+> marked as planned for 1.1.0 and 1.2.0 — `redb`, Raft, leases, proxy mode,
+> multi-node — is superseded rather than pending; none of it was abandoned for
+> being hard, it was abandoned because the problem changed.
+>
+> This file is kept for its **Implementation History** section, which is a
+> record of what was built and why, and for the ADR index below.
+
 ## Current Status
 
-The Rust rewrite is complete and replaces the entire C++ codebase. Running in `1.0.0-alpha`:
+Running in `1.0.0-alpha`, on branch `duckilized`:
 
-- Core KV-v2 CRUD compatible with Vault/OpenBao (versioning, CAS, soft-delete, destroy, subkeys, JSON Merge Patch).
-- Thread-per-core Tokio + `SO_REUSEPORT`, 64-shard CuckooTable, write-behind via Vyukov MPMC lock-free queue, RocksDB backend.
-- Separated plane ports: data plane on 8200, admin plane on 8202.
+- A read-only Vault KV-v2 surface. Every write answers `403 permission denied`
+  (ADR-0015 D1) — that is the product, not a gap.
+- One AES-256-GCM sealed file on an S3-compatible bucket, polled with a
+  conditional GET, authenticated, and refused if older than the version held.
+- Thread-per-core Tokio + `SO_REUSEPORT`, retained against ADR-0015 D9.1 by
+  ADR-0016 QĐ-3, because the app pattern that fetches a secret per request makes
+  the read path hot.
+- Per-secret encryption in RAM between requests, with process hardening
+  (ADR-0015 D13).
+- Token authorization out of the same sealed file (D8); an access log that drops
+  rather than blocks, and is never called an audit log (D15).
+- One port, 8200, loopback only, enforced at startup.
 
-Performance baseline for 1.1.0 comparisons: `bench-laptop` p99 1.386ms.
+Performance: ~99k req/s at saturation on an 8-core laptop with 4 workers;
+p50 1.3ms / p99 3.5ms at 30k req/s. The in-RAM barrier costs 350–430ns per
+request and the access log about 6% of saturation throughput. See the duck plan
+for the method — both were measured by interleaving two binaries in one loop,
+after measuring them separately produced a nonsense result.
 
 ## Architectural Axis
 
@@ -126,7 +157,7 @@ Verification phases are ordered by fastest value. V0, V2, and V3 have no prerequ
 - [x] B2: full queue returns `QueueError::Full`; no unconsumed slot is overwritten. Two loom models.
 - [ ] **B3: `ShardedCuckooTable::insert` → `lookup`.** Not loom-verifiable as the table stands — all state sits behind one `parking_lot::RwLock`, so this is a logic invariant, not a memory-ordering one. Needs a multi-threaded stress test with an oracle, or `shuttle`.
 - [ ] **B4: CLOCK eviction leaves no dangling `lookup_map` read.** Same blocker as B3.
-- [ ] **B5: `async_worker.join()` completes before `rocksdb.flush()`.** Sequential drop-order property; loom is the wrong tool. Needs an observable-ordering regression test.
+- [x] ~~**B5: `async_worker.join()` completes before `rocksdb.flush()`.**~~ Retired: `KvEngine` and RocksDB are deleted (ADR-0015).
 - [x] Wire `make loom` against `-p kallisto_queue`.
 
 #### V3 — cargo-fuzz (runs parallel to Phase 3, no deps)
@@ -341,10 +372,21 @@ Note: dynamic secret generation with short TTLs and policy-based lease renewals 
 | ADR-0011 | Proxy mode architecture and technical requirements | proposed |
 | ADR-0012 | Seal trait + encryption barrier + buffer pool | **unwritten** |
 | ADR-0013 | Verification strategy | proposed |
+| ADR-0014 | *(see the ADR directory)* | — |
+| ADR-0015 | **The Duck Turn** — read-only resolver over one sealed file | **accepted**, amended by ADR-0016 |
+| ADR-0016 | Thread-per-core retained; asymmetric hexagonal | **accepted** |
 
-ADR-0008 through ADR-0011 remain `proposed`, yet Phase 3 and Phase 4 depend on them directly. Their statuses must be finalized before coding those phases.
+**ADR-0015 supersedes or moots most of the list above.** ADR-0008's queue was
+reused for the access log rather than for Raft; ADR-0009's `redb` migration is
+moot because there is no local store to migrate; ADR-0010 and ADR-0011 described
+a control plane that D16 removed; ADR-0012's seal trait was written as a
+concrete sealed-file format rather than a trait, since there is exactly one
+implementation and ADR-0016 QĐ-4 welded the output port shut. ADR-0004's TUI was
+resolved in practice by `kallisto-ctl`, a set of one-shot offline commands.
 
-ADR-0012 (Seal trait) is a hard prerequisite for 1.1.0 Phase 2 and must be written before that phase begins. ADR-0013 (Verification) is proposed and its V0/V2/V3 work items can begin immediately.
+ADR-0013 remains live and is the one that shaped how all of this was tested; its
+per-invariant status, including the groups retired along with the engine, is in
+`verification-status.md`.
 
 ---
 

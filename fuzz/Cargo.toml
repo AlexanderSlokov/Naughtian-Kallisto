@@ -16,19 +16,19 @@ cargo-fuzz = true
 [dependencies]
 arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"
-rkyv = "0.7"
-sonic-rs = "0.3"
+core_crypto = { path = "../components/kallisto_crypto" }
+serde_json = "1.0"
 naughtian-kallisto = { path = "..", features = ["fuzzing"] }
 axum = "0.7"
 
 [[bin]]
-name = "rkyv_roundtrip"
-path = "fuzz_targets/rkyv_roundtrip.rs"
+name = "read_path"
+path = "fuzz_targets/read_path.rs"
 test = false
 doc = false
 
 [[bin]]
-name = "http_parser"
-path = "fuzz_targets/http_parser.rs"
+name = "sealed_file"
+path = "fuzz_targets/sealed_file.rs"
 test = false
 doc = false

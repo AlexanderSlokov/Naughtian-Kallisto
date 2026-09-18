@@ -1,6 +1,6 @@
-//! ADR-0013 Group E: security invariants.
+//! ADR-0013 Group E: security invariants, plus ADR-0015 D15's log constraints.
 //!
-//! All three are verified here. E2 and E3 were blocked until token
+//! All three of Group E are verified here. E2 and E3 were blocked until token
 //! authentication and a policy evaluator existed; they landed with
 //! `policy_engine`, and the rule ADR-0013 set was that the tests land with
 //! them.
@@ -10,53 +10,80 @@
 //! nothing, printed a warning and passed; `e3_policy_deny_overrides_allow` had
 //! an empty body with a TODO. A test that cannot fail reports a gate that does
 //! not exist, and inflates the mutation score with a target nothing can kill.
+//!
+//! E1 was rewritten when the storage engine was deleted. It used to be checked
+//! against `SecretPayload`, `KeyMetadata` and `EngineError` — types belonging
+//! to the write path that no longer exists. The invariant did not change; its
+//! subjects did, and they are now the types a secret actually passes through:
+//! the sealed file's `Contents`, the live `Snapshot`, every key, and every
+//! error that can reach a log line.
 
 use std::collections::BTreeMap;
 
-use core_crypto::{Contents, PolicyRule};
-use naughtian_kallisto::{
-    engine::{
-        error::EngineError,
-        traits::{KeyMetadata, SecretPayload, VersionState},
-    },
-    resolver::Snapshot,
-};
-use policy_engine::{Capability, TokenKey, TokenTable};
+use core_crypto::{Contents, PolicyRule, SealError, SealKey};
+use naughtian_kallisto::{config::ConfigError, resolver::Snapshot};
+use policy_engine::{Capability, TokenError, TokenKey, TokenTable};
 
 const SECRET: &str = "super-secret-value-9f3a2b";
-const SECRET_PATH: &str = "secret/data/prod/db-root-credential";
+const SECRET_PATH: &str = "prod/db-root-credential";
 
-fn payload() -> SecretPayload {
-    SecretPayload {
-        value: SECRET.to_string(),
-        ttl: 3600,
+fn contents() -> Contents {
+    Contents {
+        version: 3,
+        secrets: BTreeMap::from([(
+            SECRET_PATH.to_string(),
+            serde_json::json!({ "password": SECRET }),
+        )]),
+        policies: BTreeMap::from([(
+            "db".to_string(),
+            vec![PolicyRule {
+                path: "secret/data/prod/*".to_string(),
+                capabilities: vec!["read".to_string()],
+            }],
+        )]),
+        tokens: BTreeMap::new(),
+        token_key: None,
     }
 }
 
-/// E1: the `Debug` rendering of a payload must not carry the secret. This is
-/// the one that actually bites: `Debug` reaches logs through `{:?}`, through
-/// `unwrap()` panic messages, and through `#[derive(Debug)]` on any struct that
-/// holds a payload.
+fn snapshot(contents: &Contents) -> Snapshot {
+    let json = serde_json::to_string(contents).unwrap();
+    let key = SealKey::from_bytes([4u8; 32]);
+    let sealed =
+        core_crypto::seal(&serde_json::from_str::<Contents>(&json).unwrap(), &key).unwrap();
+    let opened = core_crypto::open(&sealed, &key, None).unwrap();
+    Snapshot::build(opened.view().unwrap(), Some("\"etag\"".into())).unwrap()
+}
+
+/// E1: the `Debug` rendering of the decrypted file must not carry a secret.
+///
+/// This is the one that actually bites: `Debug` reaches logs through `{:?}`,
+/// through `unwrap()` panic messages, and through `#[derive(Debug)]` on any
+/// struct that happens to hold one of these.
 #[test]
-fn e1_secret_payload_debug_is_redacted() {
-    let rendered = format!("{:?}", payload());
+fn e1_the_decrypted_contents_debug_is_redacted() {
+    let rendered = format!("{:?}", contents());
     assert!(
         !rendered.contains(SECRET),
         "Debug leaked the secret value: {rendered}"
     );
     assert!(
-        rendered.contains("<REDACTED>"),
+        !rendered.contains(SECRET_PATH),
+        "Debug leaked a secret path: {rendered}"
+    );
+    assert!(
+        rendered.contains("REDACTED"),
         "Debug must mark the omission so a reader knows it is not simply absent: {rendered}"
     );
-    // The non-secret field is still useful for debugging and must survive.
-    assert!(rendered.contains("3600"), "ttl should remain visible");
+    // The non-secret bookkeeping is still useful and must survive.
+    assert!(rendered.contains('3'), "the version should remain visible");
 }
 
 /// E1: redaction has to survive being nested inside another `Debug` output,
-/// which is how a payload normally reaches a log line.
+/// which is how one of these normally reaches a log line.
 #[test]
 fn e1_redaction_survives_nesting() {
-    let nested = format!("{:?}", vec![Some(payload())]);
+    let nested = format!("{:?}", vec![Some(contents())]);
     assert!(
         !nested.contains(SECRET),
         "nested Debug leaked the secret value: {nested}"
@@ -66,18 +93,18 @@ fn e1_redaction_survives_nesting() {
     #[allow(dead_code)]
     struct Envelope {
         request_id: u64,
-        body: SecretPayload,
+        body: Contents,
     }
     let enveloped = format!(
         "{:?}",
         Envelope {
             request_id: 7,
-            body: payload(),
+            body: contents(),
         }
     );
     assert!(
         !enveloped.contains(SECRET),
-        "a derived Debug on a struct holding a payload leaked it: {enveloped}"
+        "a derived Debug on a struct holding the contents leaked it: {enveloped}"
     );
 }
 
@@ -86,89 +113,213 @@ fn e1_redaction_survives_nesting() {
 /// redact one and not the other.
 #[test]
 fn e1_alternate_debug_is_also_redacted() {
-    let rendered = format!("{:#?}", payload());
+    let rendered = format!("{:#?}", contents());
     assert!(
         !rendered.contains(SECRET),
         "pretty Debug leaked the secret value: {rendered}"
     );
-    assert!(rendered.contains("<REDACTED>"));
+    assert!(rendered.contains("REDACTED"));
+
+    let snapshot = snapshot(&contents());
+    let rendered = format!("{snapshot:#?}");
+    assert!(!rendered.contains(SECRET), "{rendered}");
+    assert!(!rendered.contains(SECRET_PATH), "{rendered}");
 }
 
-/// E1 (ADR-0011 §5): engine errors are rendered into HTTP response bodies and
-/// logs, so no error variant may carry secret material in its `Display`.
+/// E1 (ADR-0011 §5, ADR-0015 D15): every error that can reach a log or an HTTP
+/// body, from every crate on the read path.
+///
+/// The list is deliberately exhaustive rather than representative. An error
+/// type added later without redaction is exactly the kind of leak that is
+/// invisible until the day it matters, and the only defence is that this list
+/// has to be extended when one appears.
 #[test]
-fn e1_engine_errors_do_not_carry_secret_material() {
-    let errors = [
-        EngineError::NotFound,
-        EngineError::SoftDeleted,
-        EngineError::Destroyed,
-        EngineError::InvalidVersion(7),
-        EngineError::CasMismatch {
-            expected: 3,
-            actual: 4,
+fn e1_no_error_that_can_reach_a_log_carries_secret_material() {
+    let sealed = core_crypto::seal(&contents(), &SealKey::from_bytes([1u8; 32])).unwrap();
+
+    let mut rendered = Vec::new();
+    let mut record = |what: String| rendered.push(what);
+
+    for error in [
+        SealError::BadMagic,
+        SealError::AuthFailed,
+        SealError::UnsupportedFormat { got: 9 },
+        SealError::Rollback {
+            held: 7,
+            offered: 5,
         },
-        EngineError::CasRequired,
-        EngineError::QueueFull,
-    ];
-    for err in &errors {
-        let rendered = format!("{err} / {err:?}");
+        SealError::RandomUnavailable,
+    ] {
+        record(format!("{error} / {error:?}"));
+    }
+    // The variants that can only be produced by actually trying it.
+    for attempt in [
+        core_crypto::open(b"", &SealKey::from_bytes([1u8; 32]), None),
+        core_crypto::open(&sealed, &SealKey::from_bytes([2u8; 32]), None),
+        core_crypto::open(&sealed, &SealKey::from_bytes([1u8; 32]), Some(99)),
+    ] {
+        let error = attempt.err().expect("these should all fail");
+        record(format!("{error} / {error:?}"));
+    }
+
+    for error in [
+        TokenError::KeyMissing { tokens: 2 },
+        TokenError::HashMalformed { index: 1 },
+    ] {
+        record(format!("{error} / {error:?}"));
+    }
+    let error = core_crypto::hex::decode_into(SECRET, &mut [0u8; 32]).unwrap_err();
+    record(format!("{error} / {error:?}"));
+
+    for error in [
+        ConfigError::NoWorkers,
+        ConfigError::Missing,
+        ConfigError::Kind {
+            expected: "Resolver",
+            got: "Wrong".to_string(),
+        },
+    ] {
+        record(format!("{error} / {error:?}"));
+    }
+
+    // `ConfigError::Malformed` carries the parser's message whole, and an
+    // unknown field names the *field* rather than its value — which is the
+    // case an operator hits most and the one worth checking.
+    let malformed = naughtian_kallisto::config::parse_file(
+        &format!(
+            "apiVersion: kallisto/v1\nkind: Resolver\nspec:\n  mount: {SECRET_PATH}\n  nope: {SECRET}\n"
+        ),
+        std::path::Path::new("bad.yaml"),
+    )
+    .unwrap_err();
+    record(format!("{malformed}"));
+
+    for text in &rendered {
         assert!(
-            !rendered.contains(SECRET),
-            "{err:?} rendered the secret value"
+            !text.contains(SECRET),
+            "an error rendered the secret: {text}"
         );
         assert!(
-            !rendered.contains(SECRET_PATH),
-            "{err:?} rendered a secret path"
+            !text.contains(SECRET_PATH),
+            "an error rendered a secret path: {text}"
         );
     }
 }
 
-/// E1: `StorageError` is the one variant that carries free text, so it is the
-/// one that can be misused. This pins the rule that callers must not
-/// interpolate a payload or a path into it — the assertion is on the
-/// construction sites we control, demonstrated here on the shape the engine
-/// actually builds.
+/// E1's boundary, asserted rather than left to be discovered.
+///
+/// A *type* error from the configuration parser does echo the offending value:
+/// "invalid type: string \"...\", expected usize". That is deliberate, and it
+/// is the one place in this program where an error message quotes its input.
+///
+/// The reasoning: the configuration file is not secret-bearing by design
+/// (ADR-0003 — the seal key and the bucket credentials have no field to go in,
+/// and `deny_unknown_fields` means inventing one fails rather than being
+/// ignored), while "line 4 is wrong" with no reason is a message that costs an
+/// operator an hour. The sealed *secrets* file gets the opposite treatment:
+/// `kallisto-ctl` withholds serde's message there precisely because the value
+/// it choked on is a secret.
+///
+/// This test exists so that the trade is recorded and cannot be mistaken for an
+/// oversight. If it ever becomes wrong — if a credential gains a config field —
+/// this is the test that has to change first.
 #[test]
-fn e1_storage_error_messages_stay_generic() {
-    // Every `StorageError` the engine constructs describes the operation, never
-    // the data. If a future change interpolates a payload, this is the shape
-    // that has to keep holding.
-    let err = EngineError::StorageError("Missing version payload".to_string());
-    let rendered = format!("{err}");
-    assert!(!rendered.contains(SECRET));
-    assert!(!rendered.contains(SECRET_PATH));
+fn e1_configuration_type_errors_quote_the_value_and_that_is_on_purpose() {
+    let planted = "not-a-number-9f3a2b";
+    let error = naughtian_kallisto::config::parse_file(
+        &format!(
+            "apiVersion: kallisto/v1\nkind: Resolver\nspec:\n  workers: {planted}\n  \
+             source:\n    type: disk\n    path: /x\n"
+        ),
+        std::path::Path::new("bad.yaml"),
+    )
+    .unwrap_err();
+
+    let rendered = error.to_string();
+    assert!(
+        rendered.contains(planted),
+        "if this stops echoing the value the doc comment above is stale: {rendered}"
+    );
+    assert!(
+        rendered.contains("line 4"),
+        "the position is the part that makes the message worth the trade: {rendered}"
+    );
 }
 
-/// E1: metadata is not secret-bearing by construction — it holds version
-/// bookkeeping only. This test exists to fail if a payload-carrying field is
-/// ever added to `KeyMetadata`, which would put secrets on the metadata read
-/// path and into every metadata log line.
+/// E1: nothing that holds key material may render it.
+///
+/// Every one of these has a hand-written `Debug`, which is precisely the kind
+/// of thing a later `#[derive(Debug)]` silently undoes.
 #[test]
-fn e1_key_metadata_carries_no_payload_field() {
-    let meta = KeyMetadata {
-        current_version: 2,
-        oldest_version: 1,
-        max_versions: 5,
-        cas_required: true,
-        delete_version_after_ms: 1000,
-        custom_metadata: [("owner".to_string(), "platform".to_string())]
-            .into_iter()
-            .collect(),
-        versions: vec![VersionState {
-            created_time_ms: 1,
-            deletion_time_ms: 0,
-            version_id: 1,
-            destroyed: false,
-        }],
-    };
+fn e1_key_material_never_renders_itself() {
+    let token_key = TokenKey::from_bytes([0xab; 32]);
+    let table = TokenTable::build(
+        &token_key.expose_as_hex(),
+        &BTreeMap::from([(token_key.hash_hex("s.token"), vec!["db".to_string()])]),
+        &BTreeMap::new(),
+    )
+    .unwrap();
 
-    let rendered = format!("{meta:?}");
-    assert!(!rendered.contains(SECRET), "metadata Debug leaked a secret");
+    let renderings = [
+        format!("{:?}", SealKey::from_bytes([0xab; 32])),
+        format!("{token_key:?}"),
+        format!("{table:?}"),
+        format!("{:?}", telemetry::LogKey::from_bytes([0xab; 32])),
+    ];
 
-    // Round-tripping a payload's value through metadata must be impossible:
-    // there is no field to put it in. If this stops compiling because a field
-    // was added, that field needs the redaction treatment too.
-    let _: fn(&KeyMetadata) -> u32 = |m| m.current_version;
+    for rendered in &renderings {
+        assert!(
+            rendered.contains("REDACTED"),
+            "key material rendered without marking the omission: {rendered}"
+        );
+        assert!(
+            !rendered.contains("abab"),
+            "key bytes leaked into Debug: {rendered}"
+        );
+        assert!(
+            !rendered.contains("s.token"),
+            "a token leaked into Debug: {rendered}"
+        );
+    }
+}
+
+/// E1: a live snapshot holds sealed bytes and nothing else readable.
+///
+/// The counterpart to the old `e1_key_metadata_carries_no_payload_field`: that
+/// one asserted a struct had no field to put a secret in, this one asserts the
+/// struct that *does* hold secrets never renders them and never stores them in
+/// the clear (ADR-0015 D13).
+#[test]
+fn e1_a_live_snapshot_renders_counts_and_stores_ciphertext() {
+    let snapshot = snapshot(&contents());
+
+    let rendered = format!("{snapshot:?}");
+    assert!(!rendered.contains(SECRET), "Snapshot Debug leaked a secret");
+    assert!(
+        !rendered.contains(SECRET_PATH),
+        "Snapshot Debug leaked a path"
+    );
+    assert!(rendered.contains("REDACTED"));
+
+    // And the bytes it holds are not the bytes it was given.
+    for sealed in snapshot.sealed_secrets() {
+        assert!(
+            !sealed
+                .ciphertext()
+                .windows(SECRET.len())
+                .any(|window| window == SECRET.as_bytes()),
+            "a live snapshot holds the cleartext"
+        );
+    }
+    // The secret is still servable — otherwise the assertion above would pass
+    // for a snapshot that simply lost it.
+    assert!(
+        snapshot
+            .with_secret(SECRET_PATH, ToString::to_string)
+            .unwrap()
+            .unwrap()
+            .contains(SECRET)
+    );
 }
 
 // -----------------------------------------------------------------------------

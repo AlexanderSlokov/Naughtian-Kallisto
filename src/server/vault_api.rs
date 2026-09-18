@@ -492,6 +492,45 @@ async fn read_only(State(state): State<ApiState>) -> Response {
     denied()
 }
 
+/// The read path's own parsers, exposed to the fuzz targets only (ADR-0013 V3).
+///
+/// Every one of these runs on a caller-supplied URI before any authorization
+/// decision is made, and three of them index into a query string by byte offset
+/// after a `find` — which is exactly where a multi-byte UTF-8 boundary panics.
+/// A panic in a worker takes that worker's connection down, so this is a
+/// liveness surface as well as a correctness one.
+#[cfg(feature = "fuzzing")]
+pub mod fuzz_api {
+    use axum::http::{Method, Uri};
+
+    pub fn extract_mount_and_path<'a>(
+        uri_path: &'a str,
+        expected_action: &str,
+    ) -> Option<(&'a str, &'a str)> {
+        super::extract_mount_and_path(uri_path, expected_action)
+    }
+
+    pub fn version_param(uri: &Uri) -> Option<u64> {
+        super::version_param(uri)
+    }
+
+    pub fn wants_list(uri: &Uri) -> bool {
+        super::wants_list(uri)
+    }
+
+    pub fn policy_path(uri: &Uri) -> &str {
+        super::policy_path(uri)
+    }
+
+    pub fn classify<'a>(method: &Method, uri: &'a Uri) -> (&'static str, Option<&'a str>) {
+        super::classify(method, uri)
+    }
+
+    pub fn presented_token(headers: &axum::http::HeaderMap) -> Option<&str> {
+        super::presented_token(headers)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
