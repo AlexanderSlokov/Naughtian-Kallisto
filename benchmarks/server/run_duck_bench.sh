@@ -31,7 +31,7 @@ PORT=8200
 
 WORKDIR=$(mktemp -d /tmp/kallisto_duck_bench.XXXXXX)
 SERVER_BIN="./target/release/kallisto-server"
-SEAL_FIXTURE="./target/release/examples/seal_fixture"
+CTL="./target/release/kallisto-ctl"
 
 GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; NC='\033[0m'
 
@@ -44,7 +44,7 @@ trap cleanup EXIT
 
 command -v wrk2 &>/dev/null || { echo -e "${RED}wrk2 not found${NC}"; exit 1; }
 [ -f "$SERVER_BIN" ] || { echo -e "${RED}$SERVER_BIN missing — run 'make build-server' first${NC}"; exit 1; }
-[ -f "$SEAL_FIXTURE" ] || { echo -e "${RED}$SEAL_FIXTURE missing — run 'cargo build --release --example seal_fixture'${NC}"; exit 1; }
+[ -f "$CTL" ] || { echo -e "${RED}$CTL missing — run 'cargo build --release -p kallisto-ctl'${NC}"; exit 1; }
 
 echo ""
 printf "${CYAN}  %-14s ${YELLOW}%s${NC}\n" "Cores:" "$TOTAL_CORES"
@@ -62,9 +62,9 @@ json.dump({"version": 1, "secrets": secrets, "policies": {}, "tokens": {}},
           open(sys.argv[1], "w"))
 PY
 
-KALLISTO_SEAL_KEY=$(python3 -c 'import secrets; print(secrets.token_hex(32))')
+KALLISTO_SEAL_KEY=$("$CTL" gen-key 2>/dev/null)
 export KALLISTO_SEAL_KEY
-$SEAL_FIXTURE "$WORKDIR/plain.json" "$WORKDIR/secrets.kal" >/dev/null
+"$CTL" seal --in "$WORKDIR/plain.json" --out "$WORKDIR/secrets.kal" >/dev/null
 
 # The limiter defaults to 20k/s per worker (ADR-0015 D14). Lifted here on
 # purpose: this run measures the serving path, not the token bucket. Leaving the

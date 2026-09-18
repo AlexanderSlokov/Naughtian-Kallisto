@@ -257,6 +257,11 @@ ADR-0004 is `suspended`. To be explicitly clear:
 - WebUI on the data plane is strictly forbidden.
 - Fleet-wide observability belongs to Prometheus + Grafana. The repo provides `dashboard.json`.
 - A TUI will only be reconsidered if proven necessary for node-local diagnostics. If built, it communicates via the 8202 admin API and **never** displays secret values.
+- Superseded in practice by the duck plan's M7: the `ratatui` stub became `kallisto-ctl`, a set of one-shot
+  offline commands (`seal`, `verify`, `bump-version`, `mint-token`, `gen-key`, `validate`, `open`). ADR-0004
+  stays `suspended` rather than rejected — what was actually needed turned out to be something that composes
+  with a Makefile and a CI job, not a screen to sit in front of. The admin API on 8202 is itself gone under
+  ADR-0015.
 
 ---
 

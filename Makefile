@@ -92,7 +92,7 @@ bench-laptop:
 # in-memory barrier is on it. Same script both times, so the two numbers are
 # comparable.
 bench-duck: build-server
-	@cargo build --release --example seal_fixture
+	@cargo build --release -p kallisto-ctl
 	@bash benchmarks/server/run_duck_bench.sh
 
 full-bench-server: clean build-server bench-server
@@ -152,6 +152,9 @@ help:
 	@echo "    make bench-release  - Release benchmark (wrk2: raw throughput + latency)"
 	@echo "    make bench-laptop   - Laptop benchmark (wrk2: 30k req/s, expected latency ~1.5ms avg)"
 	@echo "    make bench-duck     - Resolver read path (wrk2, seeded from a sealed file)"
+	@echo ""
+	@echo "  Offline tool:"
+	@echo "    cargo run -p kallisto-ctl -- help   - seal, verify, bump-version, mint-token, validate"
 	@echo "    cargo bench         - Run all in-process Rust Criterion benchmarks"
 	@echo ""
 	@echo "  Run:"

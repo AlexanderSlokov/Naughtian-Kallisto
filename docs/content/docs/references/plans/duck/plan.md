@@ -370,6 +370,28 @@ Hàng đợi đầy gần như suốt cả lượt chạy, độ trễ **không 
 
 Khoá đọc từ env, không nhận qua tham số dòng lệnh (tham số lộ qua `ps`).
 
+**Đã thi hành.** Năm lệnh theo kế hoạch, cộng **hai lệnh không có trong kế hoạch** — và lý do thêm chúng là chỗ đáng ghi nhất của mốc này:
+
+**`mint-token` đóng một lỗ làm M4 không dùng được.** Khoá của hàng trong map `tokens` là `HMAC-SHA256(token_key, "kallisto/token/v1\0" || token)`. Cái nhãn đứng trước token nghĩa là **`openssl dgst -hmac` không tính ra được giá trị đó** — không có cờ nào nhét thêm tiền tố vào message. Tức là từ M4 tới giờ, bảng token của D8 tồn tại trong code nhưng operator không có cách nào tạo ra một hàng hợp lệ. `mint-token` sinh token ngẫu nhiên 256 bit, in **token ra stdout** (để pipe vào chỗ cất) và **dòng cần dán ra stderr**, nên `mint-token ... > token.txt` lấy đúng token và không lẫn gì khác.
+
+**`gen-key`** in 32 byte từ RNG hệ thống. Nhỏ, nhưng nó gỡ câu "chạy `openssl rand -hex 32`" khỏi tài liệu — một công thức mà người đọc phải tự tin là đúng.
+
+Những chỗ khác đáng ghi:
+
+* **`seal` chặn rollback trước khi ghi.** Seal đè version thấp hơn (hoặc bằng) version đang nằm ở file đích tạo ra một file mà resolver **lặng lẽ từ chối**: bucket nhận upload bình thường, sidecar vẫn phục vụ bản cũ, và không ai biết. Kiểm bằng `peek_version`, không tốn một phép crypto nào và không cần khoá. `--force` là lối thoát khi dựng lại từ đầu.
+* **`seal` từ chối file có token mà không có `token_key`** — hình dạng duy nhất resolver vứt thẳng. Nghe từ công cụ vừa ghi file thì hơn là từ một sidecar không chịu khởi động.
+* **`bump-version` phải mở file ra rồi seal lại**, không sửa tại chỗ được: số version nằm ở cả header lẫn thân, và header là AAD của AEAD.
+* **Thông báo lỗi parse không chuyển tiếp message của `serde_json`** — nó trích dẫn giá trị vừa gây lỗi, mà ở file này giá trị đó là secret. Giữ lại dòng/cột, thêm hình dạng mong đợi, và **nói rõ là đã giấu message gốc cùng lý do**.
+* **`--seal-key` và `--token-key` bị từ chối theo tên**, y như server, và thông báo không lặp lại giá trị.
+
+**Một chỗ tôi viết sai và test bắt được ngay:** tài liệu và thông báo của tôi viết `tokenKey` — vì file **config** dùng camelCase kiểu k8s. Nhưng **file secret là JSON dùng `token_key`**, và `deny_unknown_fields` biến chênh lệch đó thành lỗi cứng chứ không phải trường bị bỏ qua. Đã sửa, và thông báo lỗi parse giờ nói thẳng ra sự khác biệt đó.
+
+**Test chạy binary thật**, không phải hàm thư viện: `cmd/kallisto-ctl/tests/round_trip.rs` mint một token bằng chính công cụ, dán hash vào plaintext, seal, rồi **dựng `Snapshot` và khẳng định resolver chấp nhận token đó** — và chỉ cho đúng đường dẫn policy cho phép. Đó là bằng chứng duy nhất rằng `mint-token` đáng có. Ba mutation đã được kiểm: dùng digest trần thay vì keyed hash có nhãn (đúng thứ operator sẽ tự làm bằng `openssl`), so sánh rollback ngược chiều, và `open` quên đòi cờ — mỗi cái bị đúng một test giết.
+
+**`examples/seal_fixture.rs` bị xoá.** Comment của chính nó ghi là nó tồn tại cho tới khi có `kallisto-ctl` ở M7. `run_duck_bench.sh` giờ gieo dữ liệu bằng `kallisto-ctl gen-key` + `seal`, đã chạy lại và vẫn đúng (29.3k req/s ở mục tiêu 30k).
+
+`ratatui` bị gỡ khỏi `Cargo.toml` của crate, sớm hơn M-X một bước — crate được viết lại nguyên nên giữ lại một dependency không ai gọi là vô nghĩa. Package đổi tên `kallisto_tui` → `kallisto-ctl`, binary `kallisto-tui` → `kallisto-ctl`.
+
 ### M8 — Bộ test con vịt
 
 Đây là fitness function của cả dự án, không phải phần phụ.
