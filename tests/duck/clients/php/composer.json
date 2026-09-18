@@ -1,0 +1,8 @@
+{
+  "require": {
+    "csharpru/vault-php": "^4.2",
+    "php-http/guzzle7-adapter": "^1.0",
+    "guzzlehttp/guzzle": "^7.8"
+  },
+  "config": { "allow-plugins": { "php-http/discovery": true } }
+}
