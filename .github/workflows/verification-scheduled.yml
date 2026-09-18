@@ -1,0 +1,144 @@
+name: Verification (Scheduled)
+
+# ADR-0013 §5: only `make verify` sits on the PR critical path. Everything here
+# is too slow for a PR gate and runs on a schedule instead. Every job is
+# `continue-on-error` so a red scheduled run cannot block a merge.
+#
+# Three-strikes rule (ADR-0013 §5): a job that fails three consecutive runs
+# without a fix gets removed. A permanently red job is worse than no job.
+
+on:
+  schedule:
+    # Nightly at 02:00 UTC.
+    - cron: '0 2 * * *'
+    # Weekly on Sunday at 04:00 UTC, for the mutation sweep.
+    - cron: '0 4 * * 0'
+  workflow_dispatch:
+    inputs:
+      job:
+        description: 'Which suite to run (all, loom, fuzz, mutants, durability)'
+        required: false
+        default: 'all'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  loom:
+    name: Loom (exhaustive interleavings)
+    if: github.event.schedule != '0 4 * * 0'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      # No OS dependencies: kallisto_queue does not pull in RocksDB. That is the
+      # point of it being a separate crate — `--cfg loom` makes tokio drop
+      # `tokio::net`, which breaks hyper-util anywhere it is in the graph.
+      - name: Run loom
+        run: make loom
+
+  fuzz:
+    name: Fuzz (15m per target)
+    if: github.event.schedule != '0 4 * * 0'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install nightly Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-x86_64-unknown-linux-gnu
+
+      - name: Install OS dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Build fuzz targets
+        run: make fuzz-build
+
+      - name: Run fuzz targets
+        run: make fuzz
+
+      - name: Upload crash artefacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
+
+  durability:
+    name: Durability (D1/D2, kill -9)
+    if: github.event.schedule != '0 4 * * 0'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+
+      - name: Install OS dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Run durability tests
+        run: make durability
+
+      - name: Upload server log
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: durability-log
+          path: tests/test_persistence.log
+          if-no-files-found: ignore
+
+  mutants:
+    name: Mutation testing (weekly)
+    if: github.event.schedule == '0 4 * * 0' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+
+      - name: Install OS dependencies
+        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Install cargo-mutants
+        run: cargo install cargo-mutants --locked
+
+      - name: Run mutation sweep
+        run: make mutants-all
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: mutants-report
+          path: mutants.out/
+          if-no-files-found: ignore

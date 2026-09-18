@@ -142,8 +142,8 @@ mod tests {
             parse_vault_duration("3h25m19s").unwrap(),
             (3 * 3600 + 25 * 60 + 19) * 1000
         );
-        assert!(parse_vault_duration("3").is_err());
-        assert!(parse_vault_duration("3x").is_err());
+        parse_vault_duration("3").unwrap_err();
+        parse_vault_duration("3x").unwrap_err();
     }
 
     #[test]
