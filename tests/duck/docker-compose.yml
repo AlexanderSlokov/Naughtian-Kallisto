@@ -1,0 +1,57 @@
+# The duck test: if it walks like Vault and quacks like Vault.
+#
+# ADR-0015's Confirmation section makes this the fitness function of the whole
+# project, not a nice-to-have. Every other test in this repository is written
+# against Kallisto's own idea of what Vault does. These three are written
+# against Vault's *clients* — the official Go SDK, the most widely used Python
+# one, and a PHP one — and none of them has been told that the server is not
+# Vault. That is the only way to find out whether the compatibility claim in the
+# README is true.
+#
+# `network_mode: host` on every service, deliberately. ADR-0015's first
+# operational rule is that port 8200 is never exposed beyond localhost, and the
+# resolver refuses to start on any other address. A bridge network would mean
+# publishing the port to test it, which is testing a deployment nobody should
+# run. On the host network the clients reach 127.0.0.1:8200 exactly as an
+# application on the same machine does.
+
+services:
+  # The bucket. MinIO rather than Garage only because its image is smaller and
+  # its setup is one environment variable; ADR-0015 D2 cares that it is
+  # S3-compatible, not which one.
+  minio:
+    image: quay.io/minio/minio:latest
+    network_mode: host
+    command: server /data --address 127.0.0.1:9000 --console-address 127.0.0.1:9001
+    environment:
+      MINIO_ROOT_USER: kallistotest
+      MINIO_ROOT_PASSWORD: kallistotest
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  go-client:
+    build: ./clients/go
+    network_mode: host
+    profiles: ["clients"]
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_TOKEN: ${DUCK_TOKEN:-}
+
+  python-client:
+    build: ./clients/python
+    network_mode: host
+    profiles: ["clients"]
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_TOKEN: ${DUCK_TOKEN:-}
+
+  php-client:
+    build: ./clients/php
+    network_mode: host
+    profiles: ["clients"]
+    environment:
+      VAULT_ADDR: http://127.0.0.1:8200
+      VAULT_TOKEN: ${DUCK_TOKEN:-}

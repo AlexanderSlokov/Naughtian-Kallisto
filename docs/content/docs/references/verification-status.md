@@ -8,7 +8,7 @@ reported as explicitly as proven ones — "an unproven invariant list is as
 valuable as the proven list" — and that every invariant test be demonstrably
 fail-able. Both are recorded here.
 
-Last reviewed: 2026-09-15.
+Last reviewed: 2026-09-18.
 
 ## How to read this
 
@@ -19,51 +19,40 @@ Last reviewed: 2026-09-15.
 | **Partial**   | Covered for part of its stated scope. The uncovered part is named.                         |
 | **Unproven**  | No check. The blocker is named.                                                            |
 
-`make verify` is the only blocking gate. `loom`, `fuzz`, `durability` and
-`mutants` run on a schedule (`.github/workflows/verification-scheduled.yml`).
+| **Retired**   | The code the invariant constrained no longer exists. What replaced it is named. |
 
-## Group A — KV-v2 semantics
+`make verify` is the only blocking gate. `loom`, `fuzz` and `mutants` run on a
+schedule (`.github/workflows/verification-scheduled.yml`).
 
-Covered by `cargo test -p kallisto_kv_model` (`make verify-proptest`).
+> **ADR-0015 deleted a large part of what this document covered.** The storage
+> engine, the RocksDB backend, the cuckoo cache and the KV-v2 *write* model are
+> gone, and with them Group A, half of Group B, part of Group C, and all of
+> Group D. Those sections are kept rather than deleted, marked **Retired**,
+> because "this was proven and then the code went away" and "this was never
+> proven" are different facts and a reader deserves to tell them apart. What
+> replaced the behavioural half of them is `make duck`: three real Vault SDKs
+> driving the real server.
 
-The strongest check in this group is **`prop_matches_oracle`**: a differential
-property test that runs random operation sequences through `apply` and through
-`oracle::Oracle`, an independent reference implementation that shares no code
-with it, and requires identical observable state at every step.
+## Group A — KV-v2 semantics — **Retired**
 
-| ID                                 | Status    | Check                                                                                                                                                                 | Fails if you                                                                                 |
-|------------------------------------|-----------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------|
-| A1 monotonic `current_version`     | Proven    | `prop_a1_current_version_monotone`                                                                                                                                    | make `apply_put` reuse or decrement `current_version`                                        |
-| A2 versions ascending, no dups     | Proven    | `prop_a2_versions_strictly_ascending`                                                                                                                                 | insert the new version anywhere but the tail                                                 |
-| A3 `destroyed` is terminal         | Proven    | `prop_a3_destroyed_is_terminal`, `a3_undelete_on_destroyed_is_a_noop`                                                                                                 | drop the `destroyed` guard in `apply_undelete`                                               |
-| A4 CAS mismatch is inert           | Proven    | `prop_a4_cas_mismatch_is_inert`, `prop_a4_cas_required_rejects_missing_cas`                                                                                           | move the CAS check after `new_meta.current_version += 1`, or drop the `cas_required` arm     |
-| A5 write yields a readable version | Qualified | `prop_a5_put_yields_a_readable_version`                                                                                                                               | remove `Effect::WriteVersion`, `WriteMeta` or `IndexPath` from the put effects               |
-| A6 `undelete ∘ soft_delete = id`   | Qualified | `prop_a6_undelete_inverts_soft_delete`, `prop_a6_undelete_rearms_ttl`                                                                                                 | zero `deletion_time_ms` on undelete when a TTL is configured                                 |
-| A7 `versions.len() ≤ max_versions` | Qualified | `prop_a7_max_versions_enforced_after_write`, `prop_a7_retains_newest_window`, `a7_default_limit_applies_when_unset`, `a7_lowering_the_limit_defers_to_the_next_write` | skip destroyed versions while pruning, or treat `max_versions == 0` as "no limit"            |
-| A8 destroy keeps `VersionState`    | Proven    | `a8_destroy_retains_version_state`                                                                                                                                    | remove the `VersionState` instead of setting `destroyed`                                     |
-| A9 storage keys injective          | Proven    | `prop_a9_storage_keys_are_injective`, `prop_a9_meta_key_roundtrips`, `a9_rejects_pre_length_prefix_keys`                                                              | revert either key builder to `{prefix}:{path}`, or read a path back with a fixed byte offset |
+Covered by `cargo test -p kallisto_kv_model`, which no longer exists.
 
-### Where ADR-0013's wording is imprecise
+Every invariant in this group (A1–A9) constrained the KV-v2 **write** path:
+version monotonicity, CAS, soft-delete, undelete, destroy, retention windows.
+ADR-0015 D1 made every one of those operations answer `403 permission denied`,
+and `components/kallisto_kv_model` — including `oracle::Oracle`, the independent
+reference implementation the differential test ran against — was deleted with
+them. Nine invariants went from Proven to irrelevant in one commit.
 
-**A7** is stated as "`versions.len() ≤ max_versions` after trimming". That is
-only true *after a write*. Lowering `max_versions` through a metadata update does
-not prune retroactively; the next write catches up in one pass. A property test
-asserting the unqualified form fails on the sequence
-`Put, Put, Put, UpdateMeta{max_versions: 1}`. ADR-0013 should be amended to say
-"after a write".
+This is recorded rather than quietly dropped because the work was not wasted and
+the reasoning should survive it: a differential property test against a
+separately written oracle is the strongest check in this repository's history,
+and if a write path ever returns, this is the shape it should be verified in.
 
-**A6** is stated as "`undelete ∘ soft_delete = identity` for non-destroyed
-versions". It holds only when `delete_version_after` is disabled. With a TTL
-configured, undelete re-arms the timer from the undelete time, so the version
-returns with a different `deletion_time_ms` than it had before the soft delete.
-Both halves are tested separately.
-
-**A5** is stated as "`put` followed by `read` of that version returns the exact
-payload written". The model carries no payload — `KvOp::Put` only records
-`payload_len` — so the model-level test covers the metadata half: the version
-exists, is readable at write time, and the engine is told to write the payload,
-the metadata and the path index. **The payload round-trip itself is covered at
-the engine level, not here**, by `tests/e2e_vault_compat.rs`.
+The behavioural gate that replaced it is **`make duck`**, which is a different
+kind of check — three real Vault SDKs against the real server, testing
+compatibility rather than semantics, because compatibility is what is left to
+get wrong.
 
 ## Group B — concurrency
 
@@ -74,34 +63,29 @@ the `kallisto_queue::sync` shim, not a copy of it.
 |---------------------------------------------------|--------------|------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
 | B1 no loss, no double-dequeue                     | Proven       | `b1_item_neither_lost_nor_duplicated`, `b1_concurrent_producers_preserve_every_success`, plus `tests/queue_stress.rs` at real contention | publish `sequence` before writing the slot, or advance `dequeue_pos` without reading     |
 | B2 full queue rejects, no overwrite               | Proven       | `b2_full_queue_rejects_without_overwriting`, `b2_slot_handover_is_exact`                                                                 | return `Ok` instead of `Err(Full)` when `dif < 0`, or drop the `dif < 0` branch entirely |
-| B3 cuckoo insert→lookup                           | **Unproven** | —                                                                                                                                        | see below                                                                                |
-| B4 CLOCK eviction leaves no dangling read         | **Unproven** | —                                                                                                                                        | see below                                                                                |
-| B5 `async_worker.join()` before `rocksdb.flush()` | **Unproven** | —                                                                                                                                        | see below                                                                                |
+| B3 cuckoo insert→lookup                           | **Retired**  | —                                                                                                                                        | see below                                                                                |
+| B4 CLOCK eviction leaves no dangling read         | **Retired**  | —                                                                                                                                        | see below                                                                                |
+| B5 `async_worker.join()` before `rocksdb.flush()` | **Retired**  | —                                                                                                                                        | see below                                                                                |
 
-### Why B3/B4 are not loom tests
+### B3, B4 and B5 went with the code
 
-`CuckooTable` guards all of its state with a single `parking_lot::RwLock`
-(`src/engine/cuckoo_table/table.rs:15`). B3 and B4 are therefore *logic*
-invariants under a lock, not memory-ordering invariants, and loom is the wrong
-instrument: loom cannot model `parking_lot`, and replacing the lock with
-`loom::sync::RwLock` would verify a different data structure.
+All three constrained the storage engine: the cuckoo cache's concurrent
+insert/lookup/evict interleavings, and `KvEngine`'s drop order around RocksDB.
+ADR-0015 deleted `src/engine/` and `src/storage/` entirely.
 
-What covers them today: `src/engine/cuckoo_table/tests.rs` and
-`src/engine/sharded_cuckoo_table.rs`'s tests, including the fill-to-capacity and
-hash-decorrelation regression tests. That is real coverage of the logic, but it is
-single-threaded, so **concurrent** insert/lookup/evict interleavings remain
-unverified. Closing this properly means either a multi-threaded stress test with
-an invariant oracle, or `shuttle` — which ADR-0013 already names as the fallback
-for exactly this case.
+They were **Unproven** when they were deleted, and that is the honest way to
+record it: they are not a debt that was paid, they are a debt that was
+cancelled. The reasoning that kept them unproven is still worth knowing, because
+it applies to any future cache: `CuckooTable` guarded its state with a single
+`parking_lot::RwLock`, which made B3 and B4 *logic* invariants under a lock
+rather than memory-ordering invariants — loom is the wrong instrument for those,
+since it cannot model `parking_lot`, and swapping in `loom::sync::RwLock` would
+verify a different data structure. `shuttle`, which ADR-0013 already names as the
+fallback for exactly this case, remains the right answer if one is needed again.
 
-### Why B5 is not a loom test
-
-Drop order is a sequential property of `impl Drop for KvEngine`, not a
-concurrency property: `async_worker.join()` and `rocksdb.flush()` are called in
-that order on one thread (`src/engine/kv_engine.rs`). Loom adds nothing. A
-regression test that asserts the ordering observably — a worker that records a
-completion marker the flush path then requires — is straightforward and is the
-right fix. It is not written yet.
+B1 and B2 are untouched: `kallisto_queue` survives, and ADR-0015 D15 gave it a
+second job draining the access log — this time with several real producers, which
+is the first use of the queue's MPMC half for its actual purpose.
 
 ## Group C — memory safety
 
@@ -109,87 +93,180 @@ Covered by `make verify-miri` (blocking).
 
 | ID                                          | Status  | Check                                                             | Fails if you                                                              |
 |---------------------------------------------|---------|-------------------------------------------------------------------|---------------------------------------------------------------------------|
-| C1 `archived_root` triggers no UB           | Partial | `engine::traits::rkyv_safety` under Tree Borrows                  | read past the archived vector's length                                    |
+| C1 `archived_root` triggers no UB           | **Retired** | —                                                             | see below                                                                 |
 | C2 `unsafe impl Send/Sync` sound            | Proven  | `kallisto_queue::tests::send_across_thread` under Miri            | take the slot pointer from a shared reference instead of the `UnsafeCell` |
 | C3 dropping a non-empty queue leaks nothing | Proven  | `kallisto_queue::tests::drop_partially_filled_no_leak` under Miri | remove the drain loop from `impl Drop`                                    |
 
-### C1's scope, stated plainly
+### C1 was closed by deletion, which is the outcome ADR-0015 D12 predicted
 
-What is verified: `archived_root` over archives **this crate produced**, which is
-the only case the engine's read path has a contract for.
+`rkyv` is gone. The invariant was **Partial**: verified for archives this crate
+produced, unverified for corrupted or attacker-chosen bytes, because the engine
+called `unsafe { rkyv::archived_root::<T>(bytes) }` with no validation and
+malformed input was undefined behaviour by contract. Closing it properly meant
+`#[archive(check_bytes)]` and the rkyv 0.8 migration — and because archives were
+already on disk, that was a **data migration**, not a dependency bump.
 
-Two things are *not* verified, and both are recorded rather than hidden:
+ADR-0015 D12 argued the dependency was not worth its cost. Deleting the storage
+engine turned a data migration into a line removed from `deny.toml`:
+`RUSTSEC-2026-0235` and `RUSTSEC-2025-0141` are both gone, and the `ignore` list
+is now empty for the first time in this project's history.
 
-1. **Corrupted or attacker-chosen bytes.** The engine calls
-   `unsafe { rkyv::archived_root::<T>(bytes) }` with no validation, so malformed
-   input is undefined behaviour by contract. Closing this needs
-   `#[archive(check_bytes)]` plus a validated read path — the same work as the
-   rkyv 0.8 migration, since the archived byte layout changes and persisted
-   secrets written by 0.7 need a read path or a format version tag. Tracked with
-   RUSTSEC-2026-0235, which is ignored in `deny.toml` because its exploit path is
-   the *checked* API that Kallisto never calls.
-2. **Stacked Borrows.** Under Miri's default model, rkyv 0.7's `ArchivedVec`
-   derives a pointer to the vector's elements from a `RelPtr` field, and the
-   resulting range lies outside the retagged field — which Stacked Borrows
-   rejects. Tree Borrows accepts it, and Miri itself reports Stacked Borrows as
-   experimental, so `make verify-miri-rkyv` runs under Tree Borrows.
+The second half of the old note is worth keeping as a record of method: the rkyv
+test ran under **Tree Borrows** rather than Miri's default Stacked Borrows,
+because rkyv 0.7's `ArchivedVec` derived an element pointer from a `RelPtr`
+field in a way Stacked Borrows rejects. That was declared as a choice of
+aliasing model, not an exemption — ADR-0013 forbids `#[cfg_attr(miri, ignore)]`
+and none is used anywhere in this workspace, then or now.
 
-   This is **not** a Miri exemption: ADR-0013 forbids `#[cfg_attr(miri, ignore)]`
-   and none is used anywhere in this workspace. It is a choice of aliasing model,
-   declared here, with the residual risk being that if Stacked Borrows becomes
-   the accepted model, this pattern needs the rkyv 0.8 migration to stay sound.
+C2 and C3 are untouched. `kallisto_queue` is the only `unsafe` left that Miri
+has anything to say about, and `make verify-miri` is now exactly that one crate.
 
-## Group D — durability
+## Group D — durability — **Retired**
 
-Covered by `make durability` (scheduled). `tests/integration/test_persistence.sh`
-asserts and exits non-zero on failure.
+Nothing is written any more, so there is nothing to lose.
 
-| ID                                   | Status | Check                      | Fails if you                                                                                       |
-|--------------------------------------|--------|----------------------------|----------------------------------------------------------------------------------------------------|
-| D1 immediate mode survives `kill -9` | Proven | `D1` in the script         | stop propagating `SyncMode::Immediate` to RocksDB's WAL `sync` flag                                |
-| D2 batch mode's documented contract  | Proven | `D2a`, `D2b` in the script | make write-behind never flush (D2a), or let a mid-window crash damage an already-durable key (D2b) |
+| ID                                   | Status      | Check | Fails if you |
+|--------------------------------------|-------------|-------|--------------|
+| D1 immediate mode survives `kill -9` | **Retired** | —     | —            |
+| D2 batch mode's documented contract  | **Retired** | —     | —            |
 
-D2 is asserted in the shape the contract actually makes: once the write-behind
-window has passed the write **must** be durable (D2a, fail-able), and a crash
-inside the window **may** lose the write but must leave the store openable and
-previously-durable keys intact (D2b). The test accepts 200 or 404 for the
-in-flight key and nothing else.
+Both were **Proven**, by `tests/integration/test_persistence.sh` under a real
+`kill -9`, and both constrained RocksDB's WAL sync behaviour behind the
+`/admin/mode/{immediate,batch}` switch. ADR-0015 removed the write path, the
+admin API and RocksDB; the script, the `make durability` target and the
+scheduled CI job are deleted.
+
+What took its place is not a durability property at all but an *availability*
+one, and it is worth naming because it is the question an operator actually has
+now: the resolver keeps an encrypted copy of the file on local disk and serves
+from it when the bucket is unreachable (ADR-0015 D5). That is covered by the
+refresh loop's tests and by `make duck`'s bucket-down case, not here.
 
 ## Group E — security
 
 Covered by `make verify-security` (blocking).
 
-| ID                                                       | Status       | Check                                       | Fails if you                                                             |
-|----------------------------------------------------------|--------------|---------------------------------------------|--------------------------------------------------------------------------|
-| E1 no plaintext secrets in `Debug`/`Display`/errors/logs | Proven       | six tests in `tests/security_invariants.rs` | replace `SecretPayload`'s hand-written `Debug` with `#[derive(Debug)]`   |
-| E2 token comparison is constant-time                     | **Unproven** | —                                           | blocked: no token authentication exists in this workspace                |
-| E3 explicit `deny` overrides `allow`                     | **Unproven** | —                                           | blocked: `components/kallisto_policy` is a 3-line stub with no evaluator |
+| ID                                                       | Status | Check                                                                  | Fails if you                                                                          |
+|----------------------------------------------------------|--------|------------------------------------------------------------------------|---------------------------------------------------------------------------------------|
+| E1 no plaintext secrets in `Debug`/`Display`/errors/logs | Proven | six `e1_*` tests in `tests/security_invariants.rs`                        | replace `Contents`' or `TokenKey`'s hand-written `Debug` with `#[derive(Debug)]`      |
+| E2 token comparison is constant-time                     | Proven | three `e2_*` tests, against `policy_engine::TokenTable::lookup`          | compare a prefix, suffix or truncation of the hash; store a bare digest of the token   |
+| E3 explicit `deny` overrides `allow`                     | Proven | two `e3_*` tests, against `RuleSet::allows` and `Snapshot::permits`      | let a grant win over a `deny` that matches the same path, in either written order      |
+| D15 nothing in the code is named an audit log            | Proven | `d15_nothing_in_the_code_is_named_audit`                                 | name a file, type, field or config key `audit` anywhere outside a comment              |
+| D15 log identifiers are keyed and domain-separated       | Proven | `d15_path_identifiers_cannot_be_used_against_the_token_table`            | hash a path under the token label, or with the token key directly                      |
+| D15 no log line carries cleartext                        | Proven | `d15_a_rendered_log_line_carries_no_cleartext`                           | write a path, token or value into a line instead of its identifier                     |
 
-E1 covers `{:?}`, `{:#?}`, nesting inside a derived `Debug`, every `EngineError`
-variant's `Display`, and the absence of any payload-carrying field on
-`KeyMetadata`.
+E1 covers `{:?}`, `{:#?}`, nesting inside a derived `Debug`, every error type on
+the read path that can reach a log line, every type holding key material, and a
+live `Snapshot` — both its rendering and the bytes it actually stores.
 
-E2 and E3 have **no tests at all**, deliberately. ADR-0013 marks Group E as
-blocking, so the temptation is to write something that passes — and that is what
-was there before: `e2_token_comparison_uses_ct_eq` grepped the source tree, found
-nothing, printed a warning and passed; `e3_policy_deny_overrides_allow` had an
-empty body with a `TODO`. A test that cannot fail reports a gate that does not
-exist, and inflates the mutation score with a target nothing can kill. Both are
-now absent and recorded here. They become writable the moment token auth and a
-policy evaluator land, and they must land together with them.
+**E1 was rewritten when the storage engine was deleted, and the rewrite is the
+part worth reading.** Its subjects used to be `SecretPayload`, `KeyMetadata` and
+`EngineError`: types belonging to a write path that no longer exists. Deleting
+them would have quietly taken E1's six tests with them and left the invariant
+marked Proven by nothing. The invariant did not change — its subjects did, and
+they are now the types a secret actually passes through. All four redaction
+tests were confirmed by replacing a hand-written `Debug` with a derived one and
+watching them fail.
+
+**One boundary, asserted rather than left to be found.** A *type* error from the
+configuration parser does quote the offending value: `invalid type: string
+"...", expected usize`. That is the single place in this program where an error
+message echoes its input, and it is deliberate. The configuration file is not
+secret-bearing by design (ADR-0003: the seal key and bucket credentials have no
+field to go in, and `deny_unknown_fields` means inventing one fails), while
+"line 4 is wrong" with no reason costs an operator an hour. The sealed *secrets*
+file gets the opposite treatment — `kallisto-ctl` withholds serde's message
+there precisely because the value it choked on is a secret.
+`e1_configuration_type_errors_quote_the_value_and_that_is_on_purpose` pins the
+trade so it cannot be mistaken for an oversight, and has to be the first test
+changed if a credential ever gains a config field.
+
+E2 and E3 were blocked until the features they constrain existed. They landed
+with `components/kallisto_policy` in M4 of the duck plan, and the tests landed
+with them, as ADR-0013 required.
+
+**What E2 proves, and what it does not.** `e2_token_comparison_does_not_match_on_a_partial_hash`
+builds a table containing nothing but near misses — the real token's hash with a
+single bit flipped, at five positions across its width — and asserts the real
+token matches none of them. That kills a prefix compare, a suffix compare and a
+truncated compare. `e2_the_stored_form_of_a_token_is_keyed` kills a bare
+SHA-256 of the token, which would make the file's plaintext a dictionary attack
+away from every token in the fleet.
+
+The remaining half of the property — that `lookup` visits *every* entry rather
+than returning at the first hit — is **not** mechanically tested, and saying so
+here is the point. No assertion over return values can distinguish an early
+return from a full scan, and a timing assertion over a handful of table entries
+would measure CI noise. It is held by the implementation, which accumulates into
+a local and returns after the loop, and by review. If that loop ever grows a
+`break` or a `return` inside it, no test in this repository will notice.
+
+An earlier version of the E2 test asserted that three tokens at three positions
+in the table each resolved correctly. A deliberately broken implementation
+comparing only the first four bytes of the hash **passed it**. That is recorded
+because it is the same failure ADR-0013 was written about: asserting that the
+right answers come back does not constrain how the answer is reached. Every
+`e2_*` and `e3_*` test here was checked by breaking the implementation on
+purpose and confirming it failed.
+
+### ADR-0015 D15, the log path
+
+These are not ADR-0013 Group E invariants, but they live in the same file and
+run under the same blocking target, because they are the same kind of property:
+a constraint that decays silently if nothing checks it.
+
+**The naming gate earned itself immediately.** `d15_nothing_in_the_code_is_named_audit`
+scans `src/`, `components/*/src/`, `cmd/*/src/` and every `.yaml`/`.toml`, and
+fails on the word outside a comment. On its first run it failed — on the
+`description` field of the telemetry crate's own `Cargo.toml`, written minutes
+earlier in the same session, reading "Not an audit log". The constraint is that
+the word must not *name* anything; a machine-readable field describing the crate
+that way is exactly the surface D15 is worried about, and prose alone would not
+have caught it.
+
+**What the domain-separation test protects.** Log path identifiers are keyed
+with `HMAC(token_key, "kallisto/log/v1\0")`, not with the token key under the
+token label. Paths are chosen by the caller, so a shared PRF would turn the
+access log into an oracle emitting `HMAC(token_key, arbitrary string)` — the
+material for a reverse table against the file's own token column. The test
+hashes the same text both ways and asserts they disagree; it was confirmed by
+substituting the forbidden simplification and watching it fail.
+
+**A test that survived its mutation, and what fixed it.** The first version of
+`the_logged_path_identifier_matches_the_key_the_file_carries` obtained its
+expected value by calling `Snapshot::path_id` — the function under test. Making
+the precomputed identifier hash the wrong string moved both sides together and
+the test stayed green. It now derives the key from the token key directly, and
+kills that mutation. This is the second time in this plan the same mistake has
+been caught (see the E2 note above); both are recorded because the pattern —
+comparing an implementation against itself — is not visible from a passing test
+run.
+
+**What is not proven here.** That the access log records *every* request is
+enforced structurally, by an axum layer rather than a call in each handler, and
+asserted for the routes that exist today
+(`every_route_produces_exactly_one_line`). A future route added outside that
+layer would not be caught by any test, in the same way E2's full-scan property
+is not.
 
 ## Tiers 2 and 3
 
 | Item                                              | Status                                                                                                                                         |
 |---------------------------------------------------|------------------------------------------------------------------------------------------------------------------------------------------------|
-| Creusot pilot on `kallisto_kv_model` (V4)         | Not started. The research task — confirm it builds in a container within 2 hours — has not been run. `make prove` prints a notice and exits 0. |
-| TLA+ specs for lease invalidation and gossip (V5) | Deferred to 1.2.0 per ADR-0013, before the control/data plane code is written.                                                                 |
+| Creusot pilot on `kallisto_kv_model` (V4)         | **Moot.** The crate it was to be piloted on is deleted (ADR-0015 D1). `make prove` prints a notice and exits 0.                                |
+| TLA+ specs for lease invalidation and gossip (V5) | **Moot.** There are no leases and no gossip: ADR-0015 D16 removed the control plane and D8 made tokens a table in a file rather than state.    |
 | `cargo-mutants` baseline score                    | Not recorded. `make mutants-core` and `make mutants-all` run, but no baseline has been captured, so there is no number to compare against.     |
 
 ## Defects found by this verification work
 
 Listed because the point of the exercise is finding these, and because each one
 was previously covered by a test that could not fail.
+
+The first eleven were found in the engine era. They are kept after that code's
+deletion for one reason: they are the evidence for *why* ADR-0013 requires every
+invariant test to be demonstrably fail-able, and deleting the evidence along with
+the code would leave the rule looking like a preference. The rows below them are
+from the resolver.
 
 | Found by        | Defect                                                                                                                                                                                                                                                                                                |
 |-----------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
@@ -204,3 +281,12 @@ was previously covered by a test that could not fail.
 | Durability test | The server ignored `--db-path` and deleted its storage directory on every startup, so nothing persisted across a restart. The benchmark scripts had been passing `--workers` and `--http-port` all along, equally ignored.                                                                            |
 | Durability test | `SyncMode::Immediate` never enabled RocksDB's WAL `sync`, so a write that answered 2xx did not survive `kill -9`. D1's guarantee was unimplemented.                                                                                                                                                   |
 | Durability test | `POST /admin/mode/immediate` and `/admin/mode/batch` returned `"OK"` without changing the mode, which made immediate mode unreachable from the API.                                                                                                                                                   |
+| Mutation check  | The first E2 test asserted that three tokens at three table positions each resolved correctly. An implementation comparing only the first four bytes of the hash **passed it**. Replaced with a table of near misses — the real hash with one bit flipped at five positions — which kills prefix, suffix and truncation compares. |
+| Mutation check  | The first test for the access log's path identifier obtained its expected value by calling `Snapshot::path_id`, the function under test. Making the precomputed identifier hash the wrong string moved both sides together and the test stayed green. It now derives the key from the token key directly. |
+| Building M5     | `open()` returned an owned `Contents`, so `serde_json` built a second copy of every secret as `String`/`Value` on the heap that nothing zeroized — surviving in freed memory, which is exactly what a core dump or a swap file picks up. The in-RAM barrier would have been decorative. `open()` now returns a borrowed view into the self-wiping buffer. |
+| Building M6     | `TokenKey::hash` rebuilt its `hmac::Key` on every call, so every request had been paying for the ipad/opad derivation since M4. |
+| Building M6     | A disabled access log still enqueued, so with no writer draining it the queue filled and every line counted as *dropped* — switching the log off would have raised the alarm that means "something is flooding this process". |
+| D15 naming gate | On its first run the new scan failed on the telemetry crate's own `Cargo.toml` description, written minutes earlier in the same session, reading "Not an audit log". |
+| Building M7     | ADR-0015 D8's token table had no way for an operator to produce a valid row: the keyed hash prefixes a label, which `openssl dgst -hmac` cannot do. The feature had been unusable since M4. `kallisto-ctl mint-token` closes it. |
+| Benchmarking    | M5 measured *faster* than M3 when the two were measured one after the other — the laptop warming up, not a result. Interleaving both binaries in one loop showed them equal. Every comparison since is interleaved. |
+| Self-review     | An external memory scan being refused was attributed to `prctl(PR_SET_DUMPABLE, 0)`. Two processes differing only in that call had identical `/proc/<pid>` ownership; the actual blocker was the machine's Yama `ptrace_scope`. The claim was retracted in the plan and in the code's doc comment. |

@@ -90,47 +90,59 @@ Use `unsafe` when it is the most appropriate solution, e.g. for FFI, extreme per
 ### Code Organization
 
 - `/cmd/` - Binary entry points only, no business logic
-    - `/cmd/kallisto-ctl/` - Kallisto control utility
-    - `/cmd/kallisto-server/` - Main Kallisto server binary; wires up `KallistoCore`, the data-plane `WorkerPool`, and the admin server
+    - `/cmd/kallisto-server/` - The resolver. Reads config, takes the seal key from the environment, starts the refresh thread and the worker pool.
+    - `/cmd/kallisto-ctl/` - The offline half: `seal`, `verify`, `bump-version`, `mint-token`, `gen-key`, `validate`, `open`. Everything that *writes* a sealed file happens here, never over the network.
 
-- `/src/` - The `naughtian_kallisto` library crate (all engine/storage/server logic)
-    - `/src/engine/` - Secret engine trait, registry, and the `KvEngine` implementation (cache, path index, RocksDB backend, lock-free async flush queue)
-	- `/src/event/worker.rs` - Data-plane `WorkerPool`: thread-per-core, SO_REUSEPORT
-	- `/src/engine/lock_free_queue.rs` - Async flusher using Dmitry Vyukov's MPMC Lock-Free Queue
-	- `/src/server/` - Axum HTTP handlers (Vault KV-v2 compatible routes), listener, admin handler
-	- `/src/storage/` - RocksDB backend, in-memory cache, async flusher
-	- `/src/net/`, `/src/thread_local/` - currently empty/reserved, no implementation yet
+- `/src/` - The `naughtian_kallisto` library crate
+    - `/src/config.rs` - K8s-shaped YAML (ADR-0003). Refuses a non-loopback bind without an explicit risk flag.
+    - `/src/resolver/` - `SecretSource` port (bucket + disk), the refresh loop on its own unpinned runtime, and `Snapshot` behind `ArcSwapOption`.
+    - `/src/server/` - `vault_api.rs` (the read surface; everything that writes answers 403), `sys.rs`, `responses.rs`, `rate_limit.rs`, `listener.rs`.
+    - `/src/event/worker.rs` - Thread-per-core `WorkerPool`, pinned, SO_REUSEPORT.
 
-- `/components/` - Modular components and libraries (Rust Workspace)
-    - `components/kallisto_cluster` - Gossip cluster membership (`foca`) & the **admin HTTP server** (port 8202, `admin_http.rs`)
-    - `components/kallisto_telemetry` - Prometheus metrics exporter & async Audit logging
-    - `components/kallisto_crypto` - Vault transit KMS client, KEK keyring, and DEK manager
-    - `components/kallisto_policy` - Engine ACL policy matching and validation
-    - Several of these are currently stubs (`pub fn hello()` only) — check the file before assuming a feature is implemented.
+- `/components/` - Workspace crates
+    - `components/kallisto_crypto` - The sealed file format, AES-256-GCM, the in-RAM barrier, process hardening.
+    - `components/kallisto_policy` - Token table (constant-time lookup) and Vault path matching.
+    - `components/kallisto_telemetry` - Access log, error log, Prometheus counters. **Not an audit log**, and a test enforces that nothing is named one.
+    - `components/kallisto_queue` - Vyukov MPMC queue, isolated so `loom` can model-check it.
 
-- `/tests/` - Integration tests (`tests/e2e_vault_compat.rs` for Vault API compat, run via `make e2e`; `tests/integration/test_persistence.sh` shell-driven persistence check)
-- `/fuzz/` - Fuzzing targets (For future use, not implemented yet)
+- `/tests/` - `security_invariants.rs` (ADR-0013 Group E + ADR-0015 D15), `queue_stress.rs`, and `tests/duck/` — three real Vault SDKs against the real server, which is the project's fitness function.
+- `/fuzz/` - `sealed_file` (the one input an attacker fully controls) and `read_path`.
 - `/docs/` - Full Hugo (Hextra theme) documentation site
 
 ### Architecture
 
-Naughtian Kallisto uses two independent Tokio setups on separate ports:
+One plane, one port. ADR-0015 turned Kallisto from a secrets *server* into a local read-only
+**resolver** that speaks Vault KV-v2 over a file on an S3-compatible bucket.
 
-- Data Plane (port 8200): Single-threaded Tokio runtime per CPU core (thread-per-core pinned with core_affinity, using SO_REUSEPORT in src/server/listener.rs and src/event/worker.rs). Avoids work-stealing and cross-core cache traffic.
-- Admin Plane (port 8202): Runs on a dedicated thread in components/kallisto_cluster/src/admin_http.rs. Handles /admin/flush, /admin/mode/{batch,immediate}, and /admin/status.
+- **Data plane (port 8200, loopback only).** One `current_thread` Tokio runtime per worker, pinned
+  with `core_affinity`, several workers on one port via SO_REUSEPORT (ADR-0016 QĐ-3). No
+  work-stealing, no cross-core cache traffic. The rate limiter, the decryption buffer and the
+  access-log producer are all per worker, so the read path never touches a shared cache line.
+- **Refresh loop.** Its own thread and runtime, deliberately *not* pinned: a slow bucket call must
+  never occupy a core that is answering reads.
+- **No admin plane.** Port 8202 and the gossip cluster are gone.
 
-Engine Layer (src/engine/):
-- traits::SecretEngine: Async port interface implementing Vault KV-v2 semantics (versioning, CAS, soft-delete, destroy).
-- engine_registry::EngineRegistry: Maps URL mount prefixes to Arc<dyn SecretEngine> using ArcSwap and write-side Mutex.
-- kv_engine::KvEngine: Main implementation combining ShardedCuckooTable (cache), TlsBTreeManager (thread-local path index), RocksDbBackend (storage), and LockFreeQueue (background flusher). Live sync modes (Immediate vs Batch) are controlled via admin API.
-- KallistoCore (src/lib.rs): Top-level handle tying EngineRegistry and default KvEngine together, shared between Data Plane and Admin Server.
+Resolver (src/resolver/):
+- `SecretSource`: a real port with two implementations (S3 bucket, local disk). Kept as a port
+  because a third source is plausible; it runs twice a minute so dynamic dispatch costs nothing.
+- `Snapshot` in `ArcSwapOption`: `None` *is* Vault's sealed state, and answers 503. A bad file
+  leaves the previous snapshot exactly where it was.
+- Anti-rollback: the content version is in the file's authenticated header, and a file older than
+  the one held is refused. The attacker in the threat model is whoever can write to the bucket, so
+  bucket versioning is under their control and only an in-process check helps.
 
-HTTP Routes:
-- Vault KV-v2 compatible endpoints mounted under /v1/:mount/ via src/server/http_handler.rs (data, subkeys, metadata, delete/undelete/destroy).
+Server (src/server/):
+- The output port is **welded shut** (ADR-0016 QĐ-4): no `SecretEngine` trait, no registry, no
+  `Arc<dyn>` on the read path. A handler loads the snapshot and reads a `HashMap`.
+- Every write route answers 403. That is the product, not an unimplemented feature.
+- Secrets are sealed *individually* in RAM under a per-snapshot key and opened into a
+  `thread_local` buffer for the length of one response (ADR-0015 D13).
 
 Tests:
-- Inline unit tests (mod tests) using handwritten mocks (e.g. MockEngine in src/engine/engine_registry.rs) instead of mocking frameworks.
-
+- Inline `mod tests` throughout, plus the integration tests above. Every security-invariant test in
+  this repository was checked by deliberately breaking the implementation and confirming it failed;
+  two of them survived that check on the first attempt and were rewritten. See
+  `docs/references/verification-status.md`.
 
 ## Building
 
@@ -158,7 +170,7 @@ make test                   # cargo test --workspace
 make e2e
 
 # Run a single test
-cargo test -p <crate> <test_name>   # e.g. cargo test -p kallisto_cluster gossip_
+cargo test -p <crate> <test_name>   # e.g. cargo test -p policy_engine token
 ```
 
 ### Code Quality
@@ -194,7 +206,7 @@ the reason, not to the inherited block.
 ### Running the server
 
 ```bash
-make run-server                                                # data plane :8200, admin/control plane :8202
+make run-server                                                # resolver on :8200, loopback only
 ./build/kallisto_server --http-port=8200 --workers=2 --db-path=/kallisto/data
 ```
 

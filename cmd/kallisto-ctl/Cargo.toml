@@ -1,12 +1,26 @@
 [package]
-name = "kallisto_tui"
+name = "kallisto-ctl"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Offline tool for the sealed secret file: seal it, check it, bump its version, mint a token, validate a configuration."
 
 [[bin]]
-name = "kallisto-tui"
+name = "kallisto-ctl"
 path = "src/main.rs"
 
+# No `ratatui`. ADR-0004 (the TUI) is still `suspended`, and what an operator
+# actually needs here is a handful of one-shot commands that compose with a
+# Makefile and a CI job — not a screen to sit in front of.
 [dependencies]
-ratatui = "0.30.0"
+naughtian-kallisto = { path = "../.." }
+core_crypto = { path = "../../components/kallisto_crypto" }
+policy_engine = { path = "../../components/kallisto_policy" }
+aws-lc-rs = { workspace = true }
+serde_json = { workspace = true }
+zeroize = { workspace = true }
+
+[dev-dependencies]
+naughtian-kallisto = { path = "../.." }
+core_crypto = { path = "../../components/kallisto_crypto" }
+policy_engine = { path = "../../components/kallisto_policy" }

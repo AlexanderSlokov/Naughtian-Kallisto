@@ -31,9 +31,9 @@ jobs:
         with:
           components: rustfmt, clippy
 
-      # Install OS dependencies for building librocksdb-sys and others
+      # cmake and clang are for aws-lc-rs, the only native build dependency left
       - name: Install OS dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -58,9 +58,9 @@ jobs:
       - name: Install minimal stable Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
 
-      # Install OS dependencies for building librocksdb-sys and others
+      # cmake and clang are for aws-lc-rs, the only native build dependency left
       - name: Install OS dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -81,13 +81,13 @@ jobs:
           components: miri, rust-src
 
       - name: Install OS dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # BLOCKING, per ADR-0013 §5: miri + proptest + security invariants.
-      # loom, fuzz, mutants and the durability tests run on a schedule in
+      # loom, fuzz and mutants run on a schedule in
       # verification-scheduled.yml — a slow job on the PR path is how a
       # verification suite gets disabled.
       - name: Run make verify

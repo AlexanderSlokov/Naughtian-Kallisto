@@ -34,10 +34,25 @@ deny = [
     { name = "ed25519" },
     # Message authentication codes
     { name = "hmac"},
-    # We prefer the system native TLS or OpenSSL.
-    # gcp_v2 enables rustls only to install and require the aws-lc-rs FIPS provider at runtime.
-    { name = "rustls" },
-    { name = "ring" },
+    # `rustls` and `ring` were on this list upstream because TiKV prefers system
+    # native TLS or OpenSSL. Kallisto removed them in ADR-0015/ADR-0016 (plan
+    # "duck", 2026-09-17). Three reasons, in order of weight:
+    #
+    #  1. Kallisto must fetch its sealed secret file over HTTPS from an
+    #     S3-compatible bucket (ADR-0015 D2), so it needs TLS in-process. Linking
+    #     OpenSSL would put a C library back in the way of the static musl binary
+    #     and the few-MB distroless image that ADR-0015 D12 exists to produce.
+    #  2. rustls 0.23 defaults to the aws-lc-rs provider, which wraps AWS-LC — the
+    #     same module that carries the FIPS 140-3 validation. So this is not the
+    #     "unvalidated pure-Rust crypto" the rest of this list guards against; the
+    #     upstream comment two lines above already names aws-lc-rs as the FIPS path.
+    #  3. Because aws-lc-rs is in the tree for TLS regardless, ADR-0015 D13's
+    #     encryption barrier uses `aws_lc_rs::aead::AES_256_GCM` and D15's keyed
+    #     hashing uses `aws_lc_rs::hmac`. That adds no dependency, and it is why
+    #     `aes-gcm`, `hmac`, `sha2` and friends stay banned below — Kallisto does
+    #     not need them.
+    #
+    # Everything else on this list is inherited unchanged and still applies.
     # Ban trait crates from RustCrypto.
     { name = "aead" },
     { name = "cipher" },
@@ -52,10 +67,14 @@ multiple-versions = "allow"
 version = 2
 yanked = "deny"
 unmaintained = 'workspace'
-ignore = [
-    "RUSTSEC-2025-0141",
-    "RUSTSEC-2026-0235"
-]
+# Empty, and it stays that way.
+#
+# This list used to carry the rkyv 0.7 advisory, which ADR-0013 recorded as a
+# data-migration problem: the archives were on disk, so fixing it meant a
+# format change. ADR-0015 D12 said the dependency was not worth its cost, and
+# deleting the engine deleted the advisory with it — the migration turned into
+# a line removed from this file.
+ignore = []
 
 # Kallisto is licensed under AGPL-3.0-or-later. The allow-list below is the set
 # of licenses that can be combined into an AGPL work without adding obligations
@@ -67,7 +86,14 @@ ignore = [
 version = 2
 private = { ignore = false }
 # Allow licenses in Category A
-allow = ["Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "MPL-2.0", "AGPL-3.0-or-later", "Unicode-3.0"]
+# CDLA-Permissive-2.0 covers webpki-roots, which is Mozilla's CA root bundle
+# rather than code. It is a permissive *data* licence: no copyleft, no
+# attribution obligation on downstream recipients, so it combines into an
+# AGPL work on the same terms as the rest of this list.
+# MPL-2.0 was dropped when the storage engine went: nothing in the tree carries
+# it any more, and an allowance for a licence no dependency uses is an
+# allowance nobody will notice being used later.
+allow = ["Apache-2.0", "BSD-3-Clause", "ISC", "MIT", "AGPL-3.0-or-later", "Unicode-3.0", "CDLA-Permissive-2.0"]
 
 [sources]
 unknown-git = "deny"
