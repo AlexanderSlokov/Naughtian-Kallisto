@@ -16,6 +16,7 @@ RUN apt-get update && \
     apt-get install -y --no-install-recommends \
     cmake \
     clang \
+    llvm \
     make \
     musl-tools \
     && rm -rf /var/lib/apt/lists/*
@@ -31,7 +32,13 @@ RUN rustup target add x86_64-unknown-linux-musl
 
 COPY . .
 
-ENV CC_x86_64_unknown_linux_musl=clang \
+# `musl-gcc` rather than bare clang: it is gcc wrapped with musl's headers and
+# sysroot, so aws-lc-rs's C and assembly compile against the right libc without
+# anyone having to assemble a cross sysroot by hand. `llvm-ar` comes from the
+# `llvm` package — `clang` alone does not provide it, and cc-rs fails with
+# `failed to find tool "llvm-ar"` several minutes into the build if it is
+# missing.
+ENV CC_x86_64_unknown_linux_musl=musl-gcc \
     AR_x86_64_unknown_linux_musl=llvm-ar \
     CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-Ctarget-feature=+crt-static"
 
