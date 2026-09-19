@@ -23,9 +23,13 @@ services:
     image: quay.io/minio/minio:latest
     network_mode: host
     command: server /data --address 127.0.0.1:9000 --console-address 127.0.0.1:9001
+    # Credentials come from the environment, generated fresh by run.sh for each
+    # run. Nothing is committed: a static pair in this file is a real
+    # credential in a public repository however loudly the surrounding comment
+    # insists it is only for tests, and secret scanners are right to say so.
     environment:
-      MINIO_ROOT_USER: kallistotest
-      MINIO_ROOT_PASSWORD: kallistotest
+      MINIO_ROOT_USER: ${DUCK_MINIO_USER:?run this through tests/duck/run.sh}
+      MINIO_ROOT_PASSWORD: ${DUCK_MINIO_PASSWORD:?run this through tests/duck/run.sh}
     healthcheck:
       test: ["CMD", "mc", "ready", "local"]
       interval: 2s

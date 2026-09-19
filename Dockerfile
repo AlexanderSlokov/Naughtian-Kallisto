@@ -20,6 +20,13 @@ RUN apt-get update && \
     musl-tools \
     && rm -rf /var/lib/apt/lists/*
 
+# The toolchain file comes first, and the musl target is added *after* it.
+# Order matters and the wrong one fails late: `rustup target add` applies to the
+# toolchain that is active when it runs, so adding the target before copying
+# `rust-toolchain.toml` installs it against stable — then cargo reads the file,
+# switches to the pinned nightly, and the build dies with
+# "can't find crate for `core`" some minutes later.
+COPY rust-toolchain.toml ./
 RUN rustup target add x86_64-unknown-linux-musl
 
 COPY . .

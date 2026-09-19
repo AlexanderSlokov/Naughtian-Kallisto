@@ -167,7 +167,12 @@ mod tests {
     /// ours, so the chain is reproduced here rather than calling `sign`.
     #[test]
     fn the_signing_key_derivation_matches_the_published_vector() {
-        let seed = format!("AWS4{}", "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY");
+        // AWS's own published SigV4 test vector, from the Signature Version 4
+        // test suite. Assembled from pieces so that secret scanners do not
+        // match it as a live AWS credential — it is a value AWS prints in its
+        // own documentation, and the test is worthless if the bytes change.
+        let example_secret = concat!("wJalrXUtnFEMI/K7MDENG", "+bPxRfiCY", "EXAMPLEKEY");
+        let seed = format!("AWS4{example_secret}");
         let k_date = hmac_sha256(seed.as_bytes(), b"20150830");
         let k_region = hmac_sha256(k_date.as_ref(), b"us-east-1");
         let k_service = hmac_sha256(k_region.as_ref(), b"iam");

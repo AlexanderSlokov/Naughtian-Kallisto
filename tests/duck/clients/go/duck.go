@@ -79,7 +79,7 @@ func main() {
 		if err != nil {
 			return err
 		}
-		if secret.Data["password"] != "hunter2" {
+		if secret.Data["password"] != "duck-fixture-not-a-credential" {
 			return fmt.Errorf("unexpected value: %v", secret.Data)
 		}
 		if secret.VersionMetadata == nil || secret.VersionMetadata.Version < 1 {
