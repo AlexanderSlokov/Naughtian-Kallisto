@@ -23,9 +23,11 @@ secret:
     # is meaningless if the bytes differ. Split across concat! in the source so
     # most scanners no longer match it.
     - name: "AWS SigV4 published test vector (src/resolver/sigv4.rs)"
-      match: "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
+      # sha256 of the value, not the value: writing an AWS-shaped key
+      # into the ignore file would simply move the finding here.
+      match: "e8a0614b6747a06ff9a2728dd2250bf13068310cd2550ebc3cecd4d287a4e259"
 
     # Sequential bytes 00..1f, used to check hex round-tripping in
     # components/kallisto_crypto/src/key.rs. Not key material by any measure.
     - name: "Sequential byte sample for hex round-trip test"
-      match: "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f"
+      match: "6c86c6aac5fb24bcf5d9939cb7d7d5645ce39418f449e03b262dd4fa14b4b92b"
