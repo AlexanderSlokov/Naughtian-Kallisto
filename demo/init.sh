@@ -31,7 +31,8 @@ mc alias set demo "$MINIO_ENDPOINT" \
 mc mb -p "demo/$BUCKET" > /dev/null && ok "Bucket $BUCKET ready."
 
 # KALLISTO_SEAL_KEY comes from the environment (.env.demo).
-kallisto-ctl seal --in "$PLAIN_FILE" --out "$KAL_FILE" > /dev/null
+# --force allows restarting the init container without anti-rollback errors.
+kallisto-ctl seal --force --in "$PLAIN_FILE" --out "$KAL_FILE" > /dev/null
 ok "Sealed: $KAL_FILE ($(wc -c < "$KAL_FILE") bytes)"
 
 mc cp "$KAL_FILE" "demo/$BUCKET/$OBJECT" > /dev/null
