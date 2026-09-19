@@ -1,0 +1,41 @@
+# Kallisto config for the demo environment.
+#
+# Points at MinIO running on the same host (network_mode: host).
+# Not for production use.
+#
+# Differences from kallisto.example.yaml:
+#   workers: 1        — demo machine, no need for more
+#   refresh: 5s       — short cycle so live reload is visible during a demo
+#   source.endpoint   — MinIO on host port 9000
+#
+apiVersion: kallisto/v1
+kind: Resolver
+spec:
+  listen:
+    address: 127.0.0.1
+    port: 8200
+
+  workers: 1
+  mount: secret
+
+  source:
+    type: bucket
+    endpoint: http://127.0.0.1:9000
+    bucket: kallisto-demo
+    objectKey: demo.kal
+    region: us-east-1
+    # MinIO requires path style, not virtual-host.
+    pathStyle: true
+
+  refresh:
+    intervalSeconds: 5
+
+  cacheDir: /var/lib/kallisto
+
+  limits:
+    requestsPerSecondPerWorker: 20000
+    burst: 20000
+
+  log:
+    queueCapacity: 8192
+    enabled: true

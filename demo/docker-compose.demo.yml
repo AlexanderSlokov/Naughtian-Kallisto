@@ -1,0 +1,100 @@
+# Kallisto demo — docker compose up and done.
+#
+# From repo root:
+#   docker compose -f demo/docker-compose.demo.yml --env-file demo/.env.demo up
+#
+# From demo/:
+#   docker compose -f docker-compose.demo.yml --env-file .env.demo up
+#
+# After ~20s:
+#   MinIO UI   : http://localhost:9001  (demo-access-key / demo-secret-key)
+#   Health     : curl http://127.0.0.1:8200/v1/sys/health
+#   Read secret: curl http://127.0.0.1:8200/v1/secret/data/app/database
+#
+# Credentials in .env.demo are throwaway demo values committed on purpose.
+# Do not use them outside this local demo.
+
+services:
+  minio:
+    image: quay.io/minio/minio:latest
+    network_mode: host
+    command: server /data --address 127.0.0.1:9000 --console-address 127.0.0.1:9001
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+      start_period: 5s
+
+
+  #Waits for MinIO healthy, creates the bucket, seals plain.demo.json,
+  # uploads demo.kal. Kallisto starts only after this exits 0.
+  kallisto-init:
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile.demo
+      target: init
+    network_mode: host
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      KALLISTO_SEAL_KEY: ${KALLISTO_SEAL_KEY}
+      MINIO_ENDPOINT: http://127.0.0.1:9000
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      BUCKET: kallisto-demo
+      OBJECT: demo.kal
+    volumes:
+      - ./plain.demo.json:/demo/plain.demo.json:ro
+    restart: "no"
+
+  # Volume ownership fix
+  # Docker creates named volumes owned by root. The production image runs as
+  # nonroot (uid 65532) on a distroless base with no shell to fix it at runtime.
+  # Without this the encrypted fallback copy silently fails to write.
+  cache-owner:
+    image: alpine:3.20
+    command: chown -R 65532:65532 /var/lib/kallisto
+    volumes:
+      - kallisto-cache:/var/lib/kallisto
+    user: "0:0"
+    network_mode: host
+
+  kallisto:
+    image: ghcr.io/alexanderslokov/naughtian-kallisto:latest
+    network_mode: host
+    depends_on:
+      kallisto-init:
+        condition: service_completed_successfully
+      cache-owner:
+        condition: service_completed_successfully
+    volumes:
+      - ./kallisto.demo.yaml:/etc/kallisto/kallisto.yaml:ro
+      - kallisto-cache:/var/lib/kallisto
+    environment:
+      KALLISTO_SEAL_KEY: ${KALLISTO_SEAL_KEY}
+      KALLISTO_CONFIG: /etc/kallisto/kallisto.yaml
+      KALLISTO_S3_ACCESS_KEY_ID: ${KALLISTO_S3_ACCESS_KEY_ID}
+      KALLISTO_S3_SECRET_ACCESS_KEY: ${KALLISTO_S3_SECRET_ACCESS_KEY}
+      KALLISTO_CACHE_DIR: /var/lib/kallisto
+    restart: unless-stopped
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
+    # mlock for the barrier key.
+    ulimits:
+      memlock: -1
+
+volumes:
+  minio-data:
+  kallisto-cache:
