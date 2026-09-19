@@ -1,41 +1,31 @@
-# Kallisto as a sidecar, in the shape ADR-0015 intends.
+# Kallisto is a sidecar.
 #
-# Read the networking note before changing anything: it is the one part of this
-# file that is a security property rather than a preference, and the obvious
-# spelling of it does not work.
+# Read this before running it: there are two settings here that are security
+# properties, and both are easy to undo by accident.
 #
-# ADR-0015's first operational rule is that port 8200 never leaves localhost,
-# and the server enforces it by refusing to bind anything else without
-# --i-accept-the-risk. Inside a container, "localhost" is the container's own
-# network namespace — so a server correctly bound to 127.0.0.1 there is
-# unreachable through `ports:`, which forwards to the container's external
-# address. Publishing it means binding 0.0.0.0 inside the container, which means
-# passing the risk flag, which means normalising a flag that exists to make
-# somebody stop and think.
-#
-# The way out is the one ADR-0015 D9 describes anyway: a sidecar SHARES the
-# application's network namespace, so that 127.0.0.1 is genuinely the same
-# loopback for both. This file uses `network_mode: host` for a standalone run;
-# beside a real application, use `network_mode: "service:<your-app>"` instead —
-# see the commented block at the bottom. Either way there is no `ports:` entry,
-# because there is no boundary left to publish across.
-#
-# The seal key comes from the environment, never from this file. It is required
-# and has no default: a compose file with a working key in it is a secret in
-# your repository.
+#   1. The port is published on 127.0.0.1. Writing "8200:8200" publishes on
+#      0.0.0.0 — every interface. Kallisto has no network authentication story;
+#      it is a sidecar for one machine's applications, and
+#      the server itself refuses to bind a non-loopback address without
+#      --i-accept-the-risk flag. Docker's port publishing sits *outside* that check,
+#      so this line is the one place the guarantee lives.
+#   2. The seal key comes from the environment running this Docker Compose. It is
+#      required, and there is deliberately no default: a compose file with a
+#      working key in it is a secret in your repository.
 #
 # Usage:
 #   export KALLISTO_SEAL_KEY=$(cargo run -q -p kallisto-ctl -- gen-key)
 #   docker compose up
 #
-# Bucket credentials are only needed when `source.type` is `bucket`.
+# The bucket credentials are only needed when the source is a bucket; drop them
+# for `type: disk`.
 
 services:
   # Docker creates named volumes owned by root, and the production image runs as
-  # `nonroot` (uid 65532) on a distroless base with no shell to fix it. Without
+  # `nonroot` (uid 65532) on a distro-less base with no shell to fix it. Without
   # this one-shot the encrypted fallback copy silently fails to write and the
-  # machine loses its ability to cold-start while the bucket is down (ADR-0015
-  # D5) — the server says so on stderr, and nothing else notices.
+  # machine loses its ability to cold-start while the bucket is down.
+  # The server says so on stderr, and nothing else notices.
   cache-owner:
     image: alpine:3.20
     command: chown -R 65532:65532 /var/lib/kallisto
@@ -49,54 +39,46 @@ services:
       target: production
     image: ghcr.io/alexanderslokov/naughtian-kallisto:latest
     # Build from THIS tree, always. Without it compose reuses whatever is
-    # already tagged `latest` on the machine, and a stale one is not merely old:
-    # the engine-era image opened an admin API on 0.0.0.0:8202, so `up` would
-    # quietly start a server violating the very rule the port mapping above
-    # exists to enforce. Found exactly that way while testing this file.
+    # already tagged `latest` on the machine. Which is the old versions of Kallisto.
     pull_policy: build
     container_name: kallisto-server
     depends_on:
       cache-owner:
         condition: service_completed_successfully
-    # No `ports:`. See the networking note at the top: with the namespace
-    # shared, 127.0.0.1 inside the container already is the host's loopback,
-    # and publishing would mean binding a wider address first.
-    network_mode: host
+    # Loopback only. See note 1 at the top of this file.
+    ports:
+      - "127.0.0.1:8200:8200"
     volumes:
-      # Your resolver configuration. `kallisto-ctl validate --config` checks it
-      # before you deploy it.
+      # Your resolver configuration.
+      # `kallisto-ctl validate --config` checks it before you deploy it.
       - ./kallisto.example.yaml:/etc/kallisto/kallisto.yaml:ro
       # The encrypted copy of the secret file, so an application can still start
-      # when the bucket is unreachable. Never holds cleartext.
+      # when the bucket is unreachable.
       - kallisto-cache:/var/lib/kallisto
     environment:
       # Required. Set it in your shell or your orchestrator's secret store;
-      # `?` makes compose fail loudly rather than start a server that cannot
-      # open its own file.
       KALLISTO_SEAL_KEY: "${KALLISTO_SEAL_KEY:?generate one with kallisto-ctl gen-key}"
       KALLISTO_CONFIG: /etc/kallisto/kallisto.yaml
       # Bucket credentials, for `source.type: bucket`. Empty is fine for disk.
       KALLISTO_S3_ACCESS_KEY_ID: "${KALLISTO_S3_ACCESS_KEY_ID:-}"
       KALLISTO_S3_SECRET_ACCESS_KEY: "${KALLISTO_S3_SECRET_ACCESS_KEY:-}"
       # Anything in the config file can be overridden here; the order is
-      # CLI > env > file > defaults (ADR-0003).
+      # CLI > env > file > defaults
       KALLISTO_CACHE_DIR: /var/lib/kallisto
     restart: unless-stopped
 
-    # No healthcheck. The image is distroless with a static binary: there is no
-    # shell, no curl and no wget to run one with, which is the point of using it.
-    # Probe it from outside instead — `GET /v1/sys/health` answers 200 with a
-    # file loaded and 503 without, exactly as Vault does for unsealed/sealed:
+    # No tool inside this image to run health check. The image is distro-less.
+    # Probe it from outside instead:
     #
     #   curl -sf http://127.0.0.1:8200/v1/sys/health
     #
+    # `GET /v1/sys/health` answers 200 with a file loaded and 503 without,
+    # exactly as Vault does for unsealed/sealed.
     # In Kubernetes that is an httpGet probe on the pod, which needs no shell.
 
-    # Dropping every capability and the ability to gain more. Kallisto needs
-    # none: it binds a port above 1024, reads one file over HTTPS, and never
-    # writes outside its cache directory. `mlock` for the barrier key is the one
-    # thing it asks the kernel for, and it degrades to a warning without it
-    # rather than failing.
+    # Dropping every capability as Kallisto needs none:
+    # it binds a port above 1024, reads one file over HTTPS, and never writes outside its cache directory.
+    # `mlock` for the barrier key is the one thing it asks the kernel for.
     cap_drop:
       - ALL
     security_opt:
@@ -107,18 +89,3 @@ services:
 
 volumes:
   kallisto-cache:
-
-# Beside a real application, replace `network_mode: host` above with a shared
-# namespace so the two containers see the same loopback and nothing else does:
-#
-#   services:
-#     app:
-#       image: your-application
-#       environment:
-#         VAULT_ADDR: http://127.0.0.1:8200
-#     kallisto:
-#       network_mode: "service:app"
-#
-# That is the arrangement ADR-0015 D9 means by "sidecar", and it is stricter
-# than this file's standalone default: the resolver is then reachable from the
-# application and from nothing else on the machine.

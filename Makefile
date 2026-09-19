@@ -1,12 +1,3 @@
-# Kallisto — one entry point for building, testing, verifying and shipping.
-#
-# This file is meant to be read as much as run. Each target carries a `##`
-# description that `make help` prints, so the listing cannot drift from the
-# targets the way a hand-written help text does — the previous version
-# advertised `make run-server`, which did not exist, on a port that no longer
-# existed either. Where a target needs a *reason* rather than a description,
-# the reason is in the comment above it.
-
 SHELL := bash
 .DEFAULT_GOAL := help
 
@@ -147,8 +138,8 @@ prove: ## Creusot proofs (advisory, not wired yet)
 
 ##@ Benchmark
 
-# Tuned for one machine: AMD Ryzen 5 3550H, 8 cores, 4 workers, wrk2 on the same
-# box. Measured p50 1.3 ms at 30k req/s.
+# Tuned for one machine: AMD Ryzen 5 3550H, 8 cores, 4 workers, wrk2 on the same box.
+# Measured p50 1.3 ms at 30k req/s.
 #
 # Comparing two builds? Run them INTERLEAVED in one loop. Measured separately,
 # the M5 build came out faster than M3 despite doing strictly more work — that
@@ -161,9 +152,9 @@ bench-duck: build-server build-ctl ## wrk2 on the read path, seeded from a seale
 
 ##@ Docker
 
-# `--network host` rather than `-p 8200:8200`, and this is not a shortcut.
-# Inside a container "localhost" is the container's own namespace, so a server
-# correctly bound to 127.0.0.1 is unreachable through published ports —
+# Inside a container "localhost" is the container's own namespace,
+# so a server correctly bound to 127.0.0.1 is unreachable through published ports.
+#
 # publishing it would mean binding a wider address first, which needs
 # --i-accept-the-risk. Sharing the namespace keeps the loopback guarantee real.
 # docker-compose.yml explains the sidecar shape in full.
