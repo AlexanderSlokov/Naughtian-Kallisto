@@ -1,21 +1,51 @@
 # syntax=docker/dockerfile:1
+#
+# ADR-0015 D12: a static musl binary on a distroless base. The old image was an
+# Ubuntu with a dynamically linked server on it, because RocksDB made anything
+# smaller impractical. RocksDB is gone; what remains that needs a C toolchain is
+# aws-lc-rs, which cross-compiles to musl cleanly.
+
 FROM rust:slim AS builder
 WORKDIR /app
 
+# cmake and clang are for aws-lc-rs, which compiles C and assembly. They are the
+# only native build dependency left — libssl-dev is gone with the engine, since
+# every TLS connection here goes through rustls on aws-lc-rs rather than OpenSSL
+# (see the comment in deny.toml).
 RUN apt-get update && \
     apt-get install -y --no-install-recommends \
-    pkg-config \
-    libssl-dev \
     cmake \
     clang \
+    llvm \
     make \
+    musl-tools \
     && rm -rf /var/lib/apt/lists/*
+
+# The toolchain file comes first, and the musl target is added *after* it.
+# Order matters and the wrong one fails late: `rustup target add` applies to the
+# toolchain that is active when it runs, so adding the target before copying
+# `rust-toolchain.toml` installs it against stable — then cargo reads the file,
+# switches to the pinned nightly, and the build dies with
+# "can't find crate for `core`" some minutes later.
+COPY rust-toolchain.toml ./
+RUN rustup target add x86_64-unknown-linux-musl
 
 COPY . .
 
-RUN cargo build --release --all
+# `musl-gcc` rather than bare clang: it is gcc wrapped with musl's headers and
+# sysroot, so aws-lc-rs's C and assembly compile against the right libc without
+# anyone having to assemble a cross sysroot by hand. `llvm-ar` comes from the
+# `llvm` package — `clang` alone does not provide it, and cc-rs fails with
+# `failed to find tool "llvm-ar"` several minutes into the build if it is
+# missing.
+ENV CC_x86_64_unknown_linux_musl=musl-gcc \
+    AR_x86_64_unknown_linux_musl=llvm-ar \
+    CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-Ctarget-feature=+crt-static"
 
-FROM ubuntu:24.04 AS tester
+RUN cargo build --release --target x86_64-unknown-linux-musl \
+        -p kallisto-server -p kallisto-ctl
+
+FROM debian:bookworm-slim AS tester
 WORKDIR /app
 
 COPY --from=builder /usr/local/cargo /usr/local/cargo
@@ -32,41 +62,29 @@ RUN apt-get update && \
     ca-certificates \
     make \
     curl \
-    pkg-config \
-    libssl-dev \
     cmake \
     clang \
     && rm -rf /var/lib/apt/lists/*
 
-CMD ["cargo", "test", "--all"]
+CMD ["cargo", "test", "--workspace"]
 
-FROM ubuntu:24.04 AS production
+# Distroless: no shell, no package manager, nothing to pivot to. The binary is
+# static, so `static-debian12` rather than `cc-debian12`.
+FROM gcr.io/distroless/static-debian12:nonroot AS production
 
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+COPY --from=builder \
+     /app/target/x86_64-unknown-linux-musl/release/kallisto-server \
+     /usr/local/bin/kallisto-server
+COPY --from=builder \
+     /app/target/x86_64-unknown-linux-musl/release/kallisto-ctl \
+     /usr/local/bin/kallisto-ctl
 
-RUN groupadd kallisto && \
-    useradd -r -g kallisto -s /bin/bash kallisto
+# Only 8200, and only ever reachable from inside the pod. ADR-0015's first
+# operational red line is that this port is never exposed beyond localhost;
+# `Config::resolve` refuses a non-loopback bind without an explicit risk flag,
+# so this EXPOSE is documentation of the container's own interface, not an
+# invitation to publish it. Port 8202 is gone with the admin server.
+EXPOSE 8200
 
-RUN mkdir -p \
-    /kallisto/logs \
-    /kallisto/config \
-    /kallisto/data \
-    /var/run/kallisto \
-    && chown -R kallisto:kallisto \
-    /kallisto \
-    /var/run/kallisto
-
-VOLUME ["/kallisto/logs", "/kallisto/data"]
-
-WORKDIR /app
-
-COPY --from=builder /app/target/release/kallisto-server /app/kallisto_server
-
-RUN chown kallisto:kallisto /app/kallisto_server
-USER kallisto
-
-EXPOSE 8200 8202
-ENTRYPOINT ["/app/kallisto_server"]
+USER nonroot
+ENTRYPOINT ["/usr/local/bin/kallisto-server"]

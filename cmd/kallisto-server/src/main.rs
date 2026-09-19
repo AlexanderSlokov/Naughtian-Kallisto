@@ -1,211 +1,272 @@
-use std::{path::PathBuf, process::ExitCode, sync::Arc};
+//! `kallisto-server` — a local, read-only secrets resolver that speaks Vault.
+//!
+//! The whole program, in order: read the configuration, take the seal key from
+//! the environment, start one thread that polls the sealed file, start the
+//! serving workers, and get out of the way. Everything interesting is in
+//! [`naughtian_kallisto::resolver`] and [`naughtian_kallisto::server`].
 
-use control_plane::admin_http::{start_admin_server, stop_admin_server};
-use naughtian_kallisto::{KallistoCore, event::worker::WorkerPool, server::http_handler::AppState};
+use std::{process::ExitCode, sync::Arc, thread};
+
+use naughtian_kallisto::{
+    config::{self, ACCESS_KEY_ENV, Config, ConfigError, SEAL_KEY_ENV, SECRET_KEY_ENV, Source},
+    event::worker::WorkerPool,
+    resolver::{
+        BucketConfig, BucketSource, DiskSource, Refresher, SecretSource, SnapshotSlot,
+        refresh::Tick,
+    },
+    server::vault_api::{self, Resolver, Telemetry},
+};
+use telemetry::error_log;
 
 #[cfg(not(target_env = "msvc"))]
 #[global_allocator]
 static GLOBAL: tikv_jemallocator::Jemalloc = tikv_jemallocator::Jemalloc;
 
-const DEFAULT_DB_PATH: &str = "/tmp/kallisto_server_bench";
-const DEFAULT_WORKERS: usize = 2;
-const DEFAULT_HTTP_PORT: u16 = 8200;
-const DEFAULT_ADMIN_PORT: u16 = 8202;
-
-#[derive(Debug)]
-struct Config {
-    db_path: PathBuf,
-    workers: usize,
-    http_port: u16,
-    admin_port: u16,
-    wipe: bool,
-}
-
-impl Default for Config {
-    fn default() -> Self {
-        Self {
-            db_path: std::env::var_os("KALLISTO_DB_PATH")
-                .map_or_else(|| PathBuf::from(DEFAULT_DB_PATH), PathBuf::from),
-            workers: DEFAULT_WORKERS,
-            http_port: DEFAULT_HTTP_PORT,
-            admin_port: DEFAULT_ADMIN_PORT,
-            wipe: false,
-        }
-    }
-}
-
-const USAGE: &str = "\
-kallisto-server
-
-  --db-path=PATH      storage directory (env: KALLISTO_DB_PATH)
-  --workers=N         data-plane workers, one runtime per core
-  --http-port=PORT    data API port
-  --admin-port=PORT   admin API port
-  --wipe              delete the storage directory before opening it
-  -h, --help          show this message
-";
-
-/// Parses `--flag=value` and `--flag value`.
-///
-/// Every one of these flags was previously accepted and silently discarded:
-/// the binary hardcoded its port, its worker count and its storage path. The
-/// benchmark scripts have been passing `--workers` and `--http-port` all along,
-/// so their reported worker counts did not describe the process being measured;
-/// and because the hardcoded path was also deleted on every startup, the server
-/// could not persist across a restart at all.
-fn parse_args<I: Iterator<Item = String>>(args: I) -> Result<Config, String> {
-    let mut cfg = Config::default();
-    let mut args = args.peekable();
-
-    while let Some(arg) = args.next() {
-        let (flag, inline) = match arg.split_once('=') {
-            Some((f, v)) => (f.to_string(), Some(v.to_string())),
-            None => (arg, None),
-        };
-
-        // Only consume the next argument for flags that take a value.
-        let mut value = |flag: &str| -> Result<String, String> {
-            match inline.clone() {
-                Some(v) => Ok(v),
-                None => args
-                    .next()
-                    .ok_or_else(|| format!("{flag} requires a value")),
-            }
-        };
-
-        match flag.as_str() {
-            "--db-path" => cfg.db_path = PathBuf::from(value("--db-path")?),
-            "--workers" => {
-                let raw = value("--workers")?;
-                cfg.workers = raw
-                    .parse()
-                    .map_err(|_| format!("--workers expects a number, got {raw:?}"))?;
-                if cfg.workers == 0 {
-                    return Err("--workers must be at least 1".to_string());
-                }
-            }
-            "--http-port" => {
-                let raw = value("--http-port")?;
-                cfg.http_port = raw
-                    .parse()
-                    .map_err(|_| format!("--http-port expects a port, got {raw:?}"))?;
-            }
-            "--admin-port" => {
-                let raw = value("--admin-port")?;
-                cfg.admin_port = raw
-                    .parse()
-                    .map_err(|_| format!("--admin-port expects a port, got {raw:?}"))?;
-            }
-            "--wipe" => cfg.wipe = true,
-            "-h" | "--help" => return Err(USAGE.to_string()),
-            other => return Err(format!("unrecognised argument {other:?}\n\n{USAGE}")),
-        }
-    }
-
-    Ok(cfg)
-}
-
 fn main() -> ExitCode {
-    let cfg = match parse_args(std::env::args().skip(1)) {
-        Ok(cfg) => cfg,
-        Err(msg) => {
-            eprintln!("{msg}");
-            return ExitCode::from(2);
+    match run() {
+        Ok(()) => ExitCode::SUCCESS,
+        // `--help` arrives here too, which is why usage goes to stdout and
+        // everything else to stderr.
+        Err(Startup::Usage(message)) => {
+            println!("{message}");
+            ExitCode::from(2)
         }
-    };
-
-    // Only ever on an explicit request. This used to happen unconditionally on
-    // every startup, which silently made the store non-durable.
-    if cfg.wipe
-        && cfg.db_path.exists()
-        && let Err(e) = std::fs::remove_dir_all(&cfg.db_path)
-    {
-        eprintln!("failed to wipe {}: {e}", cfg.db_path.display());
-        return ExitCode::FAILURE;
+        Err(Startup::Failed(message)) => {
+            eprintln!("kallisto: {message}");
+            ExitCode::FAILURE
+        }
     }
-
-    let Some(db_path) = cfg.db_path.to_str() else {
-        eprintln!("--db-path must be valid UTF-8: {}", cfg.db_path.display());
-        return ExitCode::from(2);
-    };
-
-    let core = match KallistoCore::new(db_path) {
-        Ok(core) => Arc::new(core),
-        Err(e) => {
-            eprintln!("failed to open storage at {db_path}: {e:?}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let state = AppState {
-        registry: core.registry.clone(),
-    };
-
-    println!(
-        "Starting Kallisto on data port {} (admin {}) with {} worker(s), storage at {}",
-        cfg.http_port, cfg.admin_port, cfg.workers, db_path
-    );
-
-    let pool = WorkerPool::spawn(cfg.workers, cfg.http_port, state.clone());
-    let admin_server = start_admin_server(core.clone(), cfg.admin_port);
-
-    pool.join_all();
-    stop_admin_server(admin_server);
-    ExitCode::SUCCESS
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+enum Startup {
+    Usage(String),
+    Failed(String),
+}
 
-    fn parse(args: &[&str]) -> Result<Config, String> {
-        parse_args(args.iter().map(|s| (*s).to_string()))
+impl From<ConfigError> for Startup {
+    fn from(e: ConfigError) -> Self {
+        match e {
+            ConfigError::Usage(message) => Startup::Usage(message),
+            other => Startup::Failed(other.to_string()),
+        }
     }
+}
 
-    #[test]
-    fn defaults_when_no_arguments() {
-        let cfg = parse(&[]).unwrap();
-        assert_eq!(cfg.workers, DEFAULT_WORKERS);
-        assert_eq!(cfg.http_port, DEFAULT_HTTP_PORT);
-        assert_eq!(cfg.admin_port, DEFAULT_ADMIN_PORT);
-        assert!(!cfg.wipe, "the store must not be wiped unless asked");
-    }
+fn env(name: &str) -> Option<String> {
+    std::env::var(name).ok().filter(|v| !v.is_empty())
+}
 
-    #[test]
-    fn accepts_inline_and_separated_values() {
-        let cfg = parse(&["--db-path=/data/k", "--workers", "8", "--http-port=9000"]).unwrap();
-        assert_eq!(cfg.db_path, PathBuf::from("/data/k"));
-        assert_eq!(cfg.workers, 8);
-        assert_eq!(cfg.http_port, 9000);
-    }
-
-    #[test]
-    fn the_flags_the_benchmark_scripts_pass_are_honoured() {
-        // Exactly the invocation in benchmarks/server/run_release_bench.sh.
-        let cfg = parse(&[
-            "--http-port=8200",
-            "--workers=4",
-            "--db-path=/tmp/kallisto_release_bench_data",
-        ])
-        .unwrap();
-        assert_eq!(cfg.workers, 4);
-        assert_eq!(cfg.http_port, 8200);
-        assert_eq!(
-            cfg.db_path,
-            PathBuf::from("/tmp/kallisto_release_bench_data")
+fn run() -> Result<(), Startup> {
+    // Before anything has read a secret: no core file, and no ptrace. ADR-0015
+    // D13's three small things — the third, locking the barrier key into RAM,
+    // happens where the key is made.
+    let hardening = core_crypto::harden_process();
+    if !hardening.complete() {
+        error_log!(
+            "hardening",
+            "incomplete ({hardening:?}); a crash here may write memory to a core file"
         );
     }
 
-    #[test]
-    fn rejects_bad_input_instead_of_ignoring_it() {
-        parse(&["--workers=zero"]).unwrap_err();
-        parse(&["--workers=0"]).unwrap_err();
-        parse(&["--db-path"]).unwrap_err();
-        parse(&["--nonsense"]).unwrap_err();
-    }
+    let cli = config::parse_args(std::env::args().skip(1))?;
+    let environment = config::from_env(env);
 
-    #[test]
-    fn wipe_is_opt_in() {
-        assert!(parse(&["--wipe"]).unwrap().wipe);
+    let Some(path) = cli
+        .config_path
+        .clone()
+        .or_else(|| environment.config_path.clone())
+    else {
+        return Err(ConfigError::Missing.into());
+    };
+    let file = config::read_file(&path)?;
+    let cfg = Config::resolve(file, environment, cli)?;
+
+    // The key never appears in the configuration file, and never in a flag:
+    // command-line arguments are world-readable through `ps`.
+    let key = env(SEAL_KEY_ENV)
+        .ok_or_else(|| {
+            Startup::Failed(format!(
+                "{SEAL_KEY_ENV} is not set. It holds the 32-byte seal key, hex-encoded."
+            ))
+        })
+        .and_then(|hex| {
+            core_crypto::SealKey::from_hex(&hex)
+                .map_err(|e| Startup::Failed(format!("{SEAL_KEY_ENV} is not usable: {e}")))
+        })?;
+
+    let source = build_source(&cfg)?;
+    let slot = Arc::new(SnapshotSlot::empty());
+
+    // Operational messages go to stderr, not stdout. Since M6 stdout carries
+    // the access log and nothing else, so a log shipper can read it as a stream
+    // of one shape instead of one shape with prose mixed in.
+    eprintln!(
+        "kallisto: serving {} on http://{} with {} worker(s), reading {}",
+        cfg.mount,
+        cfg.listen,
+        cfg.workers,
+        source.describe()
+    );
+
+    // stdout is the access log and nothing else from here on.
+    let telemetry = Arc::new(Telemetry::with_log(
+        cfg.log.queue_capacity,
+        cfg.workers,
+        cfg.log.enabled,
+    ));
+    let _writer = if cfg.log.enabled {
+        Some(telemetry.log.spawn_writer(std::io::stdout()))
+    } else {
+        error_log!(
+            "access log",
+            "disabled by configuration; no reads will be recorded"
+        );
+        None
+    };
+
+    start_refresher(
+        &cfg,
+        source,
+        key,
+        Arc::clone(&slot),
+        Arc::clone(&telemetry.refresh_failures),
+    );
+
+    let resolver = Resolver {
+        slot,
+        mount: cfg.mount.as_str().into(),
+        limits: cfg.limits,
+        telemetry,
+    };
+    let pool = WorkerPool::spawn(cfg.workers, cfg.listen, move |worker| {
+        vault_api::router_for_worker(resolver.clone(), worker)
+    });
+    pool.join_all();
+    Ok(())
+}
+
+fn build_source(cfg: &Config) -> Result<Arc<dyn SecretSource>, Startup> {
+    match &cfg.source {
+        Source::Disk { path } => Ok(Arc::new(DiskSource::new(path.clone()))),
+        Source::Bucket {
+            endpoint,
+            bucket,
+            object_key,
+            region,
+            path_style,
+        } => {
+            let endpoint = url::Url::parse(endpoint).map_err(|e| {
+                Startup::Failed(format!("source.endpoint is not a URL: {endpoint:?}: {e}"))
+            })?;
+            let access_key_id = env(ACCESS_KEY_ENV).ok_or_else(|| {
+                Startup::Failed(format!(
+                    "{ACCESS_KEY_ENV} is not set, and the source is a bucket"
+                ))
+            })?;
+            let secret_access_key = env(SECRET_KEY_ENV).ok_or_else(|| {
+                Startup::Failed(format!(
+                    "{SECRET_KEY_ENV} is not set, and the source is a bucket"
+                ))
+            })?;
+
+            let source = BucketSource::new(BucketConfig {
+                endpoint,
+                bucket: bucket.clone(),
+                region: region.clone(),
+                object_key: object_key.clone(),
+                path_style: *path_style,
+                access_key_id,
+                secret_access_key,
+            })
+            .map_err(|e| Startup::Failed(e.to_string()))?;
+            Ok(Arc::new(source))
+        }
+    }
+}
+
+/// The poll loop gets a thread and a runtime of its own, and is deliberately
+/// *not* pinned (ADR-0016 QĐ-3): a fifteen-second bucket timeout must never
+/// occupy a core that is answering reads.
+fn start_refresher(
+    cfg: &Config,
+    source: Arc<dyn SecretSource>,
+    key: core_crypto::SealKey,
+    slot: Arc<SnapshotSlot>,
+    failures: Arc<std::sync::atomic::AtomicU64>,
+) {
+    let cache_path = cfg.cache_path.clone();
+    let interval = cfg.refresh_interval;
+
+    thread::Builder::new()
+        .name("refresh".to_string())
+        .spawn(move || {
+            let rt = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("refresh runtime");
+
+            rt.block_on(async move {
+                let mut refresher = Refresher::new(source, key, slot, cache_path).every(interval);
+
+                // Cold start from the encrypted copy on this machine's disk
+                // first, so the version it finds becomes the floor for the
+                // anti-rollback check before the bucket is ever asked
+                // (ADR-0015 D5).
+                report("cache", refresher.warm_from_cache().await, &failures);
+                report("source", refresher.poll_once().await, &failures);
+                // Every later poll is reported too. Discarding these is how a
+                // forged file in the bucket becomes invisible after the first
+                // thirty seconds.
+                refresher
+                    .run(|tick| report("source", tick, &failures))
+                    .await;
+            });
+        })
+        .expect("failed to start the refresh thread");
+}
+
+/// What one poll of the source produced, on the error log.
+///
+/// `Tick` is safe to render: ADR-0015 D15 requires the error log to observe the
+/// same hygiene as the access log, and the tamper tests hold every error
+/// variant to carrying counts and positions rather than secret material, paths
+/// or key bytes. That is what makes this call site safe, and it is checked
+/// there rather than assumed here.
+///
+/// A rejection or an outage also increments the counter behind
+/// `kallisto_refresh_failures_total`, so "this machine has been serving a stale
+/// file for an hour" is something a scrape notices rather than something
+/// somebody reads the logs to discover.
+fn report(origin: &str, tick: Tick, failures: &std::sync::atomic::AtomicU64) {
+    match tick {
+        Tick::Loaded {
+            version,
+            cached,
+            enforces,
+        } => {
+            eprintln!("kallisto: loaded version {version} from {origin}");
+            if !enforces {
+                eprintln!(
+                    "kallisto: this file carries no token table, so every read is permitted and \
+                     access log identifiers are keyed per process — they will not line up across \
+                     a restart"
+                );
+            }
+            if !cached {
+                error_log!(
+                    "fallback copy",
+                    "could not be written — this machine will start sealed if the source is down"
+                );
+            }
+        }
+        Tick::Unchanged => {}
+        Tick::Rejected(e) => {
+            failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            error_log!("source", "refused the file offered by {origin}: {e}");
+        }
+        Tick::SourceDown(e) => {
+            failures.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            error_log!("source", "{origin} unavailable: {e}");
+        }
     }
 }

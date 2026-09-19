@@ -17,62 +17,63 @@ edition = "2024"
 license = "AGPL-3.0-or-later"
 
 [workspace.dependencies]
-tokio = { version = "1.x", features = ["rt", "net", "macros", "sync"] }
+tokio = { version = "1.x", features = ["rt", "net", "macros", "sync", "time", "fs"] }
 axum = "0.7"
 parking_lot = "0.12"
-crossbeam-channel = "0.5"
-crossbeam-epoch = "0.9"
 arc-swap = "1.7"
-dashmap = "6.0"
-rocksdb = "0.21"
 thiserror = "1.0"
-async-trait = "0.1"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-sonic-rs = "0.3"
-rkyv = "0.7"
 socket2 = { version = "0.5", features = ["all"] }
 core_affinity = "0.8"
+zeroize = { version = "1.7", features = ["derive"] }
+# AEAD + keyed hashing for the sealed secret file (ADR-0015 D13/D15, ADR-0016
+# QĐ-1). Chosen over RustCrypto because rustls already pulls aws-lc-rs in as its
+# default provider for the bucket's HTTPS, so this costs no new dependency and
+# keeps a FIPS-validated module underneath. See the comment in deny.toml.
+aws-lc-rs = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# serde_yaml is archived; ADR-0003 names this fork as the replacement to
+# evaluate. Picked over serde_yaml_ng because it is the one that kept taking
+# releases after the archive.
+serde_norway = "0.9"
 
 [dependencies]
 tokio = { workspace = true }
 axum = { workspace = true }
 parking_lot = { workspace = true }
-crossbeam-channel = { workspace = true }
-crossbeam-epoch = { workspace = true }
 arc-swap = { workspace = true }
-dashmap = { workspace = true }
-rocksdb = { workspace = true }
 thiserror = { workspace = true }
-async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-sonic-rs = { workspace = true }
-rkyv = { workspace = true }
 socket2 = { workspace = true }
 core_affinity = { workspace = true }
-siphasher = "1.0.3"
-kallisto_kv_model = { path = "components/kallisto_kv_model" }
+core_crypto = { path = "components/kallisto_crypto" }
+policy_engine = { path = "components/kallisto_policy" }
+aws-lc-rs = { workspace = true }
+url = "2"
+reqwest = { workspace = true }
 kallisto_queue = { path = "components/kallisto_queue" }
+telemetry = { path = "components/kallisto_telemetry" }
+serde_norway = { workspace = true }
 
 [features]
-# Exposes internal request parsers to the fuzz targets only (ADR-0013 V3).
+# Exposes the read path's own parsers to the fuzz targets only (ADR-0013 V3).
 # Never enabled for a release build.
 fuzzing = []
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 tower = { version = "0.5", features = ["util"] }
-reqwest = { version = "0.12", features = ["json"] }
-control_plane = { path = "components/kallisto_cluster" }
+# Must track the workspace entry: default features would pull native-tls, and
+# with it OpenSSL, back into the test binary through feature unification.
+reqwest = { workspace = true, features = ["json"] }
 walkdir = "2.5.0"
+zeroize = { workspace = true }
+
 
 [[bench]]
-name = "storage_bench"
-path = "benchmarks/storage/storage_bench.rs"
+name = "barrier_bench"
+path = "benchmarks/barrier/barrier_bench.rs"
 harness = false
 
-[[bench]]
-name = "security_bench"
-path = "benchmarks/security/security_bench.rs"
-harness = false

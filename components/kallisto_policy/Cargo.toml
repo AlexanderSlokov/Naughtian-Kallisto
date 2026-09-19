@@ -5,3 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+core_crypto = { path = "../kallisto_crypto" }
+aws-lc-rs = { workspace = true }
+zeroize = { workspace = true }
+thiserror = { workspace = true }

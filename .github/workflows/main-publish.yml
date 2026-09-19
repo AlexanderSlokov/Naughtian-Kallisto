@@ -88,6 +88,6 @@ jobs:
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          # This saves massive time on huge Rust builds by caching the cargo/rocksdb-sys compilation steps
+          # Caches the cargo registry and the aws-lc-rs C build, which is what is slow now
           cache-from: type=gha,scope=production
           cache-to: type=gha,mode=max,scope=production

@@ -329,7 +329,7 @@ Test matrix:
 
 | # | Vault CLI Command | Validates |
 |---|---|---|
-| 1 | `vault kv put secret/app/db user=admin pass=s3cr3t` | Write secret (POST data) |
+| 1 | `vault kv put secret/app/db user=admin pass=duck-fixture-not-a-credential` | Write secret (POST data) |
 | 2 | `vault kv get secret/app/db` | Read latest version |
 | 3 | `vault kv get -version=1 secret/app/db` | `?version=N` query param |
 | 4 | `vault kv patch secret/app/db pass=new_pass` | PATCH merge |

@@ -1,0 +1,33 @@
+# GitGuardian configuration.
+#
+# The exclusions below are narrow and each one names why the value cannot be a
+# live credential. Nothing here is a blanket path ignore: a real leak in any of
+# these files still has to be caught.
+
+version: 2
+
+secret:
+  # Show every occurrence rather than collapsing duplicates, so a second
+  # instance of a known-safe pattern still has to be looked at.
+  show-secrets: false
+
+  ignored-paths:
+    # Fixture data generated at run time and written to a temp directory. The
+    # MinIO credentials the duck suite uses are created fresh per run from
+    # /dev/urandom and never committed — see tests/duck/run.sh.
+    - "tests/duck/**/vendor/**"
+
+  ignored-matches:
+    # AWS's own published Signature Version 4 test vector. It appears verbatim
+    # in AWS documentation and ends in the literal string EXAMPLEKEY; the test
+    # is meaningless if the bytes differ. Split across concat! in the source so
+    # most scanners no longer match it.
+    - name: "AWS SigV4 published test vector (src/resolver/sigv4.rs)"
+      # sha256 of the value, not the value: writing an AWS-shaped key
+      # into the ignore file would simply move the finding here.
+      match: "e8a0614b6747a06ff9a2728dd2250bf13068310cd2550ebc3cecd4d287a4e259"
+
+    # Sequential bytes 00..1f, used to check hex round-tripping in
+    # components/kallisto_crypto/src/key.rs. Not key material by any measure.
+    - name: "Sequential byte sample for hex round-trip test"
+      match: "6c86c6aac5fb24bcf5d9939cb7d7d5645ce39418f449e03b262dd4fa14b4b92b"

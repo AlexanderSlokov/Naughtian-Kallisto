@@ -1,41 +1,91 @@
+# Kallisto is a sidecar.
+#
+# Read this before running it: there are two settings here that are security
+# properties, and both are easy to undo by accident.
+#
+#   1. The port is published on 127.0.0.1. Writing "8200:8200" publishes on
+#      0.0.0.0 — every interface. Kallisto has no network authentication story;
+#      it is a sidecar for one machine's applications, and
+#      the server itself refuses to bind a non-loopback address without
+#      --i-accept-the-risk flag. Docker's port publishing sits *outside* that check,
+#      so this line is the one place the guarantee lives.
+#   2. The seal key comes from the environment running this Docker Compose. It is
+#      required, and there is deliberately no default: a compose file with a
+#      working key in it is a secret in your repository.
+#
+# Usage:
+#   export KALLISTO_SEAL_KEY=$(cargo run -q -p kallisto-ctl -- gen-key)
+#   docker compose up
+#
+# The bucket credentials are only needed when the source is a bucket; drop them
+# for `type: disk`.
+
 services:
-  # The Kallisto Production Server
+  # Docker creates named volumes owned by root, and the production image runs as
+  # `nonroot` (uid 65532) on a distro-less base with no shell to fix it. Without
+  # this one-shot the encrypted fallback copy silently fails to write and the
+  # machine loses its ability to cold-start while the bucket is down.
+  # The server says so on stderr, and nothing else notices.
+  cache-owner:
+    image: alpine:3.20
+    command: chown -R 65532:65532 /var/lib/kallisto
+    volumes:
+      - kallisto-cache:/var/lib/kallisto
+    user: "0:0"
+
   kallisto:
     build:
       context: .
       target: production
     image: ghcr.io/alexanderslokov/naughtian-kallisto:latest
+    # Build from THIS tree, always. Without it compose reuses whatever is
+    # already tagged `latest` on the machine. Which is the old versions of Kallisto.
+    pull_policy: build
     container_name: kallisto-server
+    depends_on:
+      cache-owner:
+        condition: service_completed_successfully
+    # Loopback only. See note 1 at the top of this file.
     ports:
-      - "8200:8200" # Data HTTP API
-      - "8202:8202" # Admin HTTP API
+      - "127.0.0.1:8200:8200"
     volumes:
-      - kallisto-data:/kallisto/data
+      # Your resolver configuration.
+      # `kallisto-ctl validate --config` checks it before you deploy it.
+      - ./kallisto.example.yaml:/etc/kallisto/kallisto.yaml:ro
+      # The encrypted copy of the secret file, so an application can still start
+      # when the bucket is unreachable.
+      - kallisto-cache:/var/lib/kallisto
     environment:
-      - WORKERS=4
-      - DB_PATH=/kallisto/data
-      - PORT_HTTP=8200
+      # Required. Set it in your shell or your orchestrator's secret store;
+      KALLISTO_SEAL_KEY: "${KALLISTO_SEAL_KEY:?generate one with kallisto-ctl gen-key}"
+      KALLISTO_CONFIG: /etc/kallisto/kallisto.yaml
+      # Bucket credentials, for `source.type: bucket`. Empty is fine for disk.
+      KALLISTO_S3_ACCESS_KEY_ID: "${KALLISTO_S3_ACCESS_KEY_ID:-}"
+      KALLISTO_S3_SECRET_ACCESS_KEY: "${KALLISTO_S3_SECRET_ACCESS_KEY:-}"
+      # Anything in the config file can be overridden here; the order is
+      # CLI > env > file > defaults
+      KALLISTO_CACHE_DIR: /var/lib/kallisto
     restart: unless-stopped
-    networks:
-      - kallisto-net
 
-  # The Benchmark / Tester container
-  #  tester:
-  #    build:
-  #      context: .
-  #      target: tester
-  #    image: ghcr.io/alexanderslokov/kallisto-tester:latest
-  #    container_name: kallisto-tester
-  #    # We override the default entrypoint to run the benchmark script
-  #    # It waits for the server, seeds data, and runs k6 tests against the 'kallisto' service
-  #    command: bash -c "make bench-server"
-  #    profiles: ["bench"] # This service won't start by default unless explicitly requested
-  #    networks:
-  #      - kallisto-net
+    # No tool inside this image to run health check. The image is distro-less.
+    # Probe it from outside instead:
+    #
+    #   curl -sf http://127.0.0.1:8200/v1/sys/health
+    #
+    # `GET /v1/sys/health` answers 200 with a file loaded and 503 without,
+    # exactly as Vault does for unsealed/sealed.
+    # In Kubernetes that is an httpGet probe on the pod, which needs no shell.
+
+    # Dropping every capability as Kallisto needs none:
+    # it binds a port above 1024, reads one file over HTTPS, and never writes outside its cache directory.
+    # `mlock` for the barrier key is the one thing it asks the kernel for.
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    read_only: true
+    tmpfs:
+      - /tmp
 
 volumes:
-  kallisto-data:
-
-networks:
-  kallisto-net:
-    driver: bridge
+  kallisto-cache:

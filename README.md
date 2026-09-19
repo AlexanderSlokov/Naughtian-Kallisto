@@ -1,201 +1,140 @@
-# Naughtian Kallisto - A High-Performance Secret Engine
+# Naughtian Kallisto - a local, read-only secrets resolver that speaks Vault Kv2 API
 
 <p align="center">
   <img src="https://img.shields.io/badge/Rust-2024-blue.svg?style=for-the-badge&logo=rust" alt="Rust 2024 edition">
   <img src="https://img.shields.io/badge/License-AGPLv3-red.svg?style=for-the-badge" alt="License">
 </p>
 
-Secret delivery for the request path.
+Kallisto runs beside your application on localhost. It answers Vault KV-v2 reads using one encrypted file from an S3-compatible bucket. It cannot write. There is no cluster, database, replication, or admin API.
 
-Kallisto is a high performance cache for secrets, sitting between your workloads and your Root of Trust. 
+Adopting it is one line:
 
-The **Dataplane** runs on every node and answers secret reads locally, so your API gateway, worker nodes, CI runners, etc... can fetch secrets per request instead of at boot. 
+```diff
+- VAULT_ADDR=https://vault.internal:8200
++ VAULT_ADDR=http://127.0.0.1:8200
+```
 
-The **Controlplane** runs the fleet, pushing invalidations, warming caches before a rollout, and reporting how much plaintext is resident across every node.
-
-Compatible with the Vault KV-v2 API. Adopting it is one line:
-
-    - VAULT_ADDR=https://vault.internal:8200
-    + VAULT_ADDR=https://localhost:8200
-
-Removing it is the same line.
-
-Please keep in mind that Naughtian Kallisto should be integrated into **existing secret management systems** (that is, Hashicorp Vault, Infisical, Conjur, etc). This is an intentional design decision to avoid unnecessary complexity and overhead about security concerns.
-
-## Use cases
-
-The main purposes of Naughtian Kallisto are:
-
-1. **A secret cache layer for every Root-of-Trust**: serve secrets from upstream secret management systems in a fast, scalable and secure way, right at the node level without self DDoS-ing your own infrastructure.
-
-2. **Secure secret storage**: Naughtian Kallisto by itself can work in standalone mode to store key/value pairs while encrypts data before writing it to persistent storage, so your system can use secrets without letting `.env` files lying around.
-
-3. **Secure edge config server**: Naughtian Kallisto can be use as a secure config server at edge, providing shared TLS certificates, API keys,... for your API gateway and LB fleet.
-
-## Important notices
-
-1. Be advised, `Naughtian Kallisto` from version `1.0.0` to `2.0.0` is not offically released as the production-ready application. We will not take any accountability for application security, compliance or stability if you use `Naughtian Kallisto` in your production environment, directly or indirectly, and causing damages for your own businesses. Use as your own consents.
-
-2. Start from version 1.0.0, `Naughtian Kallisto` will begin to be rewrited in Rust. Breaking changes must happen and will affect application's stability. We strongly advice you to use `Naughtian Kallisto` start from 2.0.0 version (tagged `2.0.0-lts`) as this will be the offical release of production-ready version.
-
-3. `Naughtian Kallisto` is protected under `AGPLv3` license. Custom "Commercial" or "Enterprise" License can be discussed.
-
-4. **DO NOT** use `Naughtian Kallisto` as a drop-in replacement directly for your current `OpenBao`/`Hashicorp Vault` infrastructure! `Naughtian Kallisto` itself, while developed with high attention to security and provides similar API interface/contracts of `Vault`/`OpenBao`, can not and should not be used to replace them as an upstream secret management platform.
+Removing it is the same line. If your application uses a Vault SDK, it should not notice the difference.
 
 ## Status
 
-`Naughtian Kallisto` is a prototype. Not production-ready.
+A prototype under active rework. Not production-ready. Version 1.x makes no stability promise. Do not run this where it matters yet.
 
-Working: KV-v2 read/write path, cuckoo cache, CLOCK eviction.
+`Naughtian Kallisto` is AGPLv3. A commercial licence can be discussed.
 
-Not built yet: authentication on the data port, TLS, encryption barrier, controlplane.
+## Why use it
 
-Do not run this where it matters.
+When an application constantly re-reads a handful of secrets, a central Vault adds a network round trip to the request path and causes an outage if it becomes unreachable. Kallisto holds the current values locally, refreshes them on a timer, and serves from an encrypted on-disk copy if the bucket goes down.
 
-## Future plans
+It is not a Vault replacement.
 
-- **Supports pluggable storage backends**: RocksDB for the reference implementation. We are planning to add support for SQLite, and some other key/value storage systems in the future.
+It has no auth methods, dynamic secrets, leases, PKI, or transit engine. If you need those features, run OpenBao and put Kallisto in front of it.
 
-- **Docker Engine secret storage support**: For storing your Docker PAT safely. 
+It reads one file, on the bucket of your choice. S3, R2, MinIO, SeaweedFS, RustFS, the glorious Garage cluster,... Did I miss something?
 
-# Build it by yourself
 
-## Prerequisites
+## How it works
 
-I highly recommend using `linuxbrew` to setup Linux environment, these followings are essential for Naughtian Kallisto's delevopment:
+```
+  operator                        bucket                      each machine
+  ────────                        ──────                      ────────────
+  kallisto-ctl seal   ──────►   secrets.kal   ──────►   kallisto-server :8200
+    (AES-256-GCM,               (encrypted,             (polls, authenticates,
+     version N)                  versioned)              refuses rollbacks,
+                                                         serves KV-v2 reads)
+                                                              │
+                                                     app ─────┘  VAULT_ADDR=127.0.0.1
+```
 
-- Rust 2024 stable
-- Rust compiler and tools
-- Git (optional, to clone this repository)
-- k6 (for newly added benchmarks)
+The file carries the secrets, the policies, and a table of keyed token hashes. The policy table is encrypted with everything else. Permission to write to the bucket and possession of the key are two different things. An unencrypted policy table would let whoever holds the bucket write access grant themselves the key.
 
-## Core Build (CLI only — no external dependencies)
+## Compatibility
+
+| Vault call | Kallisto |
+| --- | --- |
+| `GET /v1/secret/data/<path>` | `metadata.version` is the file's content version |
+| `GET /v1/secret/data/<path>?version=N` | if `N` is the current version, otherwise 404 |
+| `GET`/`LIST` `/v1/secret/metadata/<path>` | both spellings; one entry in `versions` |
+| `GET /v1/sys/health`, `/v1/sys/seal-status` | real state, plus `kallisto_file_version` |
+| `GET /v1/sys/mounts`, `/v1/auth/token/{lookup-self,renew-self}` | Yes. |
+| `GET /v1/sys/metrics` | Prometheus metric endpoint |
+| `PUT`/`POST`/`PATCH`/`DELETE` on `data` | **403 `permission denied`** |
+| `delete` / `undelete` / `destroy` / `subkeys` | **403 `permission denied`** |
+
+The 403s are the point of Kallisto, as it cannot write. A resolver that cannot write is a resolver whose stolen credentials are worth nothing.
+
+Kallisto does not keep version history. The file holds current values only. `?version=N` answers for the current version and returns 404 for anything else. Older values live in your git history and bucket versioning. Kallisto tracks the file's content version to refuse any file older than the one it already holds.
+
+## What it does not protect against
+
+Kindly take these notes seriously:
+
+- **Root on the machine, or anyone reading the process memory.** The in-RAM barrier encrypts secrets between requests and zeroizes the decryption buffer after each response. This makes a core dump or a swap file less rewarding, but it does not stop a live debugger. Nothing at this layer can.
+- **A response body in flight.** While a secret is written into an HTTP response, it is cleartext in this process. That is what serving a secret is.
+- **Anyone holding the seal key.** They can read the file. The key belongs in your orchestrator's secret store or some other secure storage. Arguments are world-readable through `ps`, which is why the server refuses `--seal-key`.
+- **The access log is not an audit log.** It drops lines when its queue fills to keep the machine serving. It cannot tell you with certainty who read what. Alert on `kallisto_access_log_dropped_total`.
+
+## Operational rules
+
+1. **Never expose port 8200 beyond localhost.** There is no network authentication. The server refuses to start on a non-loopback address unless you pass `--i-accept-the-risk`.
+2. **Applications must read secrets at runtime.** Do not bake them into a build artefact or a framework cache. Laravel's `config:cache` writes plaintext secrets into `bootstrap/cache`. Doing that defeats the purpose of a resolver.
+
+## Getting started
 
 ```bash
 make build
+
+# Create a key and a file to serve.
+export KALLISTO_SEAL_KEY=$(cargo run -q -p kallisto-ctl -- gen-key)
+cat > plain.json <<'JSON'
+{"version": 1, "secrets": {"app/db": {"username": "admin", "password": "duck-fixture-not-a-credential"}},
+ "policies": {}, "tokens": {}}
+JSON
+cargo run -q -p kallisto-ctl -- seal --in plain.json --out secrets.kal
+
+# Serve it.
+cargo run -q -p kallisto-server -- --config kallisto.example.yaml
 ```
-
-## Server Build (HTTP)
-
-First time compiling, `cargo` will download and install dependencies. It's fast on a modern machine, but will take a while the first time. Subsequent builds will be much faster.
 
 ```bash
-make build-server
+VAULT_ADDR=http://127.0.0.1:8200 vault kv get secret/app/db      # works
+VAULT_ADDR=http://127.0.0.1:8200 vault kv put secret/app/db x=y  # 403, by design
+curl -s localhost:8200/v1/sys/health | jq .kallisto_file_version
 ```
 
-# How to use
+`kallisto.example.yaml` documents every setting. It contains no secrets and has nowhere to put them. Keys come from the environment. An unknown field fails to parse.
 
-Kallisto provides two interfaces: a **Command Line Interface** for interactive local usage, and a **Server** with HTTP APIs for production deployment.
+## The offline tool
 
-## Docker
+Everything that writes a sealed file happens in `kallisto-ctl`:
 
-### 1. Run the Server
+| Command | |
+| --- | --- |
+| `seal --in plain.json --out secrets.kal [--version N]` | Encrypt. Refuses to write a version the resolver would reject as a rollback. |
+| `verify --in secrets.kal` | Check the tag and report counts. Never prints a secret or a path. |
+| `bump-version --in secrets.kal [--to N]` | Raise the content version in place. |
+| `mint-token [--in secrets.kal] --policy <name>` | Generate a token and the table row to paste. Shown once. |
+| `gen-key` | 32 bytes from the system RNG. |
+| `validate --config kallisto.yaml` | Parse and resolve. Print what the server would do. |
+| `open --in secrets.kal --yes-print-secrets-to-stdout` | Exactly as dangerous as it sounds. |
 
-Pull the image and run the `Naughtian Kallisto` server, remember to mount a volume for data persistence. For instance:
+## Building and testing
 
 ```bash
-docker run -d \
-  --name kallisto \
-  -p 8200:8200 \
-  -p 8202:8202 \
-  -v my-kallisto-data:/kallisto/data \
-  ghcr.io/alexanderslokov/kallisto:latest
+make dev       # fmt + clippy + cargo-deny + tests, in CI's order
+make verify    # ADR-0013's blocking verification suite
+make duck      # three real Vault SDKs against the real server
+make bench-duck
 ```
 
-### 2. Run benchmarks
+Building requires `cmake` and `clang` for `aws-lc-rs`, the only native dependency left.
 
-TODO: Add instruction for setup `wrk2` from and build this tool from source.
+## Documentation
 
-If you want to validate the raw performance of Naughtian Kallisto, we prepared a benchmark container with `k6` ready for you:
+The `docs/` directory is a Hugo (Hextra) site.
 
-```bash
-# Start a detached temporary container and run benchmark script
-docker run -it --rm ghcr.io/alexanderslokov/kallisto-tester:latest make bench
-```
+`docs/content/docs/references/ADRs/` holds the design decisions. 
 
-For more "proudly" benchmarks, you need to setup `wrk2` and use provided benchmark script as such:
+ADR-0015 and ADR-0016 produced the current design.
 
-```bash
-# Benchmark GET latency at 50% capacity (~40k req/s)
-./benchmarks/server/run_release_bench.sh 2 200 10s 40000
-
-# Benchmark PUT latency at 50% capacity (~40k req/s)
-./benchmarks/server/run_release_bench.sh 2 200 10s 40000
-```
-
-### 3. Development
-
-If you contribute for `Naughtian Kallisto` source code and want to build the Docker image locally:
-
-```bash
-docker build . \
--t kallisto-server:latest 
--f Dockerfile
-```
-
-Or using this Make target: 
-
-```bash
-make docker-build
-```
-
-## Ports
-
-Kallisto uses two ports:
-
-- 8200: Data Plane (premounted a KV engine)
-- 8202: Control Plane (administration, provisioning, sync mode, flush, telemetry)
-
-```bash
-# Switch to BATCH mode
-curl -X POST http://localhost:8202/admin/mode/batch
-
-# Switch to IMMEDIATE mode
-curl -X POST http://localhost:8202/admin/mode/immediate
-
-# Force flush to RocksDB
-curl -X POST http://localhost:8202/admin/flush
-```
-
-| Endpoint                            | Method | Description                              |
-|-------------------------------------|--------|------------------------------------------|
-| `/admin/mode/batch`                 | POST   | Switch to async batch persistence        |
-| `/admin/mode/immediate`             | POST   | Switch to synchronous strict persistence |
-| `/admin/flush`                      | POST   | Force flush cache to RocksDB             |
-
-## Server Mode
-
-Naughtian Kallisto uses an **Envoy-style SO_REUSEPORT** architecture with a thread-per-core model. So it is the best when each worker thread binds its own listener socket. The kernel distributes connections so technically there is no central bottleneck at all.
-
-### Starting the Server
-
-```bash
-make run-server
-```
-
-Or with custom options:
-
-```bash
-./build/kallisto_server --http-port=8200 --workers=2 --db-path=/kallisto/data
-```
-
-### Server CLI Options
-
-| Option             | Default          | Description                              |
-|--------------------|------------------|------------------------------------------|
-| `--http-port=PORT` | `8200`           | Data Plane port (Vault KV-v2 compatible) |
-| `--workers=N`      | CPU cores        | Number of worker threads                 |
-| `--db-path=PATH`   | `/kallisto/data` | RocksDB data directory                   |
-| `--help`, `-h`     | —                | Show help                                |
-
-Note: The Admin API runs automatically on port 8202.
-
-## API Documentation
-
-Please take a tour to [API Documentation](docs/content/api-docs/secret/kv/vault-kv2.md).
-
-## Benchmarks
-
-Please checkout [Benchmarks](docs/content/docs/benchmarks/kallisto-vs-dragonflydb.md) for an apples-to-oranges comparison (which is, quite surprisingly, unfair to Naughtian Kallisto).
-
-Every benchmark from the past can be found in [Benchmarks directory](docs/content/docs/benchmarks).
+`docs/content/docs/references/verification-status.md` records what is proven versus merely believed.

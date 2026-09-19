@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       job:
-        description: 'Which suite to run (all, loom, fuzz, mutants, durability)'
+        description: 'Which suite to run (all, loom, fuzz, mutants)'
         required: false
         default: 'all'
 
@@ -35,8 +35,20 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The toolchain comes from rust-toolchain.toml so there is exactly one
+      # place to change it. Leaving it out is fatal: this action derives the
+      # toolchain from its own ref, and pinning the action to a SHA leaves it
+      # nothing to derive from.
+      - name: Read the pinned toolchain
+        id: toolchain
+        run: |
+          channel=$(grep -oP 'channel\s*=\s*"\K[^"]+' rust-toolchain.toml)
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -61,7 +73,7 @@ jobs:
           toolchain: nightly-x86_64-unknown-linux-gnu
 
       - name: Install OS dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -83,34 +95,6 @@ jobs:
           path: fuzz/artifacts/
           if-no-files-found: ignore
 
-  durability:
-    name: Durability (D1/D2, kill -9)
-    if: github.event.schedule != '0 4 * * 0'
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-
-      - name: Install stable Rust
-        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
-
-      - name: Install OS dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
-
-      - name: Rust Cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: Run durability tests
-        run: make durability
-
-      - name: Upload server log
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: durability-log
-          path: tests/test_persistence.log
-          if-no-files-found: ignore
-
   mutants:
     name: Mutation testing (weekly)
     if: github.event.schedule == '0 4 * * 0' || github.event_name == 'workflow_dispatch'
@@ -120,11 +104,23 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The toolchain comes from rust-toolchain.toml so there is exactly one
+      # place to change it. Leaving it out is fatal: this action derives the
+      # toolchain from its own ref, and pinning the action to a SHA leaves it
+      # nothing to derive from.
+      - name: Read the pinned toolchain
+        id: toolchain
+        run: |
+          channel=$(grep -oP 'channel\s*=\s*"\K[^"]+' rust-toolchain.toml)
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
       - name: Install stable Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
 
       - name: Install OS dependencies
-        run: sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
 
       - name: Rust Cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2

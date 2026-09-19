@@ -3,7 +3,19 @@ name = "telemetry"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "Access log, error log and counters for a read-only resolver (ADR-0015 D15). Drop-on-full: it never blocks a read, and it cannot account for every one."
 
+# No `prometheus` crate, though this serves the Prometheus text format. That
+# crate's registry is an `RwLock<HashMap>` with a `Desc` lookup per observation;
+# incrementing a counter through it would put a shared cache line in the middle
+# of the read path, which is the one thing ADR-0016 QĐ-3 exists to prevent. It
+# also pulls `protobuf` in for an exposition format Prometheus dropped years
+# ago, against ADR-0015 D12's small static binary. A handful of counters
+# rendered with `push_str` is the same call `responses.rs` already made for
+# Vault's JSON.
 [dependencies]
-tokio = { version = "1.0", features = ["full"] }
-prometheus = "0.14.0"
+kallisto_queue = { path = "../kallisto_queue" }
+policy_engine = { path = "../kallisto_policy" }
+core_crypto = { path = "../kallisto_crypto" }
+aws-lc-rs = { workspace = true }
+zeroize = { workspace = true }
