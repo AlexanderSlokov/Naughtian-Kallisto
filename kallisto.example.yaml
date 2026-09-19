@@ -26,7 +26,7 @@ spec:
   # By default Kallisto listens on the loopback interface (127.0.0.1).
   # A non-loopback address is refused at startup unless you pass the
   # --i-accept-the-risk flag. This is because Kallisto has no network
-  # authentication: it is designed strictly as a sidecar for one machine's apps, not as a cluster service.
+  # authentication: it is designed as a sidecar for one machine's apps.
   #
   # The default port is 8200 to match Vault's default port, allowing apps
   # to connect without configuration changes.
@@ -36,12 +36,9 @@ spec:
 
   ################################ PERFORMANCE ################################
 
-  # Kallisto runs one pinned Tokio runtime per worker (ADR-0016 QĐ-3).
-  # This avoids work-stealing and cross-core cache invalidation on the read path.
+  # Kallisto runs one pinned Tokio runtime per worker. This avoids work-stealing and cross-core cache invalidation on the read path.
   #
-  # In a heavily CPU-limited container (e.g., Kubernetes pod with low CPU limits),
-  # it is highly recommended to set this to 1. On larger instances, you can
-  # increase this to match available cores.
+  # In a heavily CPU-limited container (e.g., Kubernetes pod with low CPU limits), it is highly recommended to set this to 1. On larger instances, you can increase this to match available cores.
   workers: 2
 
   ############################## MOUNT & AUTH #################################
@@ -52,15 +49,9 @@ spec:
   mount: secret
 
   # Note on Authorization:
-  # Authorization is deliberately NOT configured here. Tokens and policies live
-  # *inside* the sealed file, encrypted with everything else (ADR-0015 D8).
-  # Write permission on the bucket and possession of the key are two different
-  # things, and a policy table in the clear would let whoever holds the first
-  # grant themselves the second.
+  # Authorization is not configured here. Tokens and policies live inside the sealed file, encrypted with everything else. Write permission on the bucket and possession of the key are two different things, and a policy table in the clear would let whoever holds the first grant themselves the second.
   #
-  # A file with no token table serves every read to anyone who can reach the port.
-  # This is a legitimate configuration for a single-app sidecar and is reported
-  # as `"kallisto_authorization": "none"` on /v1/sys/health.
+  # A file with no token table serves every read to anyone who can reach the port. This is a legitimate configuration for a single-app sidecar and is reported as `"kallisto_authorization": "none"` on /v1/sys/health.
 
   ################################## SOURCE ###################################
 
@@ -112,19 +103,9 @@ spec:
   ################################## LOGGING ##################################
 
   # Access Log Configuration
-  #
   # The access log prints one line per request to stdout.
-  # WARNING: It is NOT an audit log. The difference is architectural (ADR-0015 D15).
-  #
-  # An audit log records *before* it serves, meaning a full log queue blocks
-  # reads and reduces availability. Kallisto's access log records *afterwards*
-  # and drops lines if the queue falls behind. A flood costs log lines, not
-  # availability.
-  #
-  # Dropped lines are exposed as 'kallisto_access_log_dropped_total' on
-  # /v1/sys/metrics. Alert on this metric: a non-zero value means the process
-  # is shedding bookkeeping to stay alive under extreme load.
-  #
+  # WARNING: It is NOT an audit log. The difference is an audit log records *before* it serves, meaning a full log queue blocks reads and reduces availability. Kallisto's access log records *afterwards* and drops lines if the queue falls behind. A flood costs log lines, not availability.
+  # Dropped lines are exposed as 'kallisto_access_log_dropped_total' on /v1/sys/metrics. Alert on this metric: a non-zero value means the process is shedding bookkeeping to stay alive under extreme load.
   # Security Note: Paths and tokens appear as keyed hashes, never in plain text.
   # The key comes from inside the sealed file, so hashes remain stable across
   # restarts, but an attacker observing logs cannot read the actual paths/tokens.
