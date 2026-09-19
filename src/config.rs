@@ -684,7 +684,7 @@ spec:
     fn credentials_have_no_place_to_go_in_the_file() {
         for line in [
             "    accessKeyId: AKIA",
-            "    secretAccessKey: hunter2",
+            "    secretAccessKey: duck-fixture-not-a-credential",
             "    sealKey: 00",
         ] {
             let yaml = format!(

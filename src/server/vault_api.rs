@@ -562,7 +562,7 @@ mod tests {
             secrets: BTreeMap::from([
                 (
                     "app/db".to_string(),
-                    serde_json::json!({"user": "admin", "password": "hunter2"}),
+                    serde_json::json!({"user": "admin", "password": "duck-fixture-not-a-credential"}),
                 ),
                 (
                     "app/web".to_string(),
@@ -683,7 +683,10 @@ mod tests {
     async fn a_secret_reads_back_in_vaults_shape() {
         let (status, body) = send(loaded(), "GET", "/v1/secret/data/app/db").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["data"]["data"]["password"], "hunter2");
+        assert_eq!(
+            body["data"]["data"]["password"],
+            "duck-fixture-not-a-credential"
+        );
         assert_eq!(body["data"]["metadata"]["version"], 12);
     }
 
@@ -694,7 +697,10 @@ mod tests {
     async fn serving_a_secret_leaves_no_cleartext_behind_it() {
         let (status, body) = send(loaded(), "GET", "/v1/secret/data/app/db").await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["data"]["data"]["password"], "hunter2");
+        assert_eq!(
+            body["data"]["data"]["password"],
+            "duck-fixture-not-a-credential"
+        );
         assert!(
             core_crypto::barrier::scratch_is_wiped(),
             "the worker's buffer still holds the secret after the response"

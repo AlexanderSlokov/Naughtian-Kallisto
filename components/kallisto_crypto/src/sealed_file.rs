@@ -331,7 +331,7 @@ mod tests {
             version: 7,
             secrets: BTreeMap::from([(
                 "app/db".to_string(),
-                serde_json::json!({"user": "admin", "pass": "s3cr3t"}),
+                serde_json::json!({"user": "admin", "pass": "duck-fixture-not-a-credential"}),
             )]),
             policies: BTreeMap::from([(
                 "payment".to_string(),
@@ -359,7 +359,7 @@ mod tests {
         assert_eq!(view.version, 7);
         assert_eq!(
             view.secrets["app/db"].get(),
-            r#"{"pass":"s3cr3t","user":"admin"}"#
+            r#"{"pass":"duck-fixture-not-a-credential","user":"admin"}"#
         );
         assert_eq!(view.token_key, Some("ab".repeat(32).as_str()));
     }
@@ -379,7 +379,12 @@ mod tests {
     #[test]
     fn nothing_readable_survives_into_the_sealed_bytes() {
         let sealed = seal(&sample(), &key()).unwrap();
-        for needle in ["app/db", "s3cr3t", "payment", "deadbeef"] {
+        for needle in [
+            "app/db",
+            "duck-fixture-not-a-credential",
+            "payment",
+            "deadbeef",
+        ] {
             assert!(
                 !sealed.windows(needle.len()).any(|w| w == needle.as_bytes()),
                 "{needle:?} is readable in the sealed file"
@@ -391,7 +396,7 @@ mod tests {
     fn debug_shows_counts_not_contents() {
         let rendered = format!("{:?}", sample());
         assert!(
-            !rendered.contains("s3cr3t"),
+            !rendered.contains("duck-fixture-not-a-credential"),
             "Debug leaked a secret: {rendered}"
         );
         assert!(

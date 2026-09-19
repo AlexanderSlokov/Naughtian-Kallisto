@@ -87,7 +87,7 @@ make build
 # Create a key and a file to serve.
 export KALLISTO_SEAL_KEY=$(cargo run -q -p kallisto-ctl -- gen-key)
 cat > plain.json <<'JSON'
-{"version": 1, "secrets": {"app/db": {"username": "admin", "password": "s3cr3t"}},
+{"version": 1, "secrets": {"app/db": {"username": "admin", "password": "duck-fixture-not-a-credential"}},
  "policies": {}, "tokens": {}}
 JSON
 cargo run -q -p kallisto-ctl -- seal --in plain.json --out secrets.kal

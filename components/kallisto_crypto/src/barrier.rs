@@ -189,7 +189,7 @@ pub fn scratch_is_wiped() -> bool {
 mod tests {
     use super::*;
 
-    const SECRET: &str = r#"{"username":"payment","password":"hunter2"}"#;
+    const SECRET: &str = r#"{"username":"payment","password":"duck-fixture-not-a-credential"}"#;
 
     #[test]
     fn a_secret_round_trips_through_the_barrier() {
@@ -209,14 +209,14 @@ mod tests {
 
         let haystack = sealed.ciphertext();
         assert!(
-            !contains(haystack, b"hunter2"),
+            !contains(haystack, b"duck-fixture-not-a-credential"),
             "the ciphertext carries the secret"
         );
         assert!(
             !contains(haystack, b"payment"),
             "the ciphertext carries a field value"
         );
-        assert!(!format!("{sealed:?}").contains("hunter2"));
+        assert!(!format!("{sealed:?}").contains("duck-fixture-not-a-credential"));
     }
 
     /// The property the whole design rests on: after the response is built, the
@@ -230,7 +230,7 @@ mod tests {
             .with_plaintext(&sealed, |text| {
                 // Mid-call, the plaintext is genuinely there — otherwise the
                 // assertion afterwards would prove nothing.
-                assert!(text.contains("hunter2"));
+                assert!(text.contains("duck-fixture-not-a-credential"));
                 !scratch_is_wiped()
             })
             .unwrap();

@@ -31,7 +31,7 @@ use core_crypto::{Contents, SealKey};
 use naughtian_kallisto::resolver::Snapshot;
 use zeroize::Zeroizing;
 
-const NEEDLE: &str = "correct-horse-battery-staple-9f3a";
+const NEEDLE: &str = "duck-fixture-value-9f3a";
 
 /// A realistic secret value rather than a short one. `free()` writes allocator
 /// metadata over the first bytes of a released chunk, so a 33-byte string is

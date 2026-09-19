@@ -9,7 +9,7 @@ use core_crypto::Barrier;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use naughtian_kallisto::server::responses;
 
-const SECRET: &str = r#"{"username":"payment","password":"correct-horse-battery-staple"}"#;
+const SECRET: &str = r#"{"username":"payment","password":"duck-fixture-value"}"#;
 const CREATED: &str = "2026-09-17T00:00:00Z";
 
 fn bench_serving_one_secret(c: &mut Criterion) {

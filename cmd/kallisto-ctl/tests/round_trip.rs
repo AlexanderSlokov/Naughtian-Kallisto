@@ -92,7 +92,7 @@ fn plaintext(version: u64, token_key: &str, tokens: &str) -> String {
         r#"{{
   "version": {version},
   "secrets": {{
-    "app/db": {{"username": "admin", "password": "hunter2"}},
+    "app/db": {{"username": "admin", "password": "duck-fixture-not-a-credential"}},
     "other/thing": {{"k": "v"}}
   }},
   "policies": {{ "app": [{{"path": "secret/data/app/*", "capabilities": ["read"]}}] }},
@@ -239,7 +239,7 @@ fn bump_version_produces_a_file_the_resolver_still_accepts() {
             .with_secret("app/db", ToString::to_string)
             .unwrap()
             .unwrap(),
-        r#"{"password":"hunter2","username":"admin"}"#
+        r#"{"password":"duck-fixture-not-a-credential","username":"admin"}"#
     );
 }
 
@@ -272,7 +272,12 @@ fn nothing_but_open_ever_prints_a_secret() {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        for needle in ["hunter2", "admin", "app/db", &token_key] {
+        for needle in [
+            "duck-fixture-not-a-credential",
+            "admin",
+            "app/db",
+            &token_key,
+        ] {
             assert!(
                 !rendered.contains(needle),
                 "{command:?} printed {needle:?}:\n{rendered}"
@@ -289,7 +294,10 @@ fn nothing_but_open_ever_prints_a_secret() {
         "--yes-print-secrets-to-stdout",
     ]);
     let rendered = String::from_utf8_lossy(&out.stdout).to_string();
-    assert!(rendered.contains("hunter2"), "{rendered}");
+    assert!(
+        rendered.contains("duck-fixture-not-a-credential"),
+        "{rendered}"
+    );
     assert!(rendered.contains("app/db"), "{rendered}");
 }
 

@@ -247,11 +247,11 @@ mod tests {
     #[test]
     fn a_secret_is_spliced_in_without_being_reparsed() {
         let body = json(&kv_data(
-            r#"{"user":"admin","pw":"s3cr3t"}"#,
+            r#"{"user":"admin","pw":"duck-fixture-not-a-credential"}"#,
             7,
             "2026-09-17T00:00:00Z",
         ));
-        assert_eq!(body["data"]["data"]["pw"], "s3cr3t");
+        assert_eq!(body["data"]["data"]["pw"], "duck-fixture-not-a-credential");
         assert_eq!(body["data"]["metadata"]["version"], 7);
         assert_eq!(body["data"]["metadata"]["destroyed"], false);
     }
