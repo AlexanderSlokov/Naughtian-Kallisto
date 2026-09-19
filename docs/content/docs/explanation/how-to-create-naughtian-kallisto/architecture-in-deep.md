@@ -1,265 +1,171 @@
+---
+title: "Architecture in Depth"
+weight: 30
+---
 
+This page explains **why the system has the shape it has**. It is the third architecture Kallisto
+has had, and the previous two are worth a paragraph each, because the reasons they were abandoned
+are the reasons this one is built the way it is.
 
-## Core architecture: Hexagonal (Port/Adapter)
+- **A C++ core with a Rust FFI bridge.** `cxx::bridge`, Corrosion, BoringSSL, a `ValidEngine`
+  C++20 concept. Two languages, two build systems, and a bridge to keep in step across both.
+- **A pure-Rust secrets *server*.** Hexagonal with an `ISecretEngine` port, an `EngineRegistry`
+  router, a `KallistoCore` facade, a sharded cuckoo cache, a thread-local B-tree path index, a
+  RocksDB backend behind a lock-free write-behind queue, and a gossip control plane on port 8202.
+  It worked. ADR-0015 deleted almost all of it.
 
-Kallisto follows a Hexagonal Architecture with a **Strangler Fig** migration strategy. 
-The `KallistoCore` was refactored into a thin **Facade** that delegates to an **EngineRegistry** of pluggable **ISecretEngine** implementations.
+ADR-0015 changed the question. Not "how do we build a fast secrets server" but "what does one
+machine's applications actually need", and the answer was much smaller: **a local, read-only
+resolver that speaks Vault KV-v2 over one encrypted file on an S3-compatible bucket.** Roughly nine
+thousand lines came out in a single commit.
 
-### From version 1.0.0+
+## The shape
 
-Kallisto implements full Rust code base to archieve memory safety and security features.
-
-- **C++ Engine Core (Data Plane):** High-performance hotpath. Responsible for I/O, sharded storage, lock-free data structures, and AES-256-GCM encryption via BoringSSL using DEKs.
-- **Rust Security Shell (Control Plane):** Coldpath management. Responsible for KEK keyring management, Vault Transit client (envelope encryption), Gossip protocol, Telemetry (Prometheus), and Audit Logging.
-- **Vault Transit Engine (Root of Trust):** External dependency. Holds the Master Key (never leaves Vault). Wraps/unwraps Kallisto's KEK via `/v1/transit/decrypt`. Kallisto authenticates at startup, receives KEK, and operates independently thereafter.
-
-The two sides communicate through a high-performance **FFI (Foreign Function Interface)** using the `cxx` crate.
-
-### Key Design Decisions
-
-| Decision | Rationale |
-|----------|-----------|
-| **`virtual` dispatch + `final` on concrete classes** | Vtable overhead is ~8ns (~0.3% of total request latency). `final` enables compiler devirtualization. |
-| **`ISecretEngine::put(const SecretEntry&)` (DTO parameter)** | max 2 params per function. The original 4-param signature violated this rule. |
-| **`EngineRegistry` uses `shared_ptr`** | Engines are mounted at startup and shared across threads. `shared_ptr` provides safe co-ownership. |
-| **`KallistoCore` as Facade** | Zero breaking changes. All existing consumers (`HttpHandler`, `UdsAdminHandler`, tests) use the unchanged `KallistoCore` API. |
-| **C++20 `concept ValidEngine`** | Compile-time safety net. Any new engine that doesn't satisfy the contract fails to build via `static_assert`. |
-| **Dual-Mode Unseal (Vault Transit + Shamir)** | Primary mode: Vault Transit auto-unseal for production (KEK in-memory, zeroize on drop). Secondary mode: standalone Shamir manual unseal for edge/air-gapped/testing. Industry-standard envelope encryption pattern (same as AWS KMS / GCP KMS). |
-
-## Core Components
-
-### ISecretEngine (Port Interface)
-- **Location:** `include/kallisto/engine/i_secret_engine.hpp`
-- Pure virtual interface. All engines implement this.
-- Methods: `put(SecretEntry)`, `get(path, key)`, `del(path, key)`, `engineType()`, `changeSyncMode()`, `getSyncMode()`, `forceFlush()`
-- `SyncMode` enum: `IMMEDIATE` (fsync per write) or `BATCH` (deferred flush with threshold).
-
-### KvEngine (Concrete Engine)
-- **Location:** `include/kallisto/engine/kv_engine.hpp`, `src/engine/kv_engine.cpp`
-- Marked `final` to enable devirtualization.
-- Owns: `ShardedCuckooTable` (RAM cache), `RocksDBStorage` (persistence), `TlsBTreeManager` (path index).
-- `handleBatchSync()`: Extracted helper for lock-free batch flush logic (CAS-based stampede prevention).
-- On destruction, calls `forceFlush()` to guarantee durability.
-
-### EngineRegistry (Router)
-- **Location:** `include/kallisto/engine/engine_registry.hpp`, `src/engine/engine_registry.cpp`
-- `mount(prefix, engine)`: Register an engine at a string prefix.
-- `resolve(prefix)`: O(1) lookup via `unordered_map`. Returns raw pointer (non-owning).
-- `flushAll()`: Broadcasts flush to all mounted engines (used during shutdown).
-- Thread safety: `mutex_` guards mount/unmount (rare admin ops), reads are lock-free.
-
-### KallistoCore (Facade)
-- **Location:** `include/kallisto/kallisto_core.hpp`, `src/kallisto_core.cpp`
-- Constructs a `KvEngine` and mounts it at prefix `"secret"` in the registry.
-- Exposes `registry()` for direct access to `EngineRegistry` (future use by `HttpHandler`).
-- `default_kv_engine_`: Non-owning raw pointer shortcut to avoid registry lookup on every call.
-
-### ValidEngine (C++20 Concept)
-- **Location:** `include/kallisto/engine/engine_concept.hpp`
-- Validates at compile time: `put(SecretEntry)`, `get(path, key)`, `del(path, key)`, `engineType()`.
-- Used with `static_assert(ValidEngine<KvEngine>)` in `kv_engine.hpp`.
-
-## Server Architecture (Envoy-style)
-
-- **SO_REUSEPORT**: Each `Worker` binds and accepts on its own socket. Kernel load-balances.
-- **KallistoServerApp**: Orchestrates lifecycle — constructs `KallistoCore`, creates `WorkerPool`, binds HTTP listeners, handles OS signals (`SIGINT`/`SIGTERM`).
-- **HttpHandler**: Parses HTTP requests, routes to `KallistoCore` facade. Currently hardcoded to `/v1/secret/data/` prefix.
-- **UdsAdminHandler**: Unix Domain Socket for admin commands (sync mode, flush, etc.).
-
-## Storage Layer
-
-| Component | Purpose | Thread Safety |
-|-----------|---------|---------------|
-| `ShardedCuckooTable` | 64-shard lock-free in-memory hash table (SipHash distribution) | Per-shard locking |
-| `CuckooTable` | Single-shard open-addressing hash with cuckoo displacement | Mutex per table |
-| `RocksDBStorage` | Durable persistence (WAL + SST) | RocksDB internal locking |
-| `TlsBTreeManager` | RCU-based B-Tree for path prefix enumeration | Thread-local + RCU |
-
-## Testing Conventions
-
-- **Framework:** Google Test + Google Mock.
-- **Test file co-location:** Tests live alongside sources (e.g., `src/engine/test_kv_engine.cpp`).
-- **Test registration:** Each test is a CMake `add_test()` target linked against `kallisto_lib`.
-- **Coverage target:** `make coverage` — builds with `-DENABLE_COVERAGE=ON`, runs all tests, generates `gcovr` HTML report.
-- **ASAN target:** `make tsan` — builds with `-DENABLE_TSAN=ON`, runs all tests with AddressSanitizer, disables ASLR.
-- **TSAN target:** `make tsan` — builds with `-DENABLE_TSAN=ON`, runs all tests with ThreadSanitizer.
-- **I/O error simulation:** Use local read-only directories (`std::filesystem::permissions` with `perm_options::replace`). **Never** use system paths like `/sys` or `/proc` in tests.
-- **Concurrency tests:** Use `threads.reserve(N)` before `emplace_back` loops. Always brace `if` bodies.
-
-## Build System
-
-- **CMake** with vcpkg for dependency management.
-- **Dependencies:** Check `vcpkg.json` for details.
-- **C++ Standard:** C++20 (`-std=c++20`).
-
-## Rust Integration (FFI Bridge)
-
-### FFI Bridge Pattern (`cxx`)
-- **Location:** `rust_integrates/ffi_bridge/`
-- Uses the `cxx` crate for safe, efficient C++/Rust interop. `cxx` auto-generates C++ headers, supports direct conversion of advanced types (`String`, `Vec`, `Result`) without memory leaks.
-- **Bridge Definition:** `src/lib.rs` contains the `#[cxx::bridge]` module.
-- **Namespace:** All Rust FFI functions are exported under the `kallisto::rust` namespace in C++.
-
-### Rust Crate Selection & Rationale
-
-| Crate | Category | Purpose | Status |
-|---|---|---|---|
-| **`cxx`** | FFI Bridge | Auto-generated safe C++/Rust bindings | Approved |
-| **`zeroize`** | Core Crypto | Auto-zeroes RAM on drop (anti Cold Boot Attack) | Approved |
-| **`secrecy`** | Core Crypto | `SecretString` wrapper, disables `Debug` trait | Approved |
-| **`reqwest`** | Core Crypto / Telemetry | Vault Transit API client, SIEM log push | Approved |
-| **`tokio`** | Telemetry | Async runtime for non-blocking I/O | Approved |
-| **`axum`** | Telemetry | Prometheus HTTP server on port 8201 | Approved |
-| **`prometheus`** | Telemetry | Metrics exporter | Approved |
-| **`serde_json`** | Telemetry | Fast JSON parse for audit logs | Approved |
-| **`tracing-appender`** | Telemetry | Non-blocking file log writer | Approved |
-| **`flume`** | Telemetry | Bounded channel for C++→Rust audit log queue (262,144 cap) | Approved |
-| **`foca`** | Control Plane | SWIM-based gossip protocol for cluster discovery | Approved |
-| **`hcl-rs`** | Control Plane | Parse `kallisto.hcl` config files | Approved |
-| **`ratatui`** | TUI Client | Terminal dashboard UI | Approved |
-
-### Cargo Workspace Structure
-
-```text
-rust_integrates/
-├── Cargo.toml             # [workspace] root
-│
-├── ffi_bridge/            # ANTI-CORRUPTION LAYER (Adapter)
-│   ├── Cargo.toml         # Type: staticlib (cxx-build)
-│   ├── build.rs           # cxx auto-generates C++ headers
-│   └── src/
-│       └── lib.rs         # ONLY place for C++ <-> Rust FFI bridge
-│
-├── core_crypto/           # KEY MANAGEMENT & ENVELOPE ENCRYPTION
-│   ├── Cargo.toml
-│   └── src/
-│       ├── keyring.rs     # KEK in-memory (zeroize on drop, secrecy)
-│       ├── vault_client.rs# Vault Transit API: unwrap KEK, rotate key
-│       └── dek.rs         # Generate DEK, provide to C++ via FFI
-│
-├── telemetry/             # OBSERVABILITY (Async)
-│   ├── Cargo.toml
-│   └── src/
-│       ├── metrics.rs     # Prometheus HTTP Server (background thread, port 8201)
-│       └── audit_log.rs   # Consume lock-free queue from C++ → File/SIEM
-│
-├── control_plane/         # CLUSTER MANAGEMENT
-│   ├── Cargo.toml
-│   └── src/
-│       ├── gossip.rs      # Discover Kallisto nodes (foca/SWIM)
-│       ├── config.rs      # Parse kallisto.hcl
-│       └── admin_uds.rs   # Listen UDS for Admin commands (Mode, Flush)
-│
-├── policy_engine/         # ACCESS CONTROL (ACL)
-│   ├── Cargo.toml
-│   └── src/
-│       ├── rbac.rs        # Policy path parsing, roles
-│       └── lease_mgr.rs   # Worker to track and revoke expired secrets
-│
-└── kallisto_tui/          # ADMIN CLIENT (standalone binary)
-    ├── Cargo.toml
-    └── src/
-        ├── main.rs        # Entrypoint
-        ├── ui/            # Terminal dashboard (ratatui)
-        └── client.rs      # Call API / UDS Admin
+```
+  operator                     bucket                    each machine
+  ────────                     ──────                    ────────────
+  kallisto-ctl seal  ──────►  secrets.kal  ──────►  kallisto-server :8200
+    AES-256-GCM,              encrypted,             polls, authenticates,
+    version N                 versioned              refuses rollbacks,
+                                                     serves KV-v2 reads
+                                                          │
+                                                 app ─────┘  VAULT_ADDR=127.0.0.1
 ```
 
-### Storage Adapter (Future Replacements)
-Thanks to Hexagonal Architecture (Storage Engine is a plug-in), if RocksDB becomes problematic, an FFI adapter to Rust storage engines is possible:
-- **Candidates:** `sled` (Bw-Tree, pure Rust), `redb`, `persy`, or `rust-rocksdb`.
+Four modules and nothing else: `config`, `resolver`, `server`, `event`.
 
-### Build System Integration (`Corrosion`)
-- **Tool:** `Corrosion` (Rust for CMake) manages the Rust build lifecycle.
-- **Bridge Target:** `ffi_bridge_cpp` is the CMake target created by `corrosion_add_cxxbridge`.
-- **Linking:** `kallisto_lib` links against `ffi_bridge_cpp` and `ffi_bridge` (staticlib).
-- **Header Generation:** Corrosion generates C++ headers at `${CMAKE_BINARY_DIR}/corrosion_generated/cxxbridge/ffi_bridge_cpp/include`.
-- **CMake snippet:**
-```cmake
-include(FetchContent)
-FetchContent_Declare(
-    Corrosion
-    GIT_REPOSITORY https://github.com/corrosion-rs/corrosion.git
-    GIT_TAG v0.5.0
-)
-FetchContent_MakeAvailable(Corrosion)
-corrosion_import_crate(MANIFEST_PATH rust_integrates/ffi_bridge/Cargo.toml)
-target_link_libraries(kallisto_core PUBLIC ffi_bridge)
-```
-- When running `make build-server`, CMake automatically invokes Cargo to compile the Rust workspace into a `.a` static library, then links it with C++ object files into a single binary.
+## Asymmetric hexagonal
 
-### Telemetry & Observability
-- Rust runs a background **Tokio runtime** for non-blocking I/O.
-- Prometheus metrics are exposed via `axum` on a separate port (e.g., 8201).
-- Audit logs are consumed from a lock-free queue shared with C++.
+ADR-0015 D10 wanted the hexagon gone entirely. ADR-0016 QĐ-4 amended that into two different
+answers for the two sides, because the two sides are not alike.
 
-### Audit Log FFI Pattern (C++ → Rust)
+**The output port is welded shut.** There is no `SecretEngine` trait, no registry, no `Arc<dyn>` on
+the read path. A handler loads the current snapshot and reads a `HashMap`. Every layer of
+abstraction here was an indirect call paid for on every request, bought against a substitutability
+nobody had asked for.
 
-Non-blocking message passing via bounded channel + FFI:
+**The source port is a real port.** `SecretSource` has two implementations — an S3 bucket and a
+local file — because a third source is genuinely plausible, and it runs twice a minute, so dynamic
+dispatch costs nothing measurable.
 
-1. **Rust channel:** `flume::bounded(262_144)` (~few MB RAM). Provides `Sender` + `Receiver`.
-2. **C++ hotpath (Push):** Formats JSON log → calls FFI → `try_send(log)` (~10-20ns). If queue full, increments `atomic_dropped_counter_` and returns. **Never blocks.**
-3. **Rust coldpath (Pull):** Tokio task calls `recv_async().await`. Sleeps at 0% CPU until data arrives. Writes to disk via `tracing-appender` or pushes to SIEM via `reqwest`.
+If welding the output side ever makes a change hard, the seam is known: it is the boundary between
+`vault_api.rs` and `Snapshot`.
 
-**FFI Bridge (Rust):**
-```rust
-#[cxx::bridge(namespace = "kallisto::rust::telemetry")]
-mod ffi {
-    extern "Rust" {
-        fn push_audit_log(payload: &CxxString) -> bool;
-    }
-}
+## Thread-per-core, kept on purpose
 
-use flume::Sender;
-use std::sync::OnceLock;
+ADR-0015 D9.1 said to drop CPU pinning and run one thread, on the reasoning that one application
+needs very little. ADR-0016 QĐ-3 reversed it, because that premise is false for a real class of
+application: some fetch a secret immediately before each use and discard it, caching nothing. For
+those, the read path *is* the hot path.
 
-static AUDIT_TX: OnceLock<Sender<String>> = OnceLock::new();
+So the Envoy-shaped layout stays: one `current_thread` Tokio runtime per worker, pinned with
+`core_affinity`, several workers on one port through `SO_REUSEPORT`, the kernel distributing
+connections. No work-stealing, no cross-core cache traffic.
 
-pub fn push_audit_log(payload: &cxx::CxxString) -> bool {
-    if let Some(tx) = AUDIT_TX.get() {
-        tx.try_send(payload.to_string()).is_ok()
-    } else {
-        false
-    }
-}
-```
+The consequence that shapes everything downstream: **anything a worker touches per request belongs
+to that worker alone.** The rate limiter, the decryption scratch buffer, the access-log producer and
+the metrics counters are all per worker, so the read path never contends a shared cache line. The
+configured rate limit is therefore *per worker*, and the field name says so.
 
-**C++ Interface:**
-```cpp
-#pragma once
-#include <string>
-#include "ffi_bridge_cpp/lib.h"
+The refresh loop gets its own thread and runtime and is deliberately **not** pinned: a slow bucket
+call must never occupy a core that is answering reads.
 
-namespace kallisto::telemetry {
+## The resolver
 
-class AuditLogger {
-public:
-    static void logEvent(const std::string& action, const std::string& path) {
-        std::string payload = fmt::format(R"({{"action":"{}","path":"{}"}})", action, path);
-        bool success = kallisto::rust::telemetry::push_audit_log(payload);
-        if (!success) {
-            atomic_dropped_counter_.fetch_add(1, std::memory_order_relaxed);
-        }
-    }
-private:
-    static inline std::atomic<uint64_t> atomic_dropped_counter_{0};
-};
+`Snapshot` lives in an `ArcSwapOption`. `None` *is* Vault's sealed state and answers `503`. A file
+that fails to parse, fails its tag, or is older than the one held leaves the previous snapshot
+exactly where it was — the machine keeps serving (D14).
 
-} // namespace kallisto::telemetry
-```
+**Anti-rollback is the interesting part.** The file's content version sits in a plaintext header
+that is fed to the AEAD as additional data, so it can be read *before* any decryption — a stale file
+is refused without spending a single crypto operation — and editing it fails the tag. The version
+held is persisted alongside the encrypted on-disk copy, so a reboot cannot be used to reset it.
 
-## CI/CD
+This matters because of who the attacker is. ADR-0015 D13's threat model is **whoever can write to
+the bucket**. Bucket versioning is under their control; git history is on the other side of CI. Only
+an in-process check helps.
 
-- **GitHub Actions:** `.github/workflows`
-- **Docker images:** Multi-stage build with `tester` and `production` targets.
-- **Tags:** `1.0.0-alpha` (production), `1.0.0-alpha-tester` (test image).
-- **Registry:** `ghcr.io` (GitHub Container Registry).
+A same-numbered forgery is not merely rejected, it is never opened: versions are monotonic and never
+reused, so an unchanged number means an unchanged file.
 
-## Important Caveats
+## The barrier in RAM
 
-1. **`KallistoCore::put()` still takes 4 params** (path, key, value, ttl) for backward compatibility. It constructs a `SecretEntry` internally and delegates to `KvEngine::put(SecretEntry)`.
-2. **`EngineRegistry::resolve()` does NOT lock.** It assumes engines are only mounted at startup. If runtime mount/unmount is needed later, add read-write locking.
-3. **`HttpHandler` currently hardcodes `/v1/secret/data/`** as the engine prefix. The next task (P1) is to refactor it to dynamically extract engine prefixes and route via `EngineRegistry::resolve()`.
-4. **`SecretEntry` is a plain struct** (no virtuals, no inheritance). It is used as a DTO across all layers.
-5. **Rust Header Includes:** When including Rust-generated headers in C++, use the format `#include "ffi_bridge_cpp/lib.h"`.
-6. **Rust Toolchain:** Ensure `cargo` and `rustc` are in the `PATH`. In Dev Containers, these are located in `/home/vscode/.cargo/bin`.
-7. **Corrosion Version:** The project uses Corrosion `v0.5.0`.
+Each snapshot generates a random AES-256-GCM key that exists only in this process, only for that
+snapshot, and is never written anywhere. Every secret is sealed individually under it, and opened
+into a `thread_local` scratch buffer for exactly as long as it takes to copy it into a response
+body.
+
+The subtle part, and the one that nearly made the whole thing decorative: `open()` originally
+returned an owned `Contents`, so `serde_json` built a second copy of every secret as `String`/`Value`
+on the heap that nothing zeroized. That copy survived in freed memory — precisely what a core dump
+or a swap file picks up. `open()` now returns a borrowed view into the self-wiping buffer, and the
+snapshot seals straight from those borrows. No owned copy of the cleartext is ever made.
+
+Alongside it: `RLIMIT_CORE` set to zero, `PR_SET_DUMPABLE` cleared, and the barrier key's pages
+`mlock`ed with a matching `munlock` on drop.
+
+What this does not do is stop a live debugger, and while a response body is being written the secret
+is cleartext in this process. That is what serving a secret *is*.
+
+## Authorization without state
+
+Vault's one genuinely stateful subsystem becomes data. The file carries a table of
+`keyed-hash(token) → policy names` plus the key those hashes were computed with. There is no token
+store, no lease, no expiry and no revocation endpoint: revoking is deleting a line and re-sealing.
+
+Two details that look like inefficiencies and are not:
+
+- The table is a **`Vec` scanned linearly** with a constant-time comparison, not a `HashMap`.
+  `HashMap::get` exits early and compares strings in a way that stops at the first difference —
+  which would mean the constant-time property ADR-0013 E2 asks for simply would not exist. For the
+  few dozen tokens D11 sizes this at, the scan is cheaper than the HMAC that precedes it.
+- The token key lives **inside the file**, not derived from the seal key. Derived, every seal-key
+  rotation would silently invalidate every token in the fleet, because the operator holds the
+  hashes and not the tokens, and has nothing to recompute them from.
+
+The policy table is encrypted along with everything else, deliberately: permission to write to the
+bucket and possession of the key are different things, and a policy table in the clear would let
+whoever holds the first grant themselves the second.
+
+## Observability that gets out of the way
+
+An **access log**, not an audit log, and the distinction is the design rather than the wording. An
+audit log records before it serves, so a full queue means refusing to serve. This one records after
+the fact and drops when it falls behind, so a flood costs log lines instead of availability. The
+count of what was dropped is a metric, so an operator can be paged on it rather than discovering the
+gap later.
+
+Every path and token is written as a keyed hash. Paths are hashed under a key *derived* from the
+file's token key rather than the token key itself, because paths are chosen by the caller: under a
+shared key, anyone who can request an arbitrary path and read the log would hold an oracle emitting
+`HMAC(token_key, arbitrary string)` — the material for a reverse table against the file's own token
+column.
+
+Neither hash is computed per request. Path identifiers are precomputed when the file loads, since
+the set of paths *is* the file's key set, and token identifiers reuse the hash the authorization
+lookup already performed. An HMAC costs about what the whole RAM barrier costs; paying one per
+request to write a log line would have made observing a read more expensive than serving it.
+
+## Verification
+
+The rule from ADR-0013 that shaped all of this: **every invariant test must be demonstrably
+fail-able.** In practice that means each security test in this repository was checked by breaking
+the implementation on purpose and confirming it failed — and two of them survived that check on the
+first attempt and had to be rewritten, both for the same reason: they compared the implementation
+against itself.
+
+`make duck` is the project's fitness function. Three real Vault SDKs (Go, Python, PHP) against the
+real server and a real bucket, plus forged files, rolled-back files, a dead bucket, a wrong key, a
+revoked token and a starved log writer. It found two bugs on its first run that all 215 in-process
+tests had missed, which is the whole argument for testing against clients somebody else wrote.
+
+`docs/references/verification-status.md` records what is actually proven, what is merely believed,
+and which invariants were retired along with the code they constrained.
+
+## Build and ship
+
+One static musl binary on a distroless base, roughly 21 MB. That was impractical while RocksDB was
+in the tree; `aws-lc-rs` is now the only dependency that compiles C, and it cross-compiles cleanly.
+
+The build needs `cmake` and `clang` for it, and `llvm` for `llvm-ar` — which is a separate package,
+and a fact learned the slow way, several minutes into a build.

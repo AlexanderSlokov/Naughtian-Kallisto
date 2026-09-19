@@ -158,6 +158,8 @@ Test: lật từng byte → `AuthFailed`; sai khoá → `AuthFailed`; đang gi�
 
 Kiểm cross-compile musl ngay ở mốc này, không để tới lúc dựng Docker — aws-lc-rs là dependency C đầu tiên của bản mới.
 
+> **Việc này đã bị hoãn, và hoá đơn tới đúng chỗ câu trên cảnh báo.** Target musl không được cài ở M1, Dockerfile viết ở M-X mà không build lần nào, và nó hỏng **hai tầng** khi CI chạy thật. Chi tiết ở mục *Sau M-X — sửa pipeline*. Bài học không phải "musl khó" mà là: một bước kiểm mà kế hoạch tự đặt ra rồi tự bỏ qua thì nó không biến mất, nó chỉ trôi tới chỗ đắt hơn.
+
 ### M2 — Vòng resolver
 
 `source.rs` — port theo QĐ-4:
@@ -405,6 +407,34 @@ Những chỗ khác đáng ghi:
 
 Thay thế `tests/e2e_vault_compat.rs` hiện tại — nó test `kv put`/`patch`/`delete`/`undelete`/`destroy`, tức là toàn bộ thứ giờ phải trả 403.
 
+**Đã thi hành. `make duck`: 22 passed.** MinIO thay Garage (image nhỏ hơn, cấu hình một biến môi trường; D2 quan tâm S3-compatible chứ không quan tâm cái nào).
+
+**Mọi container dùng `network_mode: host`.** Ràng buộc vận hành số 1 của ADR là cổng 8200 không bao giờ ra khỏi localhost, và resolver từ chối khởi động ở địa chỉ khác. Dùng bridge network nghĩa là phải *publish* cổng để test nó — tức là test một cách triển khai mà chính ADR cấm. Trên host network, client chạm `127.0.0.1:8200` đúng như một app cùng máy.
+
+**Và đây là phần đáng giá nhất của cả mốc: nó bắt được hai lỗi thật ngay lần chạy đầu, cả hai đều vô hình với 215 test nội bộ.**
+
+* **`GET /v1/sys/init` không tồn tại.** `hvac` gọi nó bên trong `is_initialized()` trước mọi thứ khác, nhận 404, rồi bỏ cuộc ở câu đầu tiên. Không test nào của ta gọi route đó vì ta không biết SDK gọi nó.
+* **Vòng refresh nuốt mọi kết quả sau khi khởi động.** `run()` viết `let _ = self.poll_once().await`, nên chỉ hai lần poll lúc boot được báo cáo. Từ giây thứ ba mươi trở đi: file giả mạo, file bị rollback, bucket chết — **không một dòng log nào, không tăng `kallisto_refresh_failures_total`**. Resolver vẫn phục vụ bảng tốt cuối cùng, đúng D14, nhưng **im lặng** — tức là đúng thứ D4 và D14 sinh ra để chống. Ai đó nhét file giả vào bucket mỗi phút sẽ hoàn toàn vô hình. Regression test `the_poll_loop_reports_every_tick_including_the_bad_ones` khẳng định *quan sát* chứ không khẳng định version được phục vụ — vì version được phục vụ luôn đúng suốt thời gian đó, và đó chính là lý do không test nào khác thấy. Đã kiểm bằng cách cài lại đúng bug.
+
+**Ba failure còn lại là lỗi của chính bài test, không phải của sản phẩm** — ghi tách bạch vì gộp chung sẽ làm hồ sơ này nói dối:
+
+* Tôi kiểm 404 bằng đường dẫn **nằm ngoài policy**. Ở đó 403 mới đúng, và cố ý: trả 404 sẽ biến nó thành existence oracle. Sửa test, không sửa server.
+* Container PHP resolve dependency theo PHP của image `composer` (8.4) rồi chạy trên `php:8.3-cli`. Thêm `platform` vào `composer.json`.
+* Client PHP thiếu PSR-7 implementation, và `csharpru/vault-php` **tự mâu thuẫn**: `read()` cho path qua `buildPath()` (thêm `/v1`), còn `list()` nằm ở lớp cha và gửi path nguyên văn. Để nguyên chỗ lệch đó trong code test kèm comment, vì nó chính là lý do có một client bên thứ ba trong bộ này: nó được viết bằng cách đọc HTTP API của Vault, nên nó giả định những thứ SDK chính thức không giả định.
+
+**Số đo.**
+
+| | |
+| --- | --- |
+| Tổng | **22 passed, 0 failed** |
+| Ca lấy-rồi-huỷ (QĐ-3) | 20000/20000, 2774 req/s, 32 luồng |
+| Access log | 20004 dòng, **drop 0** |
+| Non-2xx trong ca hot | 0 |
+
+Ca bỏ đói writer (chạy riêng ở M6) vẫn là bằng chứng mạnh hơn cho D15: 892.624 request phục vụ ở p50 1.34 ms trong khi 881.520 dòng log bị vứt.
+
+**Một chỗ build chậm phải sửa:** image PHP ban đầu `apt-get install git unzip` mất hơn 12 phút. Dựng hai stage — `composer:2` đã có sẵn git/unzip, image runtime chỉ cần thư mục `vendor/` — xuống còn **19 giây**.
+
 ### M-X — Commit xoá
 
 Chạy sau khi M3 ổn định, thành **một commit riêng** để nó là hồ sơ ghi lại cái gì bị bỏ.
@@ -436,6 +466,39 @@ Sửa tài liệu:
 - `README.md` — tagline mới, bảng tương thích D7, và mục "không chống được"
 - ADR-0015: bổ sung dòng `?version=N` vào bảng D7 theo QĐ-2
 
+**Đã thi hành: −9.149 dòng, +1.509, 71 file, một commit.** 288 → 214 test; 74 cái mất đi là của engine, và đó là con số đúng chứ không phải mất mát.
+
+Ba chỗ lệch kế hoạch:
+
+* **`src/engine/error.rs` cũng bị xoá**, dù kế hoạch nói giữ. Sau khi E1 được viết lại thì không còn ai dùng `EngineError`, và giữ một kiểu lỗi không ai sinh ra là giữ một file chết.
+* **E1 phải viết lại chứ không phải xoá, và đây là chỗ suýt hỏng lặng lẽ.** Chủ thể của E1 là `SecretPayload`, `KeyMetadata`, `EngineError` — toàn bộ thuộc đường ghi. Xoá chúng sẽ mang theo sáu test, và `verification-status.md` sẽ tiếp tục ghi E1 là **Proven** trong khi không còn gì chứng minh. Invariant không đổi; chủ thể của nó đổi. Giờ nó kiểm đúng những kiểu mà secret thật sự đi qua: `Contents` của sealed file, `Snapshot` đang sống, mọi kiểu giữ khoá, và mọi error có thể tới được một dòng log. Cả bốn test redaction đã kiểm bằng cách thay `Debug` viết tay bằng `#[derive(Debug)]`.
+* **Hai fuzz target chết theo chủ thể của chúng**, nên đổi mục tiêu chứ không bỏ. `rkyv_roundtrip` mất cùng rkyv; `http_parser` trỏ vào handler engine-era. Thay bằng `sealed_file` — **đầu vào duy nhất mà kẻ tấn công trong mô hình D13 kiểm soát hoàn toàn**, vì mô hình đó *chính là* người ghi được bucket — và `read_path` cho các parser chạy trước mọi quyết định phân quyền.
+
+**Một ranh giới của E1 phải ghi nhận chứ không giấu:** lỗi *kiểu* từ parser config **có** trích dẫn giá trị (`invalid type: string "...", expected usize`). Đó là chỗ duy nhất trong chương trình mà thông báo lỗi lặp lại đầu vào, và là cố ý: file config không chứa secret theo thiết kế (ADR-0003 — khoá và credential không có trường nào để nhét vào, và `deny_unknown_fields` khiến bịa ra một trường là lỗi), còn "dòng 4 sai" mà không nói vì sao thì tốn của operator một giờ. File *secret* được đối xử ngược lại: `kallisto-ctl` giấu message của serde ở đó chính vì giá trị nó vấp phải là secret. Test `e1_configuration_type_errors_quote_the_value_and_that_is_on_purpose` ghim đánh đổi này để nó không bị nhầm là sơ suất.
+
+**`cargo deny` sạch hoàn toàn lần đầu trong lịch sử dự án:** danh sách `ignore` rỗng. Advisory của rkyv 0.7 từng là bài toán *data migration* — archive đã nằm trên đĩa nên sửa nó nghĩa là đổi định dạng. Xoá engine biến nó thành một dòng bị xoá khỏi `deny.toml`, đúng điều D12 dự đoán. Bỏ luôn allowance `MPL-2.0` vì không còn dependency nào mang giấy phép đó.
+
+**`verification-status.md` đánh dấu Retired thay vì xoá** các nhóm đã mất chủ thể (A toàn bộ, B3/B4/B5, C1, D). "Từng proven rồi code biến mất" và "chưa bao giờ proven" là hai sự thật khác nhau, và người đọc có quyền phân biệt.
+
+### Sau M-X — sửa pipeline
+
+Không nằm trong kế hoạch, nhưng thuộc cùng công việc: PR gộp `1.0.0-alpha` vào `main` có năm check đỏ.
+
+**Rust CI chết sau 7 giây, trước khi biên dịch dòng nào:** `'toolchain' is a required input`. `dtolnay/rust-toolchain` suy ra toolchain **từ ref của chính nó**, mà policy supply-chain ghim action bằng SHA → không còn gì để suy ra. Job Miri xanh chỉ vì nó khai báo tường minh.
+
+Chỗ nguy hiểm không phải việc nó đỏ mà là **cách sửa sai sẽ làm nó xanh giả**: đặt `toolchain: stable` thì `rustfmt.toml` — vốn bật `unstable_features` với 10 option nightly-only — bị rustfmt bỏ qua kèm warning rồi **exit 0**. CI xanh trong khi format trôi khỏi thứ mọi dev tạo ra. Giờ mỗi job đọc `rust-toolchain.toml`, một nguồn sự thật duy nhất, không trôi được.
+
+**Docker hỏng hai tầng, và đây là hoá đơn cho việc bỏ qua dòng ở M1** (*"Kiểm cross-compile musl ngay ở mốc này, không để tới lúc dựng Docker"*). Dockerfile được viết ở M-X mà **không build lần nào**:
+
+1. `rustup target add` đứng trước `COPY . .`, nên musl target cài vào stable; `rust-toolchain.toml` tới sau, cargo đổi sang nightly ghim, và ở đó không có musl std → `can't find crate for 'core'`.
+2. Sửa xong, vài phút compile sau: `failed to find tool "llvm-ar"`. Package `clang` không kèm nó — phải `llvm`. `aws-lc-rs` là thứ duy nhất trong cây compile C/asm nên không gì khác phát hiện được.
+
+Sau khi sửa và **build tới khi ra image chạy được**: distroless **21.5 MB**, cả `kallisto-server` lẫn `kallisto-ctl` chạy bên trong — distroless không có libc, nên chạy được nghĩa là link tĩnh thật. D12 từ ý định thành đã kiểm chứng.
+
+**GitGuardian nói đúng:** `tests/duck` commit user/password MinIO tĩnh. Giờ sinh từ `/dev/urandom` mỗi lần chạy. Fixture password đổi tên trên toàn workspace — một repo dạy reviewer bỏ qua chuỗi hình dạng mật khẩu là đã **vô hiệu hoá scanner chứ không phải thoả mãn nó**. Test vector SigV4 của AWS tách qua `concat!`, và `.gitguardian.yaml` tham chiếu bằng **sha256 chứ không bằng giá trị** — viết một chuỗi hình dạng AWS key vào file ignore thì chỉ là dời cái hit vào đó.
+
+**Bốn alert CodeQL đều là false positive**, dismiss kèm lý do. Hai cái *critical* nói có nonce AES-GCM hard-code: một là `[0u8; 12]` bị `copy_from_slice` ghi đè bằng header của file — **nonce đang được đọc**, không phải sinh ra — cái kia được `SystemRandom::fill` lấp ngay dòng sau, mà CodeQL không mô hình hoá aws-lc-rs là nguồn ngẫu nhiên.
+
 ## Kiểm chứng
 
 Sau mỗi mốc:
@@ -463,7 +526,7 @@ Cổng thông lượng, hệ quả trực tiếp của QĐ-3 — đo bằng `mak
 | M3 (chưa có barrier) | ít nhất bằng số nền của engine cũ; kiến trúc mới ít lớp hơn nên không có lý do tụt | ✅ xem dưới |
 | M5 (có barrier trên đường nóng) | mức tụt phải đo được và phải báo cáo | ✅ xem mục M5 |
 | M6 (có access log trên đường đọc) | mức tụt phải đo được; hàng đợi đầy không được làm tụt thông lượng | ✅ xem mục M6 |
-| M8 | chạy ca lấy-rồi-huỷ ở rps cao qua nhiều worker | ⬜ |
+| M8 | chạy ca lấy-rồi-huỷ ở rps cao qua nhiều worker | ✅ 20000/20000 ở 2774 req/s, 0 non-2xx — xem mục M8 |
 
 **Số nền M3**, laptop 8 nhân, 4 worker, 100 connection, wrk2 chạy cùng máy:
 
@@ -491,5 +554,5 @@ Ba dấu hiệu red line của ADR phải được kiểm tự động, không k
 - **Method `LIST`** — axum không có sẵn. Nếu làm hụt thì `vault kv list` trượt và bài test con vịt trượt theo, nhưng mọi test đọc vẫn xanh nên rất dễ tưởng là xong.
 - **Barrier trong RAM giờ nằm trên đường nóng.** Đây là cái giá của QĐ-3 và nó có thật: một phép AES-GCM open cho mỗi request. Nếu số đo ở M5 tụt quá mức chấp nhận được thì lựa chọn là cho phép tắt barrier qua config với cảnh báo rõ ràng, chứ không phải im lặng bỏ nó.
 - **`?version=N` là một cắt giảm nhìn thấy được từ phía app.** Phải nằm trong bảng D7 và trong README trước khi có người dùng thật, đúng nguyên tắc "giới hạn giấu đi là một cái bẫy".
-- **aws-lc-rs cần `cmake` + `clang` lúc build.** Nhẹ hơn RocksDB nhiều nhưng không phải bằng không; cross-compile musl phải kiểm ở M1.
+- **aws-lc-rs cần `cmake` + `clang` lúc build.** Nhẹ hơn RocksDB nhiều nhưng không phải bằng không; cross-compile musl phải kiểm ở M1. — *Đã xảy ra đúng như vậy, và còn cần `llvm` cho `llvm-ar` nữa, thứ không ai đoán trước được. Rủi ro này được ghi ra rồi vẫn bị bỏ qua.*
 - **Ngân sách vượt ~400 dòng** so với trần 2.000 của ADR, do config, hardening và lớp worker được giữ lại chưa được tính vào trần đó.
