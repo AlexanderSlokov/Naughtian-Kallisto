@@ -37,7 +37,7 @@ cat > /tmp/plain.json <<'JSON'
 {
   "version": 1,
   "secrets": {
-    "app/db":  {"username": "admin", "password": "hunter2"},
+    "app/db":  {"username": "admin", "password": "duck-fixture-not-a-credential"},
     "app/sub/deep": {"k": "v"}
   },
   "policies": {},

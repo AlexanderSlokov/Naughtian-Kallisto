@@ -66,7 +66,7 @@ if ($token !== null && $token !== '') {
 check('read a secret', function () use ($client) {
     $response = $client->read('/secret/data/app/db');
     $data = $response->getData();
-    if (($data['data']['password'] ?? null) !== 'hunter2') {
+    if (($data['data']['password'] ?? null) !== 'duck-fixture-not-a-credential') {
         throw new RuntimeException('unexpected value: ' . json_encode($data));
     }
     if (($data['metadata']['version'] ?? 0) < 1) {

@@ -26,9 +26,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The toolchain comes from rust-toolchain.toml so there is exactly one
+      # place to change it. It cannot be left out: this action derives the
+      # toolchain from its own ref, and pinning the action to a SHA (which the
+      # supply-chain policy requires) leaves it with nothing to derive from —
+      # the job then dies with "'toolchain' is a required input" before a line
+      # of Rust is compiled.
+      #
+      # It has to be that exact nightly, not stable: rustfmt.toml sets
+      # `unstable_features = true` and ten nightly-only options. On stable
+      # rustfmt ignores them with a warning and exits 0, so a stable CI would
+      # pass while formatting drifted from what every developer produces.
+      - name: Read the pinned toolchain
+        id: toolchain
+        run: |
+          channel=$(grep -oP 'channel\s*=\s*"\K[^"]+' rust-toolchain.toml)
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Using $channel (from rust-toolchain.toml)"
+
       - name: Install minimal stable Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
         with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
           components: rustfmt, clippy
 
       # cmake and clang are for aws-lc-rs, the only native build dependency left
@@ -55,8 +74,28 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      # The toolchain comes from rust-toolchain.toml so there is exactly one
+      # place to change it. It cannot be left out: this action derives the
+      # toolchain from its own ref, and pinning the action to a SHA (which the
+      # supply-chain policy requires) leaves it with nothing to derive from —
+      # the job then dies with "'toolchain' is a required input" before a line
+      # of Rust is compiled.
+      #
+      # It has to be that exact nightly, not stable: rustfmt.toml sets
+      # `unstable_features = true` and ten nightly-only options. On stable
+      # rustfmt ignores them with a warning and exits 0, so a stable CI would
+      # pass while formatting drifted from what every developer produces.
+      - name: Read the pinned toolchain
+        id: toolchain
+        run: |
+          channel=$(grep -oP 'channel\s*=\s*"\K[^"]+' rust-toolchain.toml)
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+          echo "Using $channel (from rust-toolchain.toml)"
+
       - name: Install minimal stable Rust
         uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
 
       # cmake and clang are for aws-lc-rs, the only native build dependency left
       - name: Install OS dependencies

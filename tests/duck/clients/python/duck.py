@@ -55,7 +55,7 @@ def read_secret():
     got = client.secrets.kv.v2.read_secret_version(
         path="app/db", mount_point="secret", raise_on_deleted_version=True
     )
-    assert got["data"]["data"]["password"] == "hunter2", got
+    assert got["data"]["data"]["password"] == "duck-fixture-not-a-credential", got
     assert got["data"]["metadata"]["version"] >= 1, got
 
 
@@ -72,7 +72,7 @@ def read_current_version_explicitly():
         path="app/db", mount_point="secret", version=version,
         raise_on_deleted_version=True,
     )
-    assert got["data"]["data"]["password"] == "hunter2", got
+    assert got["data"]["data"]["password"] == "duck-fixture-not-a-credential", got
 
 
 def read_other_version_is_absent():

@@ -34,8 +34,12 @@ MINIO=http://127.0.0.1:9000
 # MinIO's own root credentials, and the names Kallisto reads them under. Both
 # are the environment rather than the config file, deliberately: the config file
 # has no field for a credential and inventing one fails to parse.
-ACCESS_KEY=kallistotest
-SECRET_KEY=kallistotest
+# Generated per run and never written to the repository. They live as long as
+# one MinIO container on loopback.
+ACCESS_KEY="duck$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+SECRET_KEY="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+export DUCK_MINIO_USER="$ACCESS_KEY"
+export DUCK_MINIO_PASSWORD="$SECRET_KEY"
 export KALLISTO_S3_ACCESS_KEY_ID="$ACCESS_KEY"
 export KALLISTO_S3_SECRET_ACCESS_KEY="$SECRET_KEY"
 
@@ -103,7 +107,7 @@ write_plain() {  # $1 = version, $2 = include the revoked token?
 {
   "version": $1,
   "secrets": {
-    "app/db":       {"username": "admin", "password": "hunter2"},
+    "app/db":       {"username": "admin", "password": "duck-fixture-not-a-credential"},
     "app/web":      {"url": "https://example.invalid"},
     "app/sub/deep": {"k": "v"},
     "other/thing":  {"k": "v"}
@@ -298,7 +302,7 @@ if start_server && [ "$(code /v1/secret/data/app/db "$APP_TOKEN")" = 200 ]; then
 else
     fail "a restart with the bucket down cold-starts from the encrypted cache"
 fi
-[ -f "$WORK/cache/secrets.kal" ] && ! grep -qa "hunter2" "$WORK/cache/secrets.kal" \
+[ -f "$WORK/cache/secrets.kal" ] && ! grep -qa "duck-fixture-not-a-credential" "$WORK/cache/secrets.kal" \
     && pass "and that cache is encrypted on disk" \
     || fail "and that cache is encrypted on disk"
 
@@ -315,7 +319,7 @@ addr, token = 'http://127.0.0.1:$PORT/v1/secret/data/app/db', '$APP_TOKEN'
 def once(_):
     req = urllib.request.Request(addr, headers={'X-Vault-Token': token})
     with urllib.request.urlopen(req, timeout=5) as r:
-        return r.status == 200 and b'hunter2' in r.read()
+        return r.status == 200 and b'duck-fixture-not-a-credential' in r.read()
 start = time.time()
 with cf.ThreadPoolExecutor(max_workers=32) as pool:
     results = list(pool.map(once, range(20000)))
@@ -336,7 +340,7 @@ else
     fail "the drop counter is scrapeable"
 fi
 # Nothing in the access log may be a secret or a readable path.
-if grep -qa -e hunter2 -e "app/db" -e "$APP_TOKEN" "$WORK/access.log" "$WORK/error.log"; then
+if grep -qa -e duck-fixture-not-a-credential -e "app/db" -e "$APP_TOKEN" "$WORK/access.log" "$WORK/error.log"; then
     fail "no secret, path or token appears in either log"
 else
     pass "no secret, path or token appears in either log"
