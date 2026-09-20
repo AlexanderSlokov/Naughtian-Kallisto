@@ -332,7 +332,9 @@ Metrics and audit logs must function **before** implementing seal/unseal. Crypto
 - [ ] SonarQube sweep: ~600 issues. Address by severity (Critical -> Major -> Minor). Prioritize memory safety, error handling, dead code, unused imports.
 - [ ] `cargo clippy --workspace` passes cleanly.
 - [ ] `make format` passes.
-- [ ] Wire up `make clippy`, `make dev`, `make release` (currently missing; AGENTS.md instructs manual execution).
+- [x] Wire up `make clippy` and `make dev`. Both exist and are what CI runs; `scripts/clippy`
+      holds the lint set. A workspace-wide `make release` is still missing — `make build-server`
+      and `make build-ctl` are the two release builds today.
 
 ### TLS (Control Plane Prerequisite)
 

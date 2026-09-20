@@ -5,6 +5,10 @@
   <img src="https://img.shields.io/badge/License-AGPLv3-red.svg?style=for-the-badge" alt="License">
 </p>
 
+<p align="center">
+  <img src="docs/kallisto.png" alt="Naughtian Kallisto mascot: a tentacle-haired figure holding a duck" width="240">
+</p>
+
 Kallisto runs beside your application on localhost. It answers Vault KV-v2 reads using one encrypted file from an S3-compatible bucket. It cannot write. There is no cluster, database, replication, or admin API.
 
 Adopting it is one line:
