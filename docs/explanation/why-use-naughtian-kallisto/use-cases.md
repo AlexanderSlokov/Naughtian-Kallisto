@@ -31,7 +31,8 @@ Kallisto is mainly designed for storing **operational secrets**: secrets that yo
 
 **Ask yourself:** *If this secret leaks and I revoke it within 5 minutes, is the damage contained and recoverable?*
 
-- **Yes** → Kallisto is a great fit. You get 1M+ RPS reads and sub-millisecond p99 latency.
+- **Yes** → Kallisto is a good fit. See
+  [serving-kv-secrets.md](./serving-kv-secrets.md) for what the read path actually measures.
 - **No** → Use Vault/OpenBao with full audit trails, compliance policies, and HSM integration.
 
 ### Recommended Architecture
@@ -44,13 +45,13 @@ Kallisto is mainly designed for storing **operational secrets**: secrets that yo
 │   │  Vault / OpenBao │           │     Kallisto      │          │
 │   │  (Root of Trust) │           │ (Operational KV)  │          │
 │   │                  │           │                   │          │
-│   │  • Root CAs      │──[sync]──▶ • Service tokens   │          │
-│   │  • Master keys   │           │  • DB passwords   │          │
-│   │  • Payment keys  │           │  • API keys       │          │
-│   │  • PII keys      │           │  • Session keys   │          │
-│   │                  │           │  • TLS certs      │          │
-│   │  ~500 RPS        │           │  ~36k RPS/core    │          │
-│   │  Full audit      │           │  Low latency      │          │
+│   │  • Root CAs      │           │  • Service tokens │          │
+│   │  • Master keys   │  operator │  • DB passwords   │          │
+│   │  • Payment keys  │  seals a  │  • API keys       │          │
+│   │  • PII keys      │  file ──► │  • Session keys   │          │
+│   │                  │  (bucket) │  • TLS certs      │          │
+│   │  Rare reads      │           │  Read-path hot    │          │
+│   │  Full audit      │           │  No audit log     │          │
 │   └──────────────────┘           └───────────────────┘          │
 │         ▲                               ▲                       │
 │         │ Rare (admin, rotation)        │ Frequent (every req)  │
@@ -61,4 +62,15 @@ Kallisto is mainly designed for storing **operational secrets**: secrets that yo
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-Each Root of Trust can have its own **Transit Engine** (envelope encryption). It holds the Master Key and wraps/unwraps Kallisto's KEK (Key Encryption Key) at startup. Kallisto uses the KEK to encrypt/decrypt DEKs locally, which BoringSSL uses for AES-256-GCM encryption at rest. Your services read from Kallisto at wire speed. If Kallisto is compromised, you revoke all derived keys from the Root of Trust and the blast radius is contained.
+There is no automatic sync between the two. An operator exports the operational secrets, seals
+them into one file with `kallisto-ctl` (AES-256-GCM, offline, never over the network), and puts
+that file on a bucket; each machine's Kallisto polls it. Envelope encryption through a Transit
+engine, a KEK/DEK hierarchy and BoringSSL were all part of the secrets-server design that
+ADR-0015 deleted — Kallisto now holds one key, taken from the environment at startup.
+
+Your services read from Kallisto on localhost. If a machine is compromised, you rotate the seal
+key and re-seal; the file's content version is authenticated, and a version older than the one
+a server already holds is refused.
+
+The mechanics are in [what-is-kallisto.md](../what-is-kallisto.md) and
+[architecture.md](../architecture.md).

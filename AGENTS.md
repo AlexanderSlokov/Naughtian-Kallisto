@@ -107,7 +107,8 @@ Use `unsafe` when it is the most appropriate solution, e.g. for FFI, extreme per
 
 - `/tests/` - `security_invariants.rs` (ADR-0013 Group E + ADR-0015 D15), `queue_stress.rs`, and `tests/duck/` — three real Vault SDKs against the real server, which is the project's fitness function.
 - `/fuzz/` - `sealed_file` (the one input an attacker fully controls) and `read_path`.
-- `/docs/` - Full Hugo (Hextra theme) documentation site
+- `/docs/` - Plain markdown, read on GitHub. Engineering records only: ADRs, benchmarks,
+  verification status, plans. Operator guides live on docs.naughtian.org.
 
 ### Architecture
 

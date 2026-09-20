@@ -1,16 +1,15 @@
-name: Docker Build and Publish Alpha build for Nauhgtian Kallisto
+name: Docker Build and Publish nightly or bleeding edge for Naughtian Kallisto
 
 on:
   push:
-    branches: [ "1.0.0-alpha" ]
-    # Build on semantic release tags like v1.0.0
-    tags: [ 'v*.*.*-alpha' ]
+    branches: [ "nightly" ]
     paths-ignore:
       - '**.md'
       - 'docs/**'
       - 'LICENSE'
-  # Manual trigger from Actions
-  workflow_dispatch:
+  schedule:
+    # Nightly at 00:00 UTC.
+    - cron: '0 0 * * *'
 
 env:
   REGISTRY: ghcr.io
@@ -56,7 +55,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=1.0.0-alpha
+            type=raw,value=nightly
 
       # Build the specialized tester image and load it locally for testing
       - name: Build tester image
@@ -65,7 +64,7 @@ jobs:
           context: .
           target: tester
           load: true
-          tags: kallisto-tester:1.0.0-alpha
+          tags: kallisto-tester:nightly
           cache-from: type=gha,scope=tester
           cache-to: type=gha,mode=max,scope=tester
 
@@ -73,8 +72,8 @@ jobs:
       - name: Push tester image
         if: github.event_name != 'pull_request'
         run: |
-          docker tag kallisto-tester:1.0.0-alpha ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:1.0.0-alpha-tester
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:1.0.0-alpha-tester
+          docker tag kallisto-tester:nightly ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-tester
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-tester
 
       # Build & Push the production Server Image
       - name: Build and push Production Image

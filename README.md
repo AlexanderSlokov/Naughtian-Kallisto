@@ -131,10 +131,12 @@ Building requires `cmake` and `clang` for `aws-lc-rs`, the only native dependenc
 
 ## Documentation
 
-The `docs/` directory is a Hugo (Hextra) site.
+The `docs/` directory is plain markdown, read on GitHub. Start at [docs/README.md](docs/README.md).
 
-`docs/content/docs/references/ADRs/` holds the design decisions. 
+`docs/references/ADRs/` holds the design decisions.
 
 ADR-0015 and ADR-0016 produced the current design.
 
 `docs/references/verification-status.md` records what is proven versus merely believed.
+
+Guides for running Kallisto live at [docs.naughtian.org/kallisto](https://docs.naughtian.org/kallisto/).

@@ -11,20 +11,18 @@ server, see the deployment guides instead.
 | Tool                                       | Needed for                                      | Required?               |
 |--------------------------------------------|-------------------------------------------------|-------------------------|
 | rustup + pinned nightly                    | every build, test, lint                         | yes                     |
-| pkg-config, libssl-dev, cmake, clang, make | compiling `librocksdb-sys` and OpenSSL bindings | yes                     |
-| Docker Engine + Compose v2                 | `make e2e`, `make docker-*`, running `act`      | yes for e2e / CI parity |
+| cmake, clang, make                         | compiling `aws-lc-rs`, the only native dependency | yes                   |
+| Docker Engine + Compose v2                 | `make duck`, `make docker-*`, running `act`     | yes for SDK tests / CI  |
 | cargo-deny                                 | dependency and licence policy (`deny.toml`)     | yes before a PR         |
 | act                                        | running `.github/workflows` locally             | recommended             |
-| k6                                         | `make bench-server`                             | only when benchmarking  |
-| wrk2                                       | `make bench-release`, `make bench-laptop`       | only when benchmarking  |
-| hugo (extended)                            | `make docs-serve`, `make docs-build`            | only when editing docs  |
+| wrk2                                       | `make bench-laptop`, `make bench-duck`          | only when benchmarking  |
 
 Check what you already have:
 
 ```bash
 rustc --version && cargo --version
 docker --version && docker compose version
-act --version; cargo deny --version; k6 version; hugo version
+act --version; cargo deny --version
 command -v wrk2
 ```
 
@@ -49,21 +47,22 @@ sides first.
 
 ## 2. System build dependencies
 
-RocksDB is built from source through `librocksdb-sys`, and the crypto path links against
-OpenSSL. Same package set that CI and the `Dockerfile` install:
+`aws-lc-rs` is built from source, which needs a C toolchain and cmake. It is the only native
+dependency left — RocksDB and OpenSSL are both gone from the tree. Same package set that CI
+and the `Dockerfile` install:
 
 ```bash
 # Debian / Ubuntu
-sudo apt-get update && sudo apt-get install -y pkg-config libssl-dev cmake clang make
+sudo apt-get update && sudo apt-get install -y cmake clang make
 
 # Fedora
-sudo dnf install -y pkgconf-pkg-config openssl-devel cmake clang make
+sudo dnf install -y cmake clang make
 
 # Arch
-sudo pacman -S --needed pkgconf openssl cmake clang make
+sudo pacman -S --needed cmake clang make
 ```
 
-The first `cargo build` compiles RocksDB and takes several minutes. Later builds reuse it.
+The first `cargo build` compiles `aws-lc-rs`. Later builds reuse it.
 
 If you prefer not to install these on the host, `.devcontainer/devcontainer.json` points
 at a prebuilt image (`docker.io/thanhzeus2016/naughtian-kallisto-devcontainer:2.0.0`)
@@ -74,7 +73,7 @@ that already has the toolchain and the C/C++ dependencies.
 Docker is not needed for `cargo build` or `cargo test --workspace`, but three workflows
 depend on it:
 
-- `make e2e` starts `tests/e2e/docker-compose.test.yml`, which builds the production
+- `make duck` runs `tests/duck/run.sh`, which builds the production
   image and runs the official `hashicorp/vault` CLI against it to verify KV-v2 API
   compatibility.
 - `make docker-build`, `make docker-test`, `make docker-run`.
@@ -91,10 +90,12 @@ docker run --rm hello-world
 
 ## 4. cargo-deny
 
-CI enforces `deny.toml`, which bans pure-Rust implementations of crypto primitives so
-that all crypto work is delegated to OpenSSL (FIPS 140-2 posture). A new transitive
-dependency pulling in `sha2`, `aes-gcm`, `ed25519`, and friends will fail the pipeline
-even though the code compiles.
+CI enforces `deny.toml`, which bans pure-Rust implementations of crypto primitives so that
+crypto work goes through a validated module. The inherited header names OpenSSL, but
+Kallisto's path is `aws-lc-rs` (wrapping AWS-LC, which carries the FIPS 140-3 validation) —
+it is already in the tree for rustls, so the barrier and the keyed hashing use it too. A new
+transitive dependency pulling in `sha2`, `aes-gcm`, `ed25519`, and friends will fail the
+pipeline even though the code compiles. The reasoning is in `deny.toml` itself.
 
 ```bash
 cargo install --locked cargo-deny
@@ -142,7 +143,7 @@ Practical notes:
   `-P ubuntu-latest=catthehacker/ubuntu:act-latest`. The micro image lacks the tooling
   these workflows assume.
 - Pass `-r` (`--reuse`) so the container survives between runs. Otherwise every run
-  re-installs the apt packages and recompiles RocksDB from scratch. The
+  re-installs the apt packages and recompiles `aws-lc-rs` from scratch. The
   `Swatinem/rust-cache` step is tuned for GitHub's cache service and will not save you
   much locally.
 - `rust-ci.yml` has `paths-ignore` for `**.md` and `docs/**`. A documentation-only change
@@ -156,29 +157,20 @@ Practical notes:
 Only needed when you touch the performance-critical path.
 
 ```bash
-brew install k6                        # make bench-server (HTTP GET/PUT/MIXED)
-# wrk2: build from https://github.com/giltene/wrk2 — make bench-release / bench-laptop
+# wrk2: build from https://github.com/giltene/wrk2 — make bench-laptop / bench-duck
 ```
 
-`cargo bench` runs the in-process Criterion suites under `benchmarks/storage` and
-`benchmarks/security` and needs no extra tooling.
+`cargo bench` runs the in-process Criterion suite `barrier_bench`
+(`benchmarks/barrier/barrier_bench.rs`) and needs no extra tooling.
 
 Benchmark numbers from a laptop running a desktop session are not comparable across
 machines; `make bench-laptop` is calibrated for one specific machine (see the comment in
 the `Makefile`).
 
-## 7. Documentation site
+## 7. Documentation
 
-The docs are a Hugo site with the Hextra theme vendored as a git submodule.
-
-```bash
-git submodule update --init --recursive
-brew install hugo          # must be the extended build
-make docs-serve            # http://localhost:1313/
-```
-
-`hugo version` must report `+extended`; the standard build cannot compile the theme's
-SCSS.
+`docs/` is plain markdown with no build step — read it on GitHub, or in your editor. There is
+nothing to install and no site to serve.
 
 ## Verify the setup
 
@@ -187,7 +179,7 @@ Run the same checks CI runs, in the same order:
 ```bash
 make dev                             # format + clippy + deny + test
 cargo fmt --all -- --check           # what CI actually asserts
-make e2e                             # needs Docker; Vault KV-v2 compatibility
+make duck                            # needs Docker; Vault KV-v2 compatibility
 ```
 
 `make clippy` runs `scripts/clippy`, which carries the project's lint gate rather than a
