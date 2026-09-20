@@ -1,12 +1,19 @@
-# 🚀 Báo cáo hiệu năng (Benchmarks)
+# Báo cáo hiệu năng (Benchmarks)
 
-Chào mừng bạn đến với chuyên mục lưu trữ các kết quả benchmark của Kallisto qua từng giai đoạn phát triển. 
+Kho lưu các kết quả benchmark của Kallisto qua từng giai đoạn, xếp theo thời gian. Phần lớn ở đây
+là **hồ sơ lịch sử, không phải mô tả hiện trạng**: các báo cáo bên dưới có trước ADR-0015, và những
+cơ chế chúng đo — SipHash với sharded cuckoo table, B-tree index đường dẫn, write-behind giảm tải
+I/O cho RocksDB — đều đã bị xoá cùng storage engine. Báo cáo nào ghi `Admin Port: 8202` hay
+`BATCH mode` là đang đo một hệ thống không còn tồn tại.
 
-Kallisto sinh ra để trở thành một "cỗ máy tốc độ" (High-Performance Secret Engine) nên việc theo dõi và tối ưu hóa hiệu năng là ưu tiên hàng đầu. Tại đây, chúng tôi lưu giữ các số liệu chứng minh tốc độ xử lý của các cơ chế cốt lõi như:
+Vẫn giữ lại, vì một quyết định có dẫn số đo thì phải để số đo ở chỗ kiểm được. ADR-0016 dựa trên
+các con số trong kho này, và `verification-status.md` phân biệt cái gì đã chứng minh với cái gì chỉ
+là tin vậy.
 
-*   **SipHash & Cuckoo Table:** Khả năng tra cứu $O(1)$ tuyệt đối, chống lại các cuộc tấn công Hash Flooding.
-*   **B-Tree Indexing:** Hệ thống gác cổng tối ưu, xác thực đường dẫn ở tốc độ cực cao.
-*   **Sharded Concurrency:** Khả năng xử lý đa luồng (Multi-threading) không tắc nghẽn thông qua kiến trúc phân rã ổ khóa.
-*   **Write-Behind (Eventual Consistency):** Hiệu năng của hàng đợi không khóa (Lock-free queue) khi giảm tải I/O cho RocksDB.
+**Số đo của đường đọc hiện tại nằm ở
+[serving-kv-secrets.md](../../explanation/why-use-naughtian-kallisto/serving-kv-secrets.md).** Đó
+là trang chuẩn, và phương pháp đo hai con số chi phí ở
+[plans/duck/plan.md](../plans/duck/plan.md).
 
-Bên dưới là các phiên bản báo cáo benchmark chi tiết. Các báo cáo này ghi nhận từ tốc độ thô (Core Engine) cho tới khả năng chịu tải trên giao thức HTTP (Server Load).
+Chạy lại tại máy: `make bench-laptop` hoặc `make bench-duck`; `cargo bench` chạy bộ Criterion
+in-process cho barrier.

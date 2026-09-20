@@ -1,12 +1,19 @@
-# 🚀 Performance Reports (Benchmarks)
+# Performance reports (benchmarks)
 
-Welcome to the archive of Kallisto's benchmark results across different stages of development.
+An archive of benchmark results across Kallisto's development, kept in date order. Most of it is
+**history rather than description**: the reports below predate ADR-0015, and the mechanisms they
+measure — SipHash and a sharded cuckoo table, a B-tree path index, write-behind offloading I/O to
+RocksDB — were all deleted along with the storage engine. A report saying `Admin Port: 8202` or
+`BATCH mode` is measuring a system that no longer exists.
 
-Kallisto was born to be a "speed machine" (High-Performance Secret Engine), so tracking and optimizing performance is our top priority. Here, we maintain metrics that prove the processing speed of our core mechanisms:
+Kept anyway, because a decision that cites a measurement should leave the measurement where it can
+be checked. ADR-0016 rests on numbers from this archive, and `verification-status.md` distinguishes
+what is proven from what is merely believed.
 
-*   **SipHash & Cuckoo Table:** Absolute $O(1)$ lookup capability, resilient against Hash Flooding attacks.
-*   **B-Tree Indexing:** An optimal gatekeeping system that validates paths at blazing fast speeds.
-*   **Sharded Concurrency:** Non-blocking multi-threading capabilities through a fine-grained lock partitioning architecture.
-*   **Write-Behind (Eventual Consistency):** The performance of our lock-free queue in offloading I/O operations to RocksDB.
+**For what the current read path measures, see
+[serving-kv-secrets.md](../../explanation/why-use-naughtian-kallisto/serving-kv-secrets.md).** That
+page is the canonical one, and the method behind the two cost figures is in
+[plans/duck/plan.md](../plans/duck/plan.md).
 
-Below are the detailed benchmark reports. These reports capture everything from raw core engine speeds to HTTP server load tolerance.
+Reproduce locally with `make bench-laptop` or `make bench-duck`; `cargo bench` runs the in-process
+Criterion suite for the barrier.
