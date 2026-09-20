@@ -1,19 +1,17 @@
-name: Docker Build and Publish
+name: Docker Build and Publish nightly or bleeding edge for Naughtian Kallisto
 
 on:
   push:
-    branches: [ "main" ]
-    # Build on semantic release tags like v1.0.0
-    tags: [ 'v*.*.*' ]
+    branches: [ "nightly" ]
     paths-ignore:
       - '**.md'
       - 'docs/**'
       - 'LICENSE'
-  # Khởi chạy thủ công từ giao diện Actions
-  workflow_dispatch:
+  schedule:
+    # Nightly at 00:00 UTC.
+    - cron: '0 0 * * *'
 
 env:
-  # Registry GitHub (Miễn phí cho Public Repo)
   REGISTRY: ghcr.io
   # IMAGE_NAME: <github_username>/<repo_name> (e.g. AlexanderSlokov/kallisto)
   IMAGE_NAME: ${{ github.repository }}
@@ -32,7 +30,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Convert github.repository to lowercase to fix Docker tag invalid format error
+      # Convert to lowercase to fix Docker tag invalid format error
       - name: Lowercase REGISTRY
         run: |
           echo "IMAGE_NAME=${GITHUB_REPOSITORY,,}" >> ${GITHUB_ENV}
@@ -57,9 +55,7 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=semver,pattern={{version}}
-            type=sha,format=short
+            type=raw,value=nightly
 
       # Build the specialized tester image and load it locally for testing
       - name: Build tester image
@@ -68,7 +64,7 @@ jobs:
           context: .
           target: tester
           load: true
-          tags: kallisto-tester:latest
+          tags: kallisto-tester:nightly
           cache-from: type=gha,scope=tester
           cache-to: type=gha,mode=max,scope=tester
 
@@ -76,8 +72,8 @@ jobs:
       - name: Push tester image
         if: github.event_name != 'pull_request'
         run: |
-          docker tag kallisto-tester:latest ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-tester:latest
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}-tester:latest
+          docker tag kallisto-tester:nightly ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-tester
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:nightly-tester
 
       # Build & Push the production Server Image
       - name: Build and push Production Image
