@@ -31,16 +31,11 @@ pub use redact::{Id, LogKey};
 /// `SealError`, `SourceError` and `TokenError` all carry counts and positions
 /// rather than content, and `tests/security_invariants.rs` holds them to it.
 ///
-/// Anything caller-supplied must arrive as an [`Id`], never as text.
+/// Anything caller-supplied has to be an [`Id`] before it reaches the format
+/// string — a path or a token never goes in as text.
 pub fn error_line(subject: &str, detail: &std::fmt::Arguments<'_>) {
     let mut stderr = std::io::stderr().lock();
     let _ = writeln!(stderr, "kallisto: {subject}: {detail}");
-}
-
-/// [`error_line`] with a redacted identifier attached.
-pub fn error_line_about(subject: &str, id: Id, detail: &std::fmt::Arguments<'_>) {
-    let mut stderr = std::io::stderr().lock();
-    let _ = writeln!(stderr, "kallisto: {subject}: path={id}: {detail}");
 }
 
 #[macro_export]

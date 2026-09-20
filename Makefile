@@ -8,14 +8,7 @@ CONTAINER_IMAGE ?= naughtian-kallisto
 DEVCONTAINER_TAG ?= 2.0.0
 CLOUD_BUILDER ?= cloud-thanhzeus2016-aleksandr-slokov-cloud-builder
 
-# Captured at build time and reported by the binary.
-BUILD_INFO_GIT_FALLBACK := "Unknown (no git or not git repo)"
-BUILD_INFO_RUSTC_FALLBACK := "Unknown"
-export KALLISTO_BUILD_RUSTC_VERSION := $(shell rustc --version 2> /dev/null || echo ${BUILD_INFO_RUSTC_FALLBACK})
-export KALLISTO_BUILD_RUSTC_TARGET := $(shell rustc -vV | awk '/host/ { print $$2 }')
-export KALLISTO_BUILD_GIT_HASH ?= $(shell git rev-parse HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-export KALLISTO_BUILD_GIT_TAG ?= $(shell git describe --tag 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
-export KALLISTO_BUILD_GIT_BRANCH ?= $(shell git rev-parse --abbrev-ref HEAD 2> /dev/null || echo ${BUILD_INFO_GIT_FALLBACK})
+
 
 help: ## List every target with its description
 	@awk 'BEGIN {FS = ":.*##"; printf "\nKallisto\n"} \
@@ -163,7 +156,7 @@ docker-build: ## Build the production image from this tree
 
 docker-test: ## Build the tester image and run the suite inside it
 	@docker build --target tester -t $(REGISTRY)/$(CONTAINER_IMAGE):tester .
-	@docker run --rm $(REGISTRY)/$(CONTAINER_IMAGE):tester make test
+	@docker run --rm $(REGISTRY)/$(CONTAINER_IMAGE):tester
 
 docker-run: docker-build ## Run the production image on the host network
 	@test -n "$$KALLISTO_SEAL_KEY" || { echo "KALLISTO_SEAL_KEY is not set"; exit 2; }
@@ -177,10 +170,7 @@ devcontainer_local_build: ## Build the devcontainer image locally
 	docker build . \
 		-t $(REGISTRY)/$(DEVCONTAINER_IMAGE):$(DEVCONTAINER_TAG) \
 		-f .devcontainer/Dockerfile \
-		--platform linux/amd64 \
-		--build-arg GIT_HASH=${KALLISTO_BUILD_GIT_HASH} \
-		--build-arg GIT_TAG=${KALLISTO_BUILD_GIT_TAG} \
-		--build-arg GIT_BRANCH=${KALLISTO_BUILD_GIT_BRANCH}
+		--platform linux/amd64
 
 devcontainer_cloud_build: ## Build and push the devcontainer image via buildx cloud
 	docker buildx build . \
@@ -188,9 +178,6 @@ devcontainer_cloud_build: ## Build and push the devcontainer image via buildx cl
 		-f .devcontainer/Dockerfile \
 		--platform linux/amd64 \
 		--builder $(CLOUD_BUILDER) \
-		--build-arg GIT_HASH=${KALLISTO_BUILD_GIT_HASH} \
-		--build-arg GIT_TAG=${KALLISTO_BUILD_GIT_TAG} \
-		--build-arg GIT_BRANCH=${KALLISTO_BUILD_GIT_BRANCH} \
 		--push
 
 .PHONY: help build build-server build-ctl clean run-server test duck \

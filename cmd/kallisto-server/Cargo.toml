@@ -7,7 +7,6 @@ license.workspace = true
 [dependencies]
 naughtian-kallisto = { path = "../.." }
 tokio = { workspace = true }
-axum = { workspace = true }
 core_crypto = { path = "../../components/kallisto_crypto" }
 telemetry = { path = "../../components/kallisto_telemetry" }
 url = "2"

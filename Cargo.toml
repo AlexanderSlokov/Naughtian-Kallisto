@@ -19,7 +19,6 @@ license = "AGPL-3.0-or-later"
 [workspace.dependencies]
 tokio = { version = "1.x", features = ["rt", "net", "macros", "sync", "time", "fs"] }
 axum = "0.7"
-parking_lot = "0.12"
 arc-swap = "1.7"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
@@ -41,7 +40,6 @@ serde_norway = "0.9"
 [dependencies]
 tokio = { workspace = true }
 axum = { workspace = true }
-parking_lot = { workspace = true }
 arc-swap = { workspace = true }
 thiserror = { workspace = true }
 serde = { workspace = true }

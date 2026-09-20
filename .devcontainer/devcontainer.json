@@ -1,5 +1,5 @@
 {
-  "name": "Kallisto C++ Dev Environment",
+  "name": "Kallisto Dev Environment",
   "image": "docker.io/thanhzeus2016/naughtian-kallisto-devcontainer:2.0.0",
   "customizations": {
     "vscode": {
@@ -12,7 +12,6 @@
  	    "sonarsource.sonarlint-vscode",
         "google.gemini-cli-vscode-ide-companion",
 		"google.geminicodeassist",
-        "llvm-vs-code-extensions.vscode-clangd",
 		"rust-lang.rust-analyzer",
 	    "tamasfe.even-better-toml"
       ],
@@ -21,9 +20,6 @@
         "code-runner.runInTerminal": true,
         "editor.formatOnSave": true,
         "rust-analyzer.check.command": "clippy",
-        "[cpp]": {
-          "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd"
-        },
         "[rust]": {
           "editor.defaultFormatter": "rust-lang.rust-analyzer"
         }
