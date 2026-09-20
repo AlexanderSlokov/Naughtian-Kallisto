@@ -157,8 +157,8 @@ cargo check --all
 # Build release server binary
 make build-server           # cargo build --release -p kallisto-server
 
-# Build release version (workspace-wide)
-# make release (not yet available - but will be soon)
+# Release build of the offline tool
+make build-ctl              # cargo build --release -p kallisto-ctl
 ```
 
 #### How to run unit tests
@@ -167,8 +167,8 @@ make build-server           # cargo build --release -p kallisto-server
 # Run the full test suite
 make test                   # cargo test --workspace
 
-# Run Vault API E2E compatibility tests (ignored by default, needs docker env — see tests/e2e/)
-make e2e
+# Three real Vault SDKs against the real server (needs docker — see tests/duck/)
+make duck
 
 # Run a single test
 cargo test -p <crate> <test_name>   # e.g. cargo test -p policy_engine token
@@ -207,18 +207,30 @@ the reason, not to the inherited block.
 ### Running the server
 
 ```bash
-make run-server                                                # resolver on :8200, loopback only
-./build/kallisto_server --http-port=8200 --workers=2 --db-path=/kallisto/data
+make run-server             # needs KALLISTO_SEAL_KEY; KALLISTO_CONFIG defaults to kallisto.example.yaml
+./target/release/kallisto-server --config=kallisto.example.yaml --workers=2
 ```
+
+The seal key and the bucket credentials are read from `KALLISTO_SEAL_KEY`,
+`KALLISTO_S3_ACCESS_KEY_ID` and `KALLISTO_S3_SECRET_ACCESS_KEY`. None of the three can be
+given as a flag or written in the configuration file — arguments are readable by every
+process on the host through `ps`. `--seal-key` exists only to reject it with that message.
+Generate a key with `cargo run -q -p kallisto-ctl -- gen-key`.
+
+Full flag list: `--config`, `--listen-address`, `--listen-port`, `--workers`, `--cache-dir`,
+`--refresh-interval-seconds`, `--i-accept-the-risk`, `--help`.
 
 ### Benchmarks
 
 ```bash
-cargo bench          # in-process Criterion benches (benchmarks/storage, benchmarks/security)
-make bench-server     # k6 HTTP load test
-make bench-laptop     # wrk2, tuned for dev machines (~30k rps target)
-make bench-release    # wrk2, full release benchmark
+cargo bench           # in-process Criterion bench for the barrier (benchmarks/barrier)
+make bench-laptop     # wrk2 at 30k req/s, tuned for one machine (expect p50 ~1.3 ms)
+make bench-duck       # wrk2 on the read path, seeded from a sealed file
 ```
+
+Current read-path numbers, and the method behind the two cost figures, are in
+`docs/explanation/why-use-naughtian-kallisto/serving-kv-secrets.md`. The reports under
+`docs/references/benchmarks/` mostly predate ADR-0015 and measure the deleted write path.
 
 ### Toolchain
 
