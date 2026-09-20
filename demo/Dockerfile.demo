@@ -1,0 +1,13 @@
+# mc + kallisto-ctl (copied from the published production image)
+
+FROM ghcr.io/alexanderslokov/naughtian-kallisto:latest AS kal-bins
+
+FROM quay.io/minio/mc:latest AS init
+
+# mc base is Alpine. The musl binary from the production image runs on it.
+COPY --from=kal-bins /usr/local/bin/kallisto-ctl /usr/local/bin/kallisto-ctl
+
+COPY demo/init.sh /init.sh
+RUN chmod +x /init.sh
+
+ENTRYPOINT ["/bin/sh", "/init.sh"]

@@ -1,86 +1,132 @@
+################################## KALLISTO ##################################
+#
 # Kallisto — a local, read-only secrets resolver that speaks Vault KV-v2.
 #
 # This file is meant to be committed. It contains no secret, and there is
 # nowhere in the schema to put one: credentials and the seal key come from the
 # environment, and a key field here fails to parse rather than being ignored.
 #
-#   KALLISTO_SEAL_KEY              the 32-byte seal key, hex-encoded (required)
-#   KALLISTO_S3_ACCESS_KEY_ID      bucket credentials (bucket sources only)
+# Required Environment Variables:
+#   KALLISTO_SEAL_KEY              the 32-byte seal key, hex-encoded
+#
+# Optional Environment Variables (for bucket sources):
+#   KALLISTO_S3_ACCESS_KEY_ID
 #   KALLISTO_S3_SECRET_ACCESS_KEY
 #
+# Note on Overrides:
 # Anything here can be overridden by an environment variable and then by a
 # command-line flag, in that order (ADR-0003).
 
 apiVersion: kallisto/v1
 kind: Resolver
+
 spec:
-  # Loopback is the default, and a non-loopback address is refused at startup
-  # unless you pass --i-accept-the-risk. Kallisto has no network authentication
-  # story: it is a sidecar for one machine's apps, not a cluster service.
+  ################################## NETWORK ##################################
+
+  # By default Kallisto listens on the loopback interface (127.0.0.1).
+  # A non-loopback address is refused at startup unless you pass the
+  # --i-accept-the-risk flag. This is because Kallisto has no network
+  # authentication: it is designed as a sidecar for one machine's apps.
+  #
+  # The default port is 8200 to match Vault's default port, allowing apps
+  # to connect without configuration changes.
   listen:
     address: 127.0.0.1
     port: 8200
 
-  # One pinned runtime per worker (ADR-0016 QĐ-3). In a CPU-limited pod, set 1.
+  ################################ PERFORMANCE ################################
+
+  # Kallisto runs one pinned Tokio runtime per worker. This avoids work-stealing
+  # and cross-core cache invalidation on the read path.
+  #
+  # In a heavily CPU-limited container (a Kubernetes pod with a low CPU limit,
+  # say), set this to 1. On larger instances, raise it towards the core count.
   workers: 2
 
-  # The KV-v2 mount your apps already write in their URLs.
+  ############################## MOUNT & AUTH #################################
+
+  # This is the Vault KV-v2 mount path that your applications already expect.
+  # If your apps read from http://127.0.0.1:8200/v1/secret/data/..., set this
+  # to "secret".
   mount: secret
 
-  # Authorization is not configured here. Tokens and policies live *inside* the
-  # sealed file, encrypted with everything else (ADR-0015 D8): write permission
-  # on the bucket and possession of the key are two different things, and a
-  # policy table in the clear would let whoever holds the first grant themselves
-  # the second. A file with no token table serves every read to anyone who can
-  # reach the port — legitimate for a single-app sidecar, and reported as
-  # `"kallisto_authorization": "none"` on /v1/sys/health so it is never a
-  # surprise.
+  # Note on Authorization:
+  # Authorization is not configured here. Tokens and policies live inside the
+  # sealed file, encrypted with everything else. Write permission on the bucket
+  # and possession of the key are two different things, and a policy table in
+  # the clear would let whoever holds the first grant themselves the second.
+  #
+  # A file with no token table serves every read to anyone who can reach the
+  # port. That is a legitimate configuration for a single-app sidecar, and it is
+  # reported as `"kallisto_authorization": "none"` on /v1/sys/health.
 
+  ################################## SOURCE ###################################
+
+  # The Source defines where Kallisto fetches its sealed secrets file.
+  #
+  # The 'bucket' type periodically polls an S3-compatible API.
+  # The 'disk' type reads a local file (useful when secrets are shipped
+  # inside the container image or mounted via Kubernetes volumes).
+  #
+  # For bucket types, specify the endpoint, bucket name, object key, and region.
+  # - Garage and MinIO typically require pathStyle: true
+  # - AWS S3 and Cloudflare R2 typically require pathStyle: false (virtual-host)
   source:
     type: bucket
     endpoint: https://s3.example.com
     bucket: kallisto
     objectKey: prod/payment.kal
     region: auto
-    # Garage and MinIO want path style; R2 and AWS take virtual-host style.
     pathStyle: true
 
-    # Or, to read a file shipped with the image instead:
-    #
+    # Example of disk source configuration:
     # type: disk
     # path: /etc/kallisto/secrets.kal
 
+  # How often to check the source for a new version of the sealed file.
+  #
+  # A bucket source sends the ETag it last saw, so an unchanged object costs a
+  # 304 and nothing else. A disk source re-reads the file each time; the content
+  # version in the header is what decides whether anything actually changes.
   refresh:
     intervalSeconds: 30
 
-  # The encrypted copy kept here is what lets an app start when the bucket is
-  # down. It is never written in the clear.
+  # Kallisto keeps an encrypted copy of the sealed file in this directory.
+  # This ensures that if the process restarts while the S3 bucket is down,
+  # the application can still boot using the last known good state.
+  # This file is NEVER written to disk in the clear.
   cacheDir: /var/lib/kallisto
 
-  # Per worker, not per process — each worker counts its own traffic so the
-  # read path never touches a shared counter. Over the limit is a 429 with
-  # Retry-After, the way Vault answers it.
+  ############################### RATE LIMITING ###############################
+
+  # Kallisto enforces rate limits per worker, not globally across the process.
+  # This ensures that rate limit counters are thread-local and the read path
+  # never has to touch a shared atomic counter or lock.
+  #
+  # If a client exceeds the limit, they receive a 429 Too Many Requests
+  # response with a Retry-After header, matching Vault's behavior.
   limits:
     requestsPerSecondPerWorker: 20000
     burst: 20000
 
-  # The access log, on stdout, one line per request.
+  ################################## LOGGING ##################################
+
+  # Access Log Configuration
+  # The access log prints one line per request to stdout.
+  # WARNING: It is NOT an audit log. An audit log records *before* it serves, so
+  # a full queue blocks reads and costs availability. Kallisto's access log
+  # records afterwards and drops lines when the queue falls behind, so a flood
+  # costs log lines rather than availability.
   #
-  # It is NOT an audit log, and the difference is the design rather than the
-  # wording (ADR-0015 D15). An audit log records before it serves, so a full
-  # queue means refusing to serve. This one records afterwards and drops when
-  # it falls behind, so a flood costs log lines instead of availability.
+  # Dropped lines are exposed as 'kallisto_access_log_dropped_total' on
+  # /v1/sys/metrics. Alert on it: a non-zero value means the process is shedding
+  # its own bookkeeping to keep answering.
   #
-  # Dropped lines are counted and exposed as kallisto_access_log_dropped_total
-  # on /v1/sys/metrics. Alert on it: a non-zero value means something is
-  # driving enough load at this process that it is shedding its own
-  # bookkeeping to keep answering.
-  #
-  # Paths and tokens appear as keyed hashes, never as themselves. The key comes
-  # from the token key inside the sealed file, so the identifiers still line up
-  # after a restart and an operator holding the file can work out which line is
-  # which. A file with no token table gets a random key that lasts as long as
-  # the process, and the server says so at startup.
+  # Security note: paths and tokens appear as keyed hashes, never in plain text,
+  # and secret values never appear at all. When the file carries a token table
+  # the log key is derived from it, so identifiers line up across a restart. A
+  # file with no token table gets a random key that lasts only as long as the
+  # process, and the server says so at startup.
   log:
     queueCapacity: 8192
     enabled: true
