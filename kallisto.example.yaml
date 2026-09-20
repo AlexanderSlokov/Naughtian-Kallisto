@@ -17,7 +17,7 @@
 # Anything here can be overridden by an environment variable and then by a
 # command-line flag, in that order (ADR-0003).
 
-apiVersion: kallisto.naughtian.org/v1
+apiVersion: kallisto/v1
 kind: Resolver
 
 spec:
@@ -36,9 +36,11 @@ spec:
 
   ################################ PERFORMANCE ################################
 
-  # Kallisto runs one pinned Tokio runtime per worker. This avoids work-stealing and cross-core cache invalidation on the read path.
+  # Kallisto runs one pinned Tokio runtime per worker. This avoids work-stealing
+  # and cross-core cache invalidation on the read path.
   #
-  # In a heavily CPU-limited container (e.g., Kubernetes pod with low CPU limits), it is highly recommended to set this to 1. On larger instances, you can increase this to match available cores.
+  # In a heavily CPU-limited container (a Kubernetes pod with a low CPU limit,
+  # say), set this to 1. On larger instances, raise it towards the core count.
   workers: 2
 
   ############################## MOUNT & AUTH #################################
@@ -49,9 +51,14 @@ spec:
   mount: secret
 
   # Note on Authorization:
-  # Authorization is not configured here. Tokens and policies live inside the sealed file, encrypted with everything else. Write permission on the bucket and possession of the key are two different things, and a policy table in the clear would let whoever holds the first grant themselves the second.
+  # Authorization is not configured here. Tokens and policies live inside the
+  # sealed file, encrypted with everything else. Write permission on the bucket
+  # and possession of the key are two different things, and a policy table in
+  # the clear would let whoever holds the first grant themselves the second.
   #
-  # A file with no token table serves every read to anyone who can reach the port. This is a legitimate configuration for a single-app sidecar and is reported as `"kallisto_authorization": "none"` on /v1/sys/health.
+  # A file with no token table serves every read to anyone who can reach the
+  # port. That is a legitimate configuration for a single-app sidecar, and it is
+  # reported as `"kallisto_authorization": "none"` on /v1/sys/health.
 
   ################################## SOURCE ###################################
 
@@ -77,8 +84,10 @@ spec:
     # path: /etc/kallisto/secrets.kal
 
   # How often to check the source for a new version of the sealed file.
-  # If the file hasn't changed (checked via ETag or modified time), Kallisto
-  # does nothing.
+  #
+  # A bucket source sends the ETag it last saw, so an unchanged object costs a
+  # 304 and nothing else. A disk source re-reads the file each time; the content
+  # version in the header is what decides whether anything actually changes.
   refresh:
     intervalSeconds: 30
 
@@ -104,11 +113,20 @@ spec:
 
   # Access Log Configuration
   # The access log prints one line per request to stdout.
-  # WARNING: It is NOT an audit log. The difference is an audit log records *before* it serves, meaning a full log queue blocks reads and reduces availability. Kallisto's access log records *afterwards* and drops lines if the queue falls behind. A flood costs log lines, not availability.
-  # Dropped lines are exposed as 'kallisto_access_log_dropped_total' on /v1/sys/metrics. Alert on this metric: a non-zero value means the process is shedding bookkeeping to stay alive under extreme load.
-  # Security Note: Paths and tokens appear as keyed hashes, never in plain text.
-  # The key comes from inside the sealed file, so hashes remain stable across
-  # restarts, but an attacker observing logs cannot read the actual paths/tokens.
+  # WARNING: It is NOT an audit log. An audit log records *before* it serves, so
+  # a full queue blocks reads and costs availability. Kallisto's access log
+  # records afterwards and drops lines when the queue falls behind, so a flood
+  # costs log lines rather than availability.
+  #
+  # Dropped lines are exposed as 'kallisto_access_log_dropped_total' on
+  # /v1/sys/metrics. Alert on it: a non-zero value means the process is shedding
+  # its own bookkeeping to keep answering.
+  #
+  # Security note: paths and tokens appear as keyed hashes, never in plain text,
+  # and secret values never appear at all. When the file carries a token table
+  # the log key is derived from it, so identifiers line up across a restart. A
+  # file with no token table gets a random key that lasts only as long as the
+  # process, and the server says so at startup.
   log:
     queueCapacity: 8192
     enabled: true

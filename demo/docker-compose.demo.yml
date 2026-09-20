@@ -11,8 +11,14 @@
 #   Health     : curl http://127.0.0.1:8200/v1/sys/health
 #   Read secret: curl http://127.0.0.1:8200/v1/secret/data/app/database
 #
-# Credentials in .env.demo are throwaway demo values committed on purpose.
-# Do not use them outside this local demo.
+# Credentials in .env.demo are deliberately fake placeholders committed on
+# purpose — the seal key is thirty-two zero bytes. Do not use them anywhere.
+#
+# REQUIRES LINUX. Every service below uses network_mode: host, because Kallisto
+# refuses to bind anything but loopback and a container's own loopback is not
+# reachable from the host. Docker Desktop on macOS and Windows does not provide
+# host networking the same way; see "Running without host networking" in
+# README.md for what would have to change.
 
 services:
   minio:

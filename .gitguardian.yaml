@@ -17,14 +17,6 @@ secret:
     # /dev/urandom and never committed — see tests/duck/run.sh.
     - "tests/duck/**/vendor/**"
 
-    # Demo environment throwaway credentials. The values in demo/.env.demo are
-    # committed intentionally to enable `docker compose up` with zero setup.
-    # They are not live credentials: the seal key is a random hex string with
-    # no associated bucket, and the MinIO credentials are a local demo instance
-    # that only binds to loopback. A blanket ignore for the whole file is
-    # appropriate because every value in it is a documented demo placeholder.
-    - "demo/.env.demo"
-
   ignored-matches:
     # AWS's own published Signature Version 4 test vector. It appears verbatim
     # in AWS documentation and ends in the literal string EXAMPLEKEY; the test
