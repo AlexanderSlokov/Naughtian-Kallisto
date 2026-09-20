@@ -7,7 +7,7 @@ on:
     tags: [ 'v*.*.*-alpha' ]
     paths-ignore:
       - '**.md'
-      - '../../docs/**'
+      - 'docs/**'
       - 'LICENSE'
   # Manual trigger from Actions
   workflow_dispatch:

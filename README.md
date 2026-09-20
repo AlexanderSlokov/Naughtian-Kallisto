@@ -137,4 +137,4 @@ The `docs/` directory is a Hugo (Hextra) site.
 
 ADR-0015 and ADR-0016 produced the current design.
 
-`docs/content/docs/references/verification-status.md` records what is proven versus merely believed.
+`docs/references/verification-status.md` records what is proven versus merely believed.
