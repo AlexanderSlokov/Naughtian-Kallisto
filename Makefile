@@ -193,19 +193,10 @@ devcontainer_cloud_build: ## Build and push the devcontainer image via buildx cl
 		--build-arg GIT_BRANCH=${KALLISTO_BUILD_GIT_BRANCH} \
 		--push
 
-##@ Documentation
-
-docs-serve: ## Hugo dev server on http://localhost:1313/
-	hugo server -s docs
-
-docs-build: ## Build the documentation site
-	hugo -s docs
-
 .PHONY: help build build-server build-ctl clean run-server test duck \
         format clippy deny dev \
         verify verify-miri verify-miri-queue verify-security verify-proptest \
         loom fuzz fuzz-build mutants-core mutants-all prove \
         bench-laptop bench-duck \
         docker-build docker-test docker-run \
-        devcontainer_local_build devcontainer_cloud_build \
-        docs-serve docs-build
+        devcontainer_local_build devcontainer_cloud_build
