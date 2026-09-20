@@ -25,7 +25,7 @@ This file provides guidance to AI agents when working with code in this reposito
 
 ### Tests
 
-- Tests run with a single command: `<project-specific>`.
+- Tests run with a single command: `make test` (`cargo test --workspace`).
 - Every new function gets a test. Bug fixes get a regression test.
 - Mock external I/O (API, DB, filesystem) with named fake classes,
   not inline stubs.
