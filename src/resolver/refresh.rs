@@ -15,7 +15,7 @@ use tokio::sync::Notify;
 
 use super::{
     snapshot::{Snapshot, SnapshotError, SnapshotSlot},
-    source::{Fetched, SecretSource, SourceError},
+    source::{DiskSource, Fetched, SecretSource, SourceError},
 };
 
 pub const DEFAULT_INTERVAL: Duration = Duration::from_secs(30);
@@ -106,9 +106,10 @@ impl Refresher {
         let Some(path) = self.cache_path.clone() else {
             return Tick::SourceDown(SourceError::Absent);
         };
-        match tokio::fs::read(&path).await {
-            Ok(bytes) => self.adopt(bytes, None, None, false).await,
-            Err(_) => Tick::SourceDown(SourceError::Absent),
+        match DiskSource::new(path).fetch(None).await {
+            Fetched::Body { bytes, .. } => self.adopt(bytes, None, None, false).await,
+            Fetched::Unavailable(e) => Tick::SourceDown(e),
+            Fetched::NotModified => Tick::Unchanged,
         }
     }
 
@@ -227,7 +228,6 @@ mod tests {
     use core_crypto::{Contents, seal};
 
     use super::*;
-    use crate::resolver::source::DiskSource;
 
     fn key() -> SealKey {
         SealKey::from_bytes([4u8; 32])
@@ -448,5 +448,22 @@ mod tests {
         // And now the bucket being unreachable changes nothing about serving.
         assert!(matches!(r.poll_once().await, Tick::SourceDown(_)));
         assert_eq!(slot.version(), Some(11));
+    }
+
+    /// A cache that is there but cannot be read is a disk problem, and has to
+    /// say so. It used to be reported as "no sealed file at the configured
+    /// location" — which sends the operator to check for a file that is
+    /// sitting right where it should be.
+    #[tokio::test]
+    async fn an_unreadable_cache_is_reported_as_unreachable_not_absent() {
+        let cache = scratch("unreadable.cache");
+        std::fs::create_dir_all(&cache).unwrap(); // a directory: present, not readable as a file
+
+        let (mut r, _) = refresher(&scratch("no-bucket.kal"), Some(cache));
+        let tick = r.warm_from_cache().await;
+        assert!(
+            matches!(tick, Tick::SourceDown(SourceError::Unreachable(_))),
+            "got {tick:?}"
+        );
     }
 }
