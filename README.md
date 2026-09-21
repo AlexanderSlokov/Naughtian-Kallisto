@@ -122,6 +122,44 @@ Everything that writes a sealed file happens in `kallisto-ctl`:
 | `validate --config kallisto.yaml` | Parse and resolve. Print what the server would do. |
 | `open --in secrets.kal --yes-print-secrets-to-stdout` | Exactly as dangerous as it sounds. |
 
+## What it costs to run
+
+Measured on a laptop, not a server: an HP Pavilion Gaming 15-ec0xxx with an AMD Ryzen 5 3550H (4 cores, 8 threads) and 13 GiB of RAM visible to the OS, running Ubuntu 24.04 on mains power. The configuration is the default one, 2 workers and the access log on, written to a file, serving a file of 64 secrets. The rate limiter is lifted so that the serving path is measured, not the token bucket. The server runs on logical CPUs 0-3 and the load generator on 4-7 of the same machine. Every figure is the median of 3 runs.
+
+The binary is 7.5 MiB (5.7 MiB stripped). `kallisto-ctl` is 2.4 MiB. Neither links anything beyond libc and libgcc_s.
+
+| State | Requests per second | RAM (RSS) | CPU, % of one logical CPU | Latency p50 / p99 |
+| --- | --- | --- | --- | --- |
+| Idle | 0 | 8.4 MiB | 1.3% | - |
+| Stress | 39,247 | 11.8 MiB | 132% | 1.35 ms / 3.22 ms |
+| Saturated | 63,648 | 16.7 MiB | 216% | 4.04 ms / 6.04 ms |
+
+Stress is 40,000 requests per second offered, because that is the most the default configuration will ever serve: 20,000 per worker, 2 workers. Saturated is wrk with 256 connections, sending as fast as the server answers.
+
+![CPU and RAM against request rate](docs/references/benchmarks/resource-profile-hp-pavilion-15.svg)
+
+| Offered rate | Served | RAM (RSS) | CPU | CPU per request | p50 | p99 |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1,000 | 982 | 11.6 MiB | 14% | 143 us | 1.02 ms | 2.62 ms |
+| 5,000 | 4,981 | 12.2 MiB | 47% | 95 us | 1.07 ms | 2.34 ms |
+| 10,000 | 9,960 | 11.9 MiB | 84% | 85 us | 1.44 ms | 3.02 ms |
+| 20,000 | 19,623 | 11.5 MiB | 113% | 58 us | 1.67 ms | 3.82 ms |
+| 30,000 | 29,434 | 11.8 MiB | 118% | 40 us | 1.32 ms | 4.13 ms |
+| 40,000 | 39,247 | 11.8 MiB | 132% | 34 us | 1.35 ms | 3.22 ms |
+| 50,000 | 49,793 | 11.9 MiB | 159% | 32 us | 1.27 ms | 4.48 ms |
+| 60,000 | 59,752 | 12.0 MiB | 185% | 31 us | 1.42 ms | 6.61 ms |
+
+No request in any run answered anything but 200.
+
+What the numbers say:
+
+- RAM does not grow with load. It sits near 12 MiB from 1,000 to 60,000 requests per second. The step to 16.7 MiB at saturation comes with 256 open connections instead of 100.
+- The ceiling is the server's, not the load generator's. At saturation both worker threads are fully busy, while wrk used about half of the four CPUs it had. The two workers are pinned to logical CPUs 0 and 1, which on this machine are the two hardware threads of one physical core, so the default configuration serves 63,000 requests per second from a single core.
+- CPU per request falls as load rises, from 143 us at 1,000 requests per second to 31 us at 60,000. The likely reason is that a request arriving alone pays for waking a worker and the log writer by itself, while under load one wake-up serves many. This has not been measured separately.
+- Idle is not quite zero. The access log writer, when it has nothing to write, sleeps at most 1 ms and then checks again, so it wakes about a thousand times a second. It does this instead of waiting on a condition variable, which would put a mutex on the read path.
+
+The server and the load generator share one machine and a desktop session was running during the measurement, so treat these as the order of magnitude, not a figure to size a fleet by. To measure your own machine, run `make bench-profile`. It writes its results under `target/bench/`.
+
 ## Building and testing
 
 ```bash
@@ -129,6 +167,7 @@ make dev       # fmt + clippy + cargo-deny + tests, in CI's order
 make verify    # ADR-0013's blocking verification suite
 make duck      # three real Vault SDKs against the real server
 make bench-duck
+make bench-profile   # CPU and RAM, idle to saturated, with the chart
 ```
 
 Building requires `cmake` and `clang` for `aws-lc-rs`, the only native dependency left.

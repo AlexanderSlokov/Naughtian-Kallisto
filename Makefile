@@ -143,6 +143,13 @@ bench-laptop: build-server build-ctl ## wrk2 at 30k req/s (expect p50 ~1.3 ms)
 bench-duck: build-server build-ctl ## wrk2 on the read path, seeded from a sealed file
 	@bash benchmarks/server/run_duck_bench.sh
 
+# Three runs, medians, and the load-vs-resource chart. Written under target/ so
+# a run on another machine never overwrites the published HP Pavilion figures.
+bench-profile: build-server build-ctl ## CPU and RAM idle, under a rate sweep, and saturated (~18 min)
+	@mkdir -p target/bench
+	@for n in 1 2 3; do python3 benchmarks/server/resource_profile.py target/bench/profile-$$n.json || exit 1; done
+	@python3 benchmarks/server/plot_resource_profile.py target/bench/resource-profile target/bench/profile-*.json
+
 ##@ Docker
 
 # Inside a container "localhost" is the container's own namespace,
