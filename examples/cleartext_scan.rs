@@ -12,18 +12,21 @@
 //! snapshot.rs`, which checks the data structure rather than the address space.
 //!
 //! The scanner allocates every buffer it will ever need before the first
-//! measurement and never allocates again. The first version of this did not,
-//! and its own multi-megabyte reads landed on the freed blocks it was about to
-//! look at — so it reported a clean process whatever it was given. Nothing
-//! reachable from `Scanner::scan` may allocate, which is why the region parser
-//! hands back one range at a time instead of collecting them.
+//! measurement and never allocates again — the chunk it reads into, and the two
+//! lists of addresses it compares. The first version of this did not, and its
+//! own multi-megabyte reads landed on the freed blocks it was about to look at
+//! — so it reported a clean process whatever it was given. Nothing reachable
+//! from `Scanner::scan` may allocate, which is why the region parser hands back
+//! one range at a time instead of collecting them.
 //!
-//! Read the *deltas*, not the absolute counts. Sealing the fixture at the start
-//! parses the secret into owned `serde_json` values, and those allocations keep
-//! the secret after they are freed — which is the very thing this milestone
-//! removed from the *serving* path, and which is visible here as a baseline
-//! that never returns to zero. In production that step runs in the CLI, not in
-//! the resolver.
+//! Read the *new addresses*, not the absolute counts. Sealing the fixture at
+//! the start parses the secret into owned `serde_json` values, and those
+//! allocations keep the secret after they are freed — which is the very thing
+//! this milestone removed from the *serving* path, and which is visible here as
+//! a baseline that never returns to zero. In production that step runs in the
+//! CLI, not in the resolver. That baseline then drifts *down* as later
+//! allocations land on those freed blocks and scrub them, so what is checked is
+//! where each copy sits, not how many there are.
 //!
 //!     cargo run --example cleartext_scan
 
@@ -43,13 +46,14 @@ fn main() {
     let key = SealKey::from_bytes([11u8; 32]);
     let sealed = seal_fixture(&key);
 
-    let baseline = scanner.scan();
-    report("baseline, before the file is opened", baseline, baseline);
+    scanner.record_baseline();
+    report("baseline, before the file is opened", &scanner);
 
     let snapshot = build_snapshot(&sealed, &key);
-    assert_matches_baseline("after building a snapshot", scanner.scan(), baseline);
+    scanner.scan();
+    assert_no_new_copies("after building a snapshot", &scanner);
 
-    serve_one_response(&snapshot, &mut scanner, baseline);
+    serve_one_response(&snapshot, &mut scanner);
 
     println!(
         "\nthis thread's decryption buffer wiped: {}",
@@ -89,8 +93,8 @@ fn build_snapshot(sealed: &[u8], key: &SealKey) -> Snapshot {
 
 /// Serving does put the secret in the clear, in the response body, and dropping
 /// that body does not scrub it. ADR-0015 D13 says exactly this: at any moment
-/// the few being sent are in the clear.
-fn serve_one_response(snapshot: &Snapshot, scanner: &mut Scanner, baseline: usize) {
+/// the few being sent are in the clear. Reported, not asserted on.
+fn serve_one_response(snapshot: &Snapshot, scanner: &mut Scanner) {
     let body = snapshot
         .with_secret("app/db", ToString::to_string)
         .expect("the fixture holds app/db")
@@ -102,59 +106,96 @@ fn serve_one_response(snapshot: &Snapshot, scanner: &mut Scanner, baseline: usiz
         "app/db came back without the needle — the fixture or the barrier is wrong"
     );
 
-    let during = scanner.scan();
+    scanner.scan();
     drop(body);
-    report("while a response body is alive", during, baseline);
-    report("after that body is dropped", scanner.scan(), baseline);
+    report("while a response body is alive", scanner);
+
+    scanner.scan();
+    report("after that body is dropped", scanner);
 }
 
-/// The one line this milestone has to prove: building a snapshot adds no copy
-/// of its own on top of what sealing the fixture already left behind.
+/// The one thing this milestone has to prove: building a snapshot leaves no
+/// copy of the cleartext at an address the baseline did not already hold.
 ///
-/// Equality, not `<=`, so that a *drop* in the count is also surfaced: it means
-/// the resolver's own allocations landed on a freed baseline copy and scrubbed
-/// it, which makes the baseline stop being a baseline. That is what the check
-/// currently reports on this machine — see the note in the duck plan.
-fn assert_matches_baseline(what: &str, hits: usize, baseline: usize) {
-    report(what, hits, baseline);
+/// Counting cannot say this. Sealing the fixture leaves copies in freed blocks,
+/// and the resolver's own allocations land on some of them and scrub them, so
+/// on a perfectly clean run the total drifts *down* — which an equality check
+/// on the count reports as a failure, and a `<=` check would paper over the
+/// case where one copy is scrubbed and one is added. Addresses do not drift: a
+/// needle where the baseline never had one came from the step under test.
+fn assert_no_new_copies(what: &str, scanner: &Scanner) {
+    report(what, scanner);
+    let new = scanner.new_copies();
     assert_eq!(
-        hits, baseline,
-        "{what}: found {hits} copy(ies) of the cleartext, expected the baseline {baseline}"
+        new, 0,
+        "{what}: {new} copy(ies) of the cleartext at an address the baseline did not hold"
     );
 }
 
-fn report(what: &str, hits: usize, baseline: usize) {
-    let delta = hits as isize - baseline as isize;
-    println!("{what:<38} {hits:>2} copy(ies)  ({delta:+} vs baseline)");
+fn report(what: &str, scanner: &Scanner) {
+    let total = scanner.found.len();
+    let delta = total as isize - scanner.baseline.len() as isize;
+    println!(
+        "{what:<38} {total:>2} copy(ies)  ({delta:+} vs baseline, {} at a new address)",
+        scanner.new_copies()
+    );
 }
 
-/// Counts occurrences of [`NEEDLE`] in anonymous and heap mappings, without
-/// allocating anything after construction.
+/// Finds every occurrence of [`NEEDLE`] in this process's anonymous and heap
+/// mappings, recording *where* each one sits, without allocating anything after
+/// construction.
 struct Scanner {
     maps: String,
     chunk: Vec<u8>,
+    baseline: Vec<usize>,
+    found: Vec<usize>,
 }
 
 impl Scanner {
     const CHUNK: usize = 1 << 22; // 4 MiB
+    /// Room for far more copies than any run produces, reserved up front so
+    /// that recording a hit never allocates. `Sweep::record` panics rather than
+    /// grow past it.
+    const MAX_COPIES: usize = 4096;
 
     fn new() -> Self {
         Self {
             maps: String::with_capacity(1 << 20),
             chunk: vec![0u8; Self::CHUNK],
+            baseline: Vec::with_capacity(Self::MAX_COPIES),
+            found: Vec::with_capacity(Self::MAX_COPIES),
         }
     }
 
-    fn scan(&mut self) -> usize {
+    /// Where the needle already is before the step under test runs. Every later
+    /// scan is judged against these addresses, not against their count.
+    fn record_baseline(&mut self) {
+        self.scan();
+        self.baseline.clear();
+        self.baseline.extend_from_slice(&self.found);
+    }
+
+    /// Copies sitting where the baseline had none. A copy that *disappears*
+    /// between scans is allocator reuse, not a finding.
+    fn new_copies(&self) -> usize {
+        self.found
+            .iter()
+            .filter(|&&at| !self.baseline.contains(&at))
+            .count()
+    }
+
+    fn scan(&mut self) {
         self.reload_maps();
         // Split the borrow by hand: the line being parsed lives in `maps` while
-        // `chunk` is being written into.
-        let Self { maps, chunk } = self;
-        let mut mem = File::open("/proc/self/mem").expect("this example is Linux-only");
-        maps.lines()
-            .filter_map(own_anonymous_range)
-            .map(|(lo, hi)| count_in_range(&mut mem, chunk, lo, hi))
-            .sum()
+        // the sweep writes into `chunk` and `found`.
+        let Self {
+            maps, chunk, found, ..
+        } = self;
+        found.clear();
+        let mut sweep = Sweep::new(chunk, found);
+        for (lo, hi) in maps.lines().filter_map(own_anonymous_range) {
+            sweep.read_range(lo, hi);
+        }
     }
 
     fn reload_maps(&mut self) {
@@ -163,6 +204,61 @@ impl Scanner {
             .expect("this example is Linux-only")
             .read_to_string(&mut self.maps)
             .expect("/proc/self/maps is UTF-8");
+    }
+}
+
+/// One pass over the address space, holding only what it writes to — so that
+/// `Scanner::maps` can stay borrowed by the line being parsed.
+struct Sweep<'a> {
+    mem: File,
+    chunk: &'a mut [u8],
+    found: &'a mut Vec<usize>,
+}
+
+impl<'a> Sweep<'a> {
+    fn new(chunk: &'a mut [u8], found: &'a mut Vec<usize>) -> Self {
+        Self {
+            mem: File::open("/proc/self/mem").expect("this example is Linux-only"),
+            chunk,
+            found,
+        }
+    }
+
+    /// Reads `[lo, hi)` a chunk at a time, recording each needle it holds.
+    fn read_range(&mut self, lo: usize, hi: usize) {
+        let mut at = lo;
+        while at < hi {
+            let want = (hi - at).min(self.chunk.len());
+            if self.mem.seek(SeekFrom::Start(at as u64)).is_err()
+                || self.mem.read_exact(&mut self.chunk[..want]).is_err()
+            {
+                break; // guard pages and the like
+            }
+            self.record(at, want);
+            if want < self.chunk.len() {
+                break;
+            }
+            // Chunked with an overlap, so a needle straddling a chunk boundary
+            // is still seen once: it lands whole in the chunk that follows.
+            at += self.chunk.len() - (NEEDLE.len() - 1);
+        }
+    }
+
+    /// Records the absolute address of every needle in the first `len` bytes of
+    /// the chunk, which was read starting at `base`.
+    fn record(&mut self, base: usize, len: usize) {
+        let Self { chunk, found, .. } = self;
+        for (offset, window) in chunk[..len].windows(NEEDLE.len()).enumerate() {
+            if window != NEEDLE.as_bytes() {
+                continue;
+            }
+            assert!(
+                found.len() < found.capacity(),
+                "more than {} copies of the needle in this process; raise Scanner::MAX_COPIES",
+                found.capacity()
+            );
+            found.push(base + offset);
+        }
     }
 }
 
@@ -194,33 +290,4 @@ fn hex_address(field: &str, line: &str) -> usize {
     usize::from_str_radix(field, 16).unwrap_or_else(|why| {
         panic!("/proc/self/maps: expected a hex address, got {field:?} in {line:?} ({why})")
     })
-}
-
-/// Reads `[lo, hi)` a chunk at a time, counting the needle in each.
-fn count_in_range(mem: &mut File, chunk: &mut [u8], lo: usize, hi: usize) -> usize {
-    let mut hits: usize = 0;
-    let mut at = lo;
-    while at < hi {
-        let want = (hi - at).min(chunk.len());
-        if mem.seek(SeekFrom::Start(at as u64)).is_err()
-            || mem.read_exact(&mut chunk[..want]).is_err()
-        {
-            break; // guard pages and the like
-        }
-        hits += count_needles(&chunk[..want]);
-        if want < chunk.len() {
-            break;
-        }
-        // Chunked with an overlap, so a needle straddling a chunk boundary is
-        // still counted once: it lands whole in the chunk that follows.
-        at += chunk.len() - (NEEDLE.len() - 1);
-    }
-    hits
-}
-
-fn count_needles(bytes: &[u8]) -> usize {
-    bytes
-        .windows(NEEDLE.len())
-        .filter(|window| *window == NEEDLE.as_bytes())
-        .count()
 }
