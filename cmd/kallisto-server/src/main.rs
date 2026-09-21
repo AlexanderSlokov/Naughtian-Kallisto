@@ -69,7 +69,7 @@ fn run() -> Result<(), Startup> {
     }
 
     let cli = config::parse_args(std::env::args().skip(1))?;
-    let environment = config::from_env(env);
+    let environment = config::from_env(env)?;
 
     let Some(path) = cli
         .config_path

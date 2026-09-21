@@ -69,17 +69,40 @@ impl Overrides {
 }
 
 /// Reads the layer between the file and the command line.
-pub fn from_env<F: Fn(&str) -> Option<String>>(get: F) -> Overrides {
-    Overrides {
-        config_path: get("KALLISTO_CONFIG").map(PathBuf::from),
-        address: get("KALLISTO_LISTEN_ADDRESS").and_then(|v| v.parse().ok()),
-        port: get("KALLISTO_LISTEN_PORT").and_then(|v| v.parse().ok()),
-        workers: get("KALLISTO_WORKERS").and_then(|v| v.parse().ok()),
-        cache_dir: get("KALLISTO_CACHE_DIR").map(PathBuf::from),
-        refresh_interval_seconds: get("KALLISTO_REFRESH_INTERVAL_SECONDS")
-            .and_then(|v| v.parse().ok()),
+///
+/// As strict as the file and the flags: a value that does not parse is a typo,
+/// and a typo that quietly fell back to the default would run the process on a
+/// port or with a worker count nobody asked for — a pod that is up and wrong,
+/// instead of one that is down and says why. The error names the variable and
+/// the value, so the fix is one line in the manifest.
+///
+/// An empty value counts as unset: it is what a templated manifest renders for
+/// a value nobody filled in, and refusing to start over it helps nobody.
+pub fn from_env<F: Fn(&str) -> Option<String>>(get: F) -> Result<Overrides, ConfigError> {
+    let read = |var: &str| get(var).filter(|value| !value.is_empty());
+    Ok(Overrides {
+        config_path: read("KALLISTO_CONFIG").map(PathBuf::from),
+        address: parse_env(&read, "KALLISTO_LISTEN_ADDRESS", "an IP")?,
+        port: parse_env(&read, "KALLISTO_LISTEN_PORT", "a port")?,
+        workers: parse_env(&read, "KALLISTO_WORKERS", "a number")?,
+        cache_dir: read("KALLISTO_CACHE_DIR").map(PathBuf::from),
+        refresh_interval_seconds: parse_env(
+            &read,
+            "KALLISTO_REFRESH_INTERVAL_SECONDS",
+            "a number",
+        )?,
         accept_risk: false,
-    }
+    })
+}
+
+fn parse_env<T: FromStr>(
+    read: &impl Fn(&str) -> Option<String>,
+    var: &str,
+    expected: &str,
+) -> Result<Option<T>, ConfigError> {
+    read(var)
+        .map(|raw| parse_value(var, raw, expected))
+        .transpose()
 }
 
 /// `--flag=value` and `--flag value`, same as the binary has always accepted.
@@ -160,6 +183,51 @@ mod tests {
             !message.contains("deadbeef"),
             "the refusal echoed the key back: {message}"
         );
+    }
+
+    fn env_of<'a>(pairs: &'a [(&'a str, &'a str)]) -> impl Fn(&str) -> Option<String> + 'a {
+        |var| {
+            pairs
+                .iter()
+                .find(|(name, _)| *name == var)
+                .map(|(_, value)| (*value).to_string())
+        }
+    }
+
+    /// A typo in the environment stops the process, naming the variable and
+    /// what it held — the same as a typo in a flag or in the file.
+    #[test]
+    fn a_malformed_environment_value_is_an_error_not_a_silent_default() {
+        for (var, raw) in [
+            ("KALLISTO_LISTEN_ADDRESS", "0.0.0.O"),
+            ("KALLISTO_LISTEN_PORT", "82OO"),
+            ("KALLISTO_WORKERS", "abc"),
+            ("KALLISTO_REFRESH_INTERVAL_SECONDS", "30s"),
+        ] {
+            let message = from_env(env_of(&[(var, raw)])).unwrap_err().to_string();
+            assert!(
+                message.contains(var),
+                "{var}: message does not name it: {message}"
+            );
+            assert!(
+                message.contains(raw),
+                "{var}: message does not quote {raw:?}: {message}"
+            );
+        }
+    }
+
+    /// What a templated manifest renders for a value nobody filled in.
+    #[test]
+    fn an_empty_environment_value_counts_as_unset() {
+        let overrides = from_env(env_of(&[
+            ("KALLISTO_CONFIG", ""),
+            ("KALLISTO_LISTEN_PORT", ""),
+            ("KALLISTO_WORKERS", ""),
+        ]))
+        .unwrap();
+        assert_eq!(overrides.config_path, None);
+        assert_eq!(overrides.port, None);
+        assert_eq!(overrides.workers, None);
     }
 
     /// `--refresh-interval-seconds` was accepted for a while without appearing

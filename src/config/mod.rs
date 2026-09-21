@@ -300,7 +300,8 @@ spec:
             "KALLISTO_LISTEN_PORT" => Some("2222".to_string()),
             "KALLISTO_WORKERS" => Some("6".to_string()),
             _ => None,
-        });
+        })
+        .unwrap();
         let env_wins =
             Config::resolve(parse(with_port).unwrap(), env, Overrides::default()).unwrap();
         assert_eq!(env_wins.listen.port(), 2222);
@@ -310,7 +311,8 @@ spec:
         let env = from_env(|k| match k {
             "KALLISTO_LISTEN_PORT" => Some("2222".to_string()),
             _ => None,
-        });
+        })
+        .unwrap();
         let cli = parse_args(["--listen-port=3333".to_string()].into_iter()).unwrap();
         let cli_wins = Config::resolve(parse(with_port).unwrap(), env, cli).unwrap();
         assert_eq!(cli_wins.listen.port(), 3333);
