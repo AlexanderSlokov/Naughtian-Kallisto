@@ -30,6 +30,12 @@ pub struct Spec {
     pub listen: Option<Listen>,
     #[serde(default)]
     pub workers: Option<usize>,
+    /// Which logical CPUs the workers are pinned to, in order. Left out, the
+    /// resolver picks one physical core per worker and stays off CPU 0
+    /// (`crate::event::cpu_plan`). Set it when something else on the machine
+    /// owns particular CPUs and this one must keep off them.
+    #[serde(default)]
+    pub cpus: Option<Vec<usize>>,
     /// The KV-v2 mount Kallisto answers on. `secret` unless someone had a
     /// reason.
     #[serde(default)]

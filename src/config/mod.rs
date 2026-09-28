@@ -68,6 +68,8 @@ pub const SECRET_KEY_ENV: &str = "KALLISTO_S3_SECRET_ACCESS_KEY";
 pub struct Config {
     pub listen: SocketAddr,
     pub workers: usize,
+    /// `None` means the resolver chooses; see `crate::event::cpu_plan`.
+    pub cpus: Option<Vec<usize>>,
     pub mount: String,
     pub source: Source,
     pub refresh_interval: Duration,
@@ -137,6 +139,7 @@ impl Config {
         Ok(Config {
             listen: SocketAddr::new(bind_address(&merged)?, merged.port.unwrap_or(DEFAULT_PORT)),
             workers: worker_count(&merged)?,
+            cpus: spec.cpus,
             mount: spec.mount.unwrap_or_else(|| DEFAULT_MOUNT.to_string()),
             source: spec.source.into(),
             refresh_interval: refresh_interval(&merged),

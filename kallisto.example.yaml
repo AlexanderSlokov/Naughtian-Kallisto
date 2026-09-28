@@ -43,6 +43,17 @@ spec:
   # say), set this to 1. On larger instances, raise it towards the core count.
   workers: 2
 
+  # Which logical CPUs the workers are pinned to, in order. Left out, Kallisto
+  # picks one physical core per worker, stays inside whatever affinity mask it
+  # was started with, and leaves CPU 0 alone where it can: CPU 0 usually carries
+  # the machine's interrupts, and Kallisto is a guest here.
+  #
+  # Set it when something else on this machine owns particular CPUs. It is taken
+  # as written, siblings and CPU 0 included. The CPUs chosen are printed at
+  # startup either way.
+  #
+  # cpus: [2, 4]
+
   ############################## MOUNT & AUTH #################################
 
   # This is the Vault KV-v2 mount path that your applications already expect.

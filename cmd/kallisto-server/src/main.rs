@@ -9,7 +9,7 @@ use std::{process::ExitCode, sync::Arc, thread};
 
 use naughtian_kallisto::{
     config::{self, ACCESS_KEY_ENV, Config, ConfigError, SEAL_KEY_ENV, SECRET_KEY_ENV, Source},
-    event::worker::WorkerPool,
+    event::{cpu_plan, worker::WorkerPool},
     resolver::{
         BucketConfig, BucketSource, DiskSource, Refresher, SecretSource, SnapshotSlot,
         refresh::Tick,
@@ -138,11 +138,27 @@ fn run() -> Result<(), Startup> {
         limits: cfg.limits,
         telemetry,
     };
-    let pool = WorkerPool::spawn(cfg.workers, cfg.listen, move |worker| {
+    let pins = worker_cpus(&cfg);
+    let pool = WorkerPool::spawn(cfg.workers, cfg.listen, &pins, move |worker| {
         vault_api::router_for_worker(resolver.clone(), worker)
     });
     pool.join_all();
     Ok(())
+}
+
+/// Which CPU each worker is pinned to, and a line saying so: an operator who
+/// wonders why Kallisto is on those CPUs should not have to read `/proc`.
+fn worker_cpus(cfg: &Config) -> Vec<usize> {
+    let pins = match &cfg.cpus {
+        Some(cpus) => cpu_plan::plan_from(cfg.workers, cpus),
+        None => cpu_plan::plan(cfg.workers, &cpu_plan::Topology::of_this_process()),
+    };
+    if pins.is_empty() {
+        eprintln!("kallisto: workers are not pinned; no usable CPU topology was found");
+    } else {
+        eprintln!("kallisto: worker CPUs {pins:?}");
+    }
+    pins
 }
 
 fn build_source(cfg: &Config) -> Result<Arc<dyn SecretSource>, Startup> {
