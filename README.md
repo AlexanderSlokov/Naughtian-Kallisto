@@ -130,11 +130,13 @@ The binary is 7.5 MiB (5.7 MiB stripped). `kallisto-ctl` is 2.4 MiB. Neither lin
 
 | State | Requests per second | RAM (RSS) | CPU, % of one logical CPU | Latency p50 / p99 |
 | --- | --- | --- | --- | --- |
-| Idle | 0 | 8.4 MiB | 1.3% | - |
+| Idle | 0 | 8.3 MiB | 0.0% | - |
 | Stress | 39,247 | 11.8 MiB | 132% | 1.35 ms / 3.22 ms |
 | Saturated | 63,648 | 16.7 MiB | 216% | 4.04 ms / 6.04 ms |
 
 Stress is 40,000 requests per second offered, because that is the most the default configuration will ever serve: 20,000 per worker, 2 workers. Saturated is wrk with 256 connections, sending as fast as the server answers.
+
+The idle row is from 2.0.1. The stress and saturated rows, and the sweep below, were measured on 2.0.0: 2.0.1 changed when the log writer sleeps and which CPUs the workers are pinned to, and the sweep has not been run again since. Saturation was compared directly, five runs of each, 20 seconds apiece: 58.3k requests per second against the old pinning's 57.0k, at 208% CPU against 215%.
 
 ![CPU and RAM against request rate](docs/references/benchmarks/resource-profile-hp-pavilion-15.svg)
 
@@ -154,9 +156,9 @@ No request in any run answered anything but 200.
 What the numbers say:
 
 - RAM does not grow with load. It sits near 12 MiB from 1,000 to 60,000 requests per second. The step to 16.7 MiB at saturation comes with 256 open connections instead of 100.
-- The ceiling is the server's, not the load generator's. At saturation both worker threads are fully busy, while wrk used about half of the four CPUs it had. The two workers are pinned to logical CPUs 0 and 1, which on this machine are the two hardware threads of one physical core, so the default configuration serves 63,000 requests per second from a single core.
+- The ceiling is the server's, not the load generator's. At saturation both worker threads are fully busy, while wrk used about half of the four CPUs it had. Until 2.0.1 the two workers were pinned to logical CPUs 0 and 1, which on this machine are the two hardware threads of one physical core, so the default configuration served the whole of that from a single core. They now take one physical core each, stay inside whatever affinity mask the process was given, and leave CPU 0 alone where they can.
 - CPU per request falls as load rises, from 143 us at 1,000 requests per second to 31 us at 60,000. The likely reason is that a request arriving alone pays for waking a worker and the log writer by itself, while under load one wake-up serves many. This has not been measured separately.
-- Idle is not quite zero. The access log writer, when it has nothing to write, sleeps at most 1 ms and then checks again, so it wakes about a thousand times a second. It does this instead of waiting on a condition variable, which would put a mutex on the read path.
+- Idle is zero, as of 2.0.1. The access log writer used to sleep at most 1 ms and look again, waking about a thousand times a second and costing 1.3% of a logical CPU on a resolver nobody was calling. It now parks once the queue has been empty for 50 ms, and a worker wakes it when it writes a line. The wait is 50 ms rather than immediate because parking the moment the queue ran dry put a futex wake on the read path, once per request, and measured 5% slower.
 
 The server and the load generator share one machine and a desktop session was running during the measurement, so treat these as the order of magnitude, not a figure to size a fleet by. To measure your own machine, run `make bench-profile`. It writes its results under `target/bench/`.
 
