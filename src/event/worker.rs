@@ -27,39 +27,39 @@ impl WorkerPool {
     /// The index is what lets a worker claim *its* slice of state that was
     /// allocated up front, rather than registering itself into something shared
     /// at startup.
-    pub fn spawn<F>(num_workers: usize, addr: SocketAddr, make_router: F) -> Self
+    ///
+    /// `pins[i]` is the logical CPU worker `i` is pinned to, as chosen by
+    /// [`crate::event::cpu_plan`]. A shorter list than `num_workers` leaves the
+    /// rest unpinned.
+    pub fn spawn<F>(num_workers: usize, addr: SocketAddr, pins: &[usize], make_router: F) -> Self
     where
         F: Fn(usize) -> Router + Clone + Send + 'static,
     {
-        let core_ids = core_affinity::get_core_ids().unwrap_or_default();
-
         let handles = (0..num_workers)
             .map(|worker_idx| {
                 let make_router = make_router.clone();
-                // Pick a core to pin to (round-robin if there are more workers than cores)
-                let core_id = if !core_ids.is_empty() {
-                    Some(core_ids[worker_idx % core_ids.len()])
-                } else {
-                    None
-                };
+                // Empty means nothing was worth pinning to; the worker then
+                // runs wherever the scheduler puts it, which beats crowding
+                // every worker onto one CPU. See `cpu_plan`.
+                let pin = pins.get(worker_idx).copied();
 
                 std::thread::Builder::new()
-                    .name(format!("wrk:{}", worker_idx))
+                    .name(format!("wrk:{worker_idx}"))
                     .spawn(move || {
-                        // Pin thread to the specific core for better L1/L2 cache locality
-                        if let Some(core) = core_id {
-                            core_affinity::set_for_current(core);
+                        if let Some(cpu) = pin {
+                            core_affinity::set_for_current(core_affinity::CoreId { id: cpu });
                         }
 
-                        // Use single-threaded runtime to avoid work-stealing synchronization
+                        // One runtime per worker, so no work-stealing and no
+                        // cross-core synchronisation on the read path.
                         let rt = tokio::runtime::Builder::new_current_thread()
                             .enable_all()
                             .build()
                             .unwrap();
 
                         rt.block_on(async move {
-                            // SO_REUSEPORT allows multiple threads to bind to the same port
-                            // The kernel load balances incoming TCP connections among them
+                            // Every worker binds the same port; the kernel
+                            // hands each new connection to one of them.
                             let std_listener = bind_reuseport(addr).expect("Failed to bind port");
                             std_listener.set_nonblocking(true).unwrap();
 

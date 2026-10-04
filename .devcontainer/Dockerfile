@@ -38,21 +38,32 @@ ENV PATH="/home/vscode/.cargo/bin:${PATH}"
 COPY --chown=vscode:vscode --chmod=755 Cargo.toml Cargo.loc[k] /tmp/rust-deps/
 COPY --chown=vscode:vscode --chmod=755 cmd/kallisto-ctl/Cargo.toml /tmp/rust-deps/cmd/kallisto-ctl/
 COPY --chown=vscode:vscode --chmod=755 cmd/kallisto-server/Cargo.toml /tmp/rust-deps/cmd/kallisto-server/
-COPY --chown=vscode:vscode --chmod=755 components/kallisto_cluster/Cargo.toml /tmp/rust-deps/components/kallisto_cluster/
+
 COPY --chown=vscode:vscode --chmod=755 components/kallisto_crypto/Cargo.toml /tmp/rust-deps/components/kallisto_crypto/
 COPY --chown=vscode:vscode --chmod=755 components/kallisto_policy/Cargo.toml /tmp/rust-deps/components/kallisto_policy/
 COPY --chown=vscode:vscode --chmod=755 components/kallisto_telemetry/Cargo.toml /tmp/rust-deps/components/kallisto_telemetry/
 
 # Create dummy source files so cargo can resolve the workspace
-RUN bash -c 'source $HOME/.cargo/env \
-    && for crate in cmd/kallisto-ctl cmd/kallisto-server components/kallisto_cluster components/kallisto_crypto components/kallisto_policy components/kallisto_telemetry; do \
-         mkdir -p /tmp/rust-deps/$crate/src; \
-         echo "// placeholder" > /tmp/rust-deps/$crate/src/lib.rs; \
-         echo "fn main() {}" > /tmp/rust-deps/$crate/src/main.rs; \
-       done \
-    && cd /tmp/rust-deps \
-    && cargo fetch \
-    && rm -rf /tmp/rust-deps'
+RUN <<EOF
+  source $HOME/.cargo/env
+
+  for crate in \
+    cmd/kallisto-ctl \
+    cmd/kallisto-server \
+    components/kallisto_crypto \
+    components/kallisto_policy \
+    components/kallisto_telemetry
+  do
+    mkdir -p /tmp/rust-deps/$crate/src
+    echo "// placeholder" > /tmp/rust-deps/$crate/src/lib.rs
+    echo "fn main() {}"   > /tmp/rust-deps/$crate/src/main.rs
+  done
+
+  cd /tmp/rust-deps
+  cargo fetch
+  rm -rf /tmp/rust-deps
+EOF
+
 
 # Dev tools
 # ---------

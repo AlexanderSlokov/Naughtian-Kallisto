@@ -43,3 +43,6 @@ docs/examples/*
 *.env
 /.scannerwork
 /fuzz/target
+
+# Python bytecode from the benchmark helpers
+__pycache__/

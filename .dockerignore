@@ -10,3 +10,6 @@
 !components/
 !tests/
 !benchmarks/
+# demo/ files needed by Dockerfile.demo (init stage build)
+!demo/init.sh
+!demo/plain.demo.json

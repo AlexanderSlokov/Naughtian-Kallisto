@@ -62,8 +62,12 @@ Polls that did not yield a servable file — a rejected file, a failed authentic
 anti-rollback refusal, or a bucket that did not answer. Increments on every failed poll, not just
 the first.
 
-This is how "this machine has been serving a stale file for an hour" becomes something a scrape
-notices rather than something somebody reads the logs to discover. Pair it with
+Expect it to be **1 on a first boot**, not 0. Before the first bucket poll the resolver warms from
+its local encrypted copy, and on a fresh machine there is no such copy yet — that cold-start miss
+is counted here. Alert on the counter *rising*, not on it being non-zero.
+
+Past that, this is how "this machine has been serving a stale file for an hour" becomes something a
+scrape notices rather than something somebody reads the logs to discover. Pair it with
 `kallisto_file_version`: a rising failure count with a frozen version is a machine drifting away
 from the fleet.
 

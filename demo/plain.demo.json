@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "secrets": {
+    "app/database": {
+      "username": "demo-user",
+      "password": "demo-password-not-a-real-credential"
+    },
+    "app/api": {
+      "key": "demo-api-key-not-a-real-credential",
+      "endpoint": "https://api.example.invalid"
+    },
+    "app/cache": {
+      "host": "redis://localhost:6379",
+      "ttl_seconds": "3600"
+    }
+  },
+  "policies": {},
+  "tokens": {}
+}

@@ -19,8 +19,3 @@ policy_engine = { path = "../../components/kallisto_policy" }
 aws-lc-rs = { workspace = true }
 serde_json = { workspace = true }
 zeroize = { workspace = true }
-
-[dev-dependencies]
-naughtian-kallisto = { path = "../.." }
-core_crypto = { path = "../../components/kallisto_crypto" }
-policy_engine = { path = "../../components/kallisto_policy" }

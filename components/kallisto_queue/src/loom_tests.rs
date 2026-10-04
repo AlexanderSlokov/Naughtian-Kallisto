@@ -8,7 +8,7 @@
 
 use loom::{sync::Arc, thread};
 
-use super::*;
+use super::{LockFreeQueue, QueueError};
 
 /// B1: an enqueued item is never lost and never dequeued twice.
 ///
@@ -95,6 +95,29 @@ fn b1_concurrent_producers_preserve_every_success() {
             got, want,
             "B1: dequeued set does not match the set of successful enqueues"
         );
+    });
+}
+
+/// B1 from the consumers' side: two consumers race for one item. Exactly one
+/// gets it and the other sees `Empty`. The producer models never put two
+/// threads on `dequeue_pos`, so this is the one that drives the dequeue CAS
+/// into its failure branch — where the stale-position livelock fix lives.
+#[test]
+fn b1_concurrent_consumers_take_an_item_once() {
+    loom::model(|| {
+        let q = Arc::new(LockFreeQueue::new(2));
+        q.enqueue(7usize).unwrap();
+
+        let consumers: Vec<_> = (0..2)
+            .map(|_| {
+                let q = q.clone();
+                thread::spawn(move || q.dequeue())
+            })
+            .collect();
+        let mut taken: Vec<_> = consumers.into_iter().map(|h| h.join().unwrap()).collect();
+        taken.sort_by_key(Result::is_err);
+
+        assert_eq!(taken, vec![Ok(7), Err(QueueError::Empty)]);
     });
 }
 

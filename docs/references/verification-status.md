@@ -58,7 +58,7 @@ the `kallisto_queue::sync` shim, not a copy of it.
 
 | ID                                                | Status       | Check                                                                                                                                    | Fails if you                                                                             |
 |---------------------------------------------------|--------------|------------------------------------------------------------------------------------------------------------------------------------------|------------------------------------------------------------------------------------------|
-| B1 no loss, no double-dequeue                     | Proven       | `b1_item_neither_lost_nor_duplicated`, `b1_concurrent_producers_preserve_every_success`, plus `tests/queue_stress.rs` at real contention | publish `sequence` before writing the slot, or advance `dequeue_pos` without reading     |
+| B1 no loss, no double-dequeue                     | Proven       | `b1_item_neither_lost_nor_duplicated`, `b1_concurrent_producers_preserve_every_success`, `b1_concurrent_consumers_take_an_item_once`, plus `tests/queue_stress.rs` at real contention | publish `sequence` before writing the slot, or advance `dequeue_pos` without reading     |
 | B2 full queue rejects, no overwrite               | Proven       | `b2_full_queue_rejects_without_overwriting`, `b2_slot_handover_is_exact`                                                                 | return `Ok` instead of `Err(Full)` when `dif < 0`, or drop the `dif < 0` branch entirely |
 | B3 cuckoo insert→lookup                           | **Retired**  | —                                                                                                                                        | see below                                                                                |
 | B4 CLOCK eviction leaves no dangling read         | **Retired**  | —                                                                                                                                        | see below                                                                                |
@@ -91,8 +91,8 @@ Covered by `make verify-miri` (blocking).
 | ID                                          | Status  | Check                                                             | Fails if you                                                              |
 |---------------------------------------------|---------|-------------------------------------------------------------------|---------------------------------------------------------------------------|
 | C1 `archived_root` triggers no UB           | **Retired** | —                                                             | see below                                                                 |
-| C2 `unsafe impl Send/Sync` sound            | Proven  | `kallisto_queue::tests::send_across_thread` under Miri            | take the slot pointer from a shared reference instead of the `UnsafeCell` |
-| C3 dropping a non-empty queue leaks nothing | Proven  | `kallisto_queue::tests::drop_partially_filled_no_leak` under Miri | remove the drain loop from `impl Drop`                                    |
+| C2 `unsafe impl Send/Sync` sound            | Proven  | `kallisto_queue::tests::send_across_thread` under Miri, and a `compile_fail` doctest on `LockFreeQueue` for the `T: Send` bound            | take the slot pointer from a shared reference instead of the `UnsafeCell` |
+| C3 dropping a non-empty queue leaks nothing | Proven  | `kallisto_queue::tests::drop_partially_filled_no_leak` under Miri, and `every_value_is_dropped_exactly_once` without it | remove the drain loop from `impl Drop`                                    |
 
 ### C1 was closed by deletion, which is the outcome ADR-0015 D12 predicted
 

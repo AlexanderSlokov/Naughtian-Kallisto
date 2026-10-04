@@ -98,6 +98,8 @@ Use `unsafe` when it is the most appropriate solution, e.g. for FFI, extreme per
     - `/src/resolver/` - `SecretSource` port (bucket + disk), the refresh loop on its own unpinned runtime, and `Snapshot` behind `ArcSwapOption`.
     - `/src/server/` - `vault_api.rs` (the read surface; everything that writes answers 403), `sys.rs`, `responses.rs`, `rate_limit.rs`, `listener.rs`.
     - `/src/event/worker.rs` - Thread-per-core `WorkerPool`, pinned, SO_REUSEPORT.
+    - `/src/event/cpu_plan.rs` - Which logical CPU each worker is pinned to: inside the
+      affinity mask, one physical core each before any two share one, CPU 0 last.
 
 - `/components/` - Workspace crates
     - `components/kallisto_crypto` - The sealed file format, AES-256-GCM, the in-RAM barrier, process hardening.

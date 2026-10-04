@@ -24,7 +24,7 @@ use axum::{
 
 use super::{
     responses,
-    vault_api::{ApiState, denied, json, presented_token, sealed},
+    vault_api::{ApiState, denied, json_response, presented_token, sealed},
 };
 
 pub fn router() -> Router<ApiState> {
@@ -67,7 +67,7 @@ async fn health(State(state): State<ApiState>) -> Response {
         ),
         None => responses::health(true, now_secs(), None, None, None, None),
     };
-    json(status, body)
+    json_response(status, body)
 }
 
 /// Prometheus text exposition (ADR-0015 D15, QĐ-8).
@@ -115,22 +115,22 @@ async fn metrics(State(state): State<ApiState>) -> Response {
 /// do it inside their own `is_initialized()` helper, so the failure looks like
 /// "the server is broken" rather than "one route is missing".
 async fn init_status() -> Response {
-    json(StatusCode::OK, responses::init_status())
+    json_response(StatusCode::OK, responses::init_status())
 }
 
 async fn seal_status(State(state): State<ApiState>) -> Response {
-    json(
+    json_response(
         StatusCode::OK,
         responses::seal_status(state.snapshot().is_none()),
     )
 }
 
 async fn mounts(State(state): State<ApiState>) -> Response {
-    json(StatusCode::OK, responses::mounts(&state.resolver.mount))
+    json_response(StatusCode::OK, responses::mounts(&state.resolver.mount))
 }
 
 async fn ui_mounts(State(state): State<ApiState>) -> Response {
-    json(StatusCode::OK, responses::ui_mount(&state.resolver.mount))
+    json_response(StatusCode::OK, responses::ui_mount(&state.resolver.mount))
 }
 
 /// `lookup-self` and `renew-self` answer the same thing, because nothing here
@@ -146,13 +146,13 @@ async fn token_self(State(state): State<ApiState>, headers: HeaderMap) -> Respon
         return sealed();
     };
     if !snapshot.enforces() {
-        return json(
+        return json_response(
             StatusCode::OK,
             responses::token_lookup(&["root".to_string()]),
         );
     }
     match snapshot.grant(presented_token(&headers)) {
-        Some(grant) => json(StatusCode::OK, responses::token_lookup(grant.policies)),
+        Some(grant) => json_response(StatusCode::OK, responses::token_lookup(grant.policies)),
         None => denied(),
     }
 }

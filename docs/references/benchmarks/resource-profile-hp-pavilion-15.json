@@ -1,0 +1,191 @@
+{
+  "footprint": {
+    "server_bytes": 7829368,
+    "server_stripped_bytes": 5950240,
+    "ctl_bytes": 2466216
+  },
+  "workers": 2,
+  "server_cpus": "0-3",
+  "loadgen_cpus": "4-7",
+  "startup_rss_mib": 8.22265625,
+  "idle": {
+    "cpu_mean": 1.2818668980751713,
+    "cpu_max": 3.9969466285489683,
+    "rss_mean_mib": 8.337825520833333,
+    "rss_max_mib": 8.38671875
+  },
+  "saturated": {
+    "achieved_rps": 63648.31,
+    "p50_ms": 4.04,
+    "p99_ms": 6.04,
+    "non_2xx": 0,
+    "server": {
+      "cpu_mean": 215.76582968108832,
+      "cpu_max": 219.7443735671685,
+      "rss_mean_mib": 16.67158564814815,
+      "rss_max_mib": 16.67578125
+    },
+    "loadgen": {
+      "cpu_mean": 209.772796535288,
+      "cpu_max": 223.73020151250108,
+      "rss_mean_mib": 6.303313078703703,
+      "rss_max_mib": 6.31640625
+    }
+  },
+  "peak_rss_mib": 16.44921875,
+  "sweep": [
+    {
+      "target_rps": 1000,
+      "achieved_rps": 982.04,
+      "p50_ms": 1.02,
+      "p99_ms": 2.62,
+      "non_2xx": 0,
+      "server": {
+        "cpu_mean": 14.014319015159128,
+        "cpu_max": 15.984595293809825,
+        "rss_mean_mib": 11.456163194444445,
+        "rss_max_mib": 11.55078125
+      },
+      "loadgen": {
+        "cpu_mean": 9.466103422056912,
+        "cpu_max": 11.982759588926388,
+        "rss_mean_mib": 6.72265625,
+        "rss_max_mib": 6.72265625
+      }
+    },
+    {
+      "target_rps": 5000,
+      "achieved_rps": 4980.61,
+      "p50_ms": 1.07,
+      "p99_ms": 2.34,
+      "non_2xx": 0,
+      "server": {
+        "cpu_mean": 47.186261932647206,
+        "cpu_max": 49.95164530883875,
+        "rss_mean_mib": 12.159866898148149,
+        "rss_max_mib": 12.17578125
+      },
+      "loadgen": {
+        "cpu_mean": 28.881901665502824,
+        "cpu_max": 29.96978518182304,
+        "rss_mean_mib": 6.69921875,
+        "rss_max_mib": 6.69921875
+      }
+    },
+    {
+      "target_rps": 10000,
+      "achieved_rps": 9959.55,
+      "p50_ms": 1.44,
+      "p99_ms": 3.02,
+      "non_2xx": 0,
+      "server": {
+        "cpu_mean": 84.22647823806821,
+        "cpu_max": 87.93095555854549,
+        "rss_mean_mib": 11.910228587962964,
+        "rss_max_mib": 11.92578125
+      },
+      "loadgen": {
+        "cpu_mean": 51.31914445700999,
+        "cpu_max": 55.923277625083614,
+        "rss_mean_mib": 6.7265625,
+        "rss_max_mib": 6.7265625
+      }
+    },
+    {
+      "target_rps": 20000,
+      "achieved_rps": 19623.49,
+      "p50_ms": 1.67,
+      "p99_ms": 3.82,
+      "non_2xx": 0,
+      "server": {
+        "cpu_mean": 113.08641607210386,
+        "cpu_max": 121.79969528544565,
+        "rss_mean_mib": 11.44162326388889,
+        "rss_max_mib": 11.453125
+      },
+      "loadgen": {
+        "cpu_mean": 78.9528716206583,
+        "cpu_max": 87.91756198814531,
+        "rss_mean_mib": 6.80078125,
+        "rss_max_mib": 6.80078125
+      }
+    },
+    {
+      "target_rps": 30000,
+      "achieved_rps": 29433.95,
+      "p50_ms": 1.32,
+      "p99_ms": 4.13,
+      "non_2xx": 0,
+      "server": {
+        "cpu_mean": 117.45621101173127,
+        "cpu_max": 123.79898016804314,
+        "rss_mean_mib": 11.739800347222221,
+        "rss_max_mib": 11.75390625
+      },
+      "loadgen": {
+        "cpu_mean": 99.53105467591477,
+        "cpu_max": 113.82410987950296,
+        "rss_mean_mib": 6.69921875,
+        "rss_max_mib": 6.69921875
+      }
+    },
+    {
+      "target_rps": 40000,
+      "achieved_rps": 39247.14,
+      "p50_ms": 1.35,
+      "p99_ms": 3.22,
+      "non_2xx": 0,
+      "server": {
+        "cpu_mean": 132.35497030857462,
+        "cpu_max": 135.86872038139913,
+        "rss_mean_mib": 11.77611400462963,
+        "rss_max_mib": 11.79296875
+      },
+      "loadgen": {
+        "cpu_mean": 95.31948573637042,
+        "cpu_max": 111.91016612852209,
+        "rss_mean_mib": 6.828125,
+        "rss_max_mib": 6.828125
+      }
+    },
+    {
+      "target_rps": 50000,
+      "achieved_rps": 49793.46,
+      "p50_ms": 1.27,
+      "p99_ms": 4.48,
+      "non_2xx": 0,
+      "server": {
+        "cpu_mean": 158.59899753159388,
+        "cpu_max": 161.75561702562396,
+        "rss_mean_mib": 11.85206886574074,
+        "rss_max_mib": 11.8671875
+      },
+      "loadgen": {
+        "cpu_mean": 93.69225230778414,
+        "cpu_max": 103.95138734177371,
+        "rss_mean_mib": 6.6875,
+        "rss_max_mib": 6.6875
+      }
+    },
+    {
+      "target_rps": 60000,
+      "achieved_rps": 59752.39,
+      "p50_ms": 1.42,
+      "p99_ms": 6.61,
+      "non_2xx": 0,
+      "server": {
+        "cpu_mean": 185.04869269579478,
+        "cpu_max": 187.8426284509498,
+        "rss_mean_mib": 11.934027777777779,
+        "rss_max_mib": 11.95703125
+      },
+      "loadgen": {
+        "cpu_mean": 106.05961111128515,
+        "cpu_max": 111.93314211017761,
+        "rss_mean_mib": 6.76953125,
+        "rss_max_mib": 6.76953125
+      }
+    }
+  ],
+  "runs": 3
+}

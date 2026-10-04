@@ -21,10 +21,10 @@
 use std::{
     io::Write,
     sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU64, Ordering},
+        Arc, OnceLock,
+        atomic::{AtomicBool, AtomicU64, Ordering, fence},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use kallisto_queue::LockFreeQueue;
@@ -80,6 +80,9 @@ pub struct Record<'a> {
 /// itself — which they touch with one CAS each (ADR-0016 QĐ-3).
 pub struct Producer {
     queue: Arc<LockFreeQueue<Line>>,
+    /// How this worker tells the writer it has something to write. Read-only
+    /// from here in the common case; see [`WriterGate`].
+    gate: Arc<WriterGate>,
     sequence: AtomicU64,
     dropped: AtomicU64,
     worker: usize,
@@ -106,7 +109,9 @@ impl Producer {
         // waiting on, and waiting is the thing this design exists to refuse.
         if self.queue.enqueue(line).is_err() {
             self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
         }
+        self.gate.wake_if_parked();
     }
 
     pub fn dropped(&self) -> u64 {
@@ -191,11 +196,115 @@ fn now_millis() -> u64 {
         .map_or(0, |d| d.as_millis() as u64)
 }
 
+/// How a producer wakes the writer, with no lock on either side.
+///
+/// The writer parks when the queue is empty and a producer unparks it when it
+/// enqueues into a queue the writer has given up on. A condition variable would
+/// be the usual answer and is not available here: waking through one means
+/// taking its mutex on the read path, which is the one thing this log may not
+/// do (ADR-0015 D15).
+///
+/// While traffic is flowing the writer never parks, so the read path only ever
+/// *reads* `parked` — a shared cache line nobody is writing to, which is what
+/// keeps this off the cost side of a request (ADR-0016 QĐ-3).
+struct WriterGate {
+    parked: AtomicBool,
+    /// Set once, by the writer itself, before it can ever park.
+    thread: OnceLock<std::thread::Thread>,
+}
+
+impl WriterGate {
+    fn new() -> Self {
+        Self {
+            parked: AtomicBool::new(false),
+            thread: OnceLock::new(),
+        }
+    }
+
+    fn writer_started(&self) {
+        let _ = self.thread.set(std::thread::current());
+    }
+
+    /// Called on the read path, once the line is in the queue.
+    ///
+    /// The fence here and the one in [`Self::about_to_park`] are what stop the
+    /// two sides from missing each other. Without them the writer may look at
+    /// the queue, find it empty and park, while this producer reads a `parked`
+    /// that is still false and stays quiet — and the line then waits for the
+    /// next request to arrive. Both operations are a store followed by a load
+    /// of a *different* location, which is exactly the reordering a processor
+    /// is allowed to make; the two fences put the four accesses in one order,
+    /// so at least one side sees the other.
+    fn wake_if_parked(&self) {
+        fence(Ordering::SeqCst);
+        if self.parked.load(Ordering::Relaxed) {
+            self.wake();
+        }
+    }
+
+    /// Sleeps until someone unparks this thread, unless `look` finds work.
+    ///
+    /// `look` runs *after* the flag is published, and that is the whole point
+    /// of it: a line enqueued just before the flag became visible brought no
+    /// wake-up with it, so without this second look it would wait for the next
+    /// line or for [`PARK_TIMEOUT`].
+    fn park_unless(&self, mut look: impl FnMut() -> bool) {
+        self.parked.store(true, Ordering::Relaxed);
+        fence(Ordering::SeqCst);
+        if !look() {
+            std::thread::park_timeout(PARK_TIMEOUT);
+        }
+        self.parked.store(false, Ordering::Relaxed);
+    }
+
+    /// Unconditional, for [`AccessLog::stop`]: a parked writer has to come back
+    /// to drain what is left rather than wait out its timeout.
+    fn wake(&self) {
+        if let Some(thread) = self.thread.get() {
+            thread.unpark();
+        }
+    }
+}
+
+/// Moves whatever is queued into `batch`, up to [`BATCH_BYTES`]. Returns
+/// whether it found anything, which is also "there may be more".
+fn drain(queue: &LockFreeQueue<Line>, batch: &mut Vec<u8>) -> bool {
+    let before = batch.len();
+    while let Ok(line) = queue.dequeue() {
+        batch.extend_from_slice(line.as_str().as_bytes());
+        batch.push(b'\n');
+        if batch.len() > BATCH_BYTES {
+            break;
+        }
+    }
+    batch.len() > before
+}
+
+/// A parked writer wakes on its own this often even if nothing unparks it.
+/// Nothing depends on it: it is there so that a missed wake-up costs one second
+/// of delay rather than a log that has stopped.
+const PARK_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// How long the writer keeps looking before it parks, and how often it looks.
+///
+/// Parking the moment the queue runs dry was measured at a 5% loss of
+/// throughput: under load the writer drains faster than the workers fill, so
+/// the queue is empty most of the time, and every line then had to unpark the
+/// writer — a futex wake charged to the read path, per request. Looking for a
+/// while first means a resolver that is serving anything at all never parks,
+/// while one that has gone quiet stops costing anything 50 ms later.
+const PARK_AFTER: Duration = Duration::from_millis(50);
+const LOOK_INTERVAL: Duration = Duration::from_micros(250);
+
+/// One `write_all` per drained run stops at roughly this much.
+const BATCH_BYTES: usize = 60_000;
+
 /// The shared queue, plus the handles the workers write through.
 pub struct AccessLog {
     queue: Arc<LockFreeQueue<Line>>,
     producers: Vec<Arc<Producer>>,
     running: Arc<AtomicBool>,
+    gate: Arc<WriterGate>,
 }
 
 impl AccessLog {
@@ -212,10 +321,12 @@ impl AccessLog {
 
     pub fn with_enabled(capacity: usize, workers: usize, enabled: bool) -> Self {
         let queue = Arc::new(LockFreeQueue::new(capacity.next_power_of_two().max(2)));
+        let gate = Arc::new(WriterGate::new());
         let producers = (0..workers.max(1))
             .map(|worker| {
                 Arc::new(Producer {
                     queue: Arc::clone(&queue),
+                    gate: Arc::clone(&gate),
                     sequence: AtomicU64::new(0),
                     dropped: AtomicU64::new(0),
                     worker,
@@ -227,6 +338,7 @@ impl AccessLog {
             queue,
             producers,
             running: Arc::new(AtomicBool::new(true)),
+            gate,
         }
     }
 
@@ -250,37 +362,35 @@ impl AccessLog {
     ) -> std::thread::JoinHandle<()> {
         let queue = Arc::clone(&self.queue);
         let running = Arc::clone(&self.running);
+        let gate = Arc::clone(&self.gate);
 
         std::thread::Builder::new()
             .name("kallisto-access-log".to_string())
             .spawn(move || {
-                let mut idle: u32 = 0;
+                gate.writer_started();
+                // One buffer for the life of the thread. Allocating it per
+                // wake-up would put an allocation behind every line that
+                // arrives on its own.
+                let mut batch = Vec::with_capacity(BATCH_BYTES);
+                let mut quiet_since = std::time::Instant::now();
                 loop {
-                    let mut wrote = false;
-                    // Batch: one `write_all` per drained run, not per line.
-                    let mut batch = Vec::new();
-                    while let Ok(line) = queue.dequeue() {
-                        batch.extend_from_slice(line.as_str().as_bytes());
-                        batch.push(b'\n');
-                        wrote = true;
-                        if batch.len() > 60_000 {
-                            break;
+                    if !drain(&queue, &mut batch) {
+                        if !running.load(Ordering::Relaxed) {
+                            return;
+                        }
+                        if quiet_since.elapsed() < PARK_AFTER {
+                            std::thread::sleep(LOOK_INTERVAL);
+                            continue;
+                        }
+                        gate.park_unless(|| drain(&queue, &mut batch));
+                        if batch.is_empty() {
+                            continue;
                         }
                     }
-                    if wrote {
-                        let _ = sink.write_all(&batch);
-                        let _ = sink.flush();
-                        idle = 0;
-                        continue;
-                    }
-                    if !running.load(Ordering::Relaxed) {
-                        return;
-                    }
-                    // Back off to a sleep rather than spinning a core, and do
-                    // it without a condvar: waking the writer through a mutex
-                    // would put that mutex on the read path.
-                    idle = (idle + 1).min(20);
-                    std::thread::sleep(std::time::Duration::from_micros(u64::from(idle) * 50));
+                    quiet_since = std::time::Instant::now();
+                    let _ = sink.write_all(&batch);
+                    let _ = sink.flush();
+                    batch.clear();
                 }
             })
             .expect("the access log writer thread must start")
@@ -289,6 +399,8 @@ impl AccessLog {
     /// Asks the writer to drain and finish.
     pub fn stop(&self) {
         self.running.store(false, Ordering::Relaxed);
+        // A parked writer would otherwise wait out `PARK_TIMEOUT` first.
+        self.gate.wake();
     }
 }
 
@@ -439,6 +551,80 @@ mod tests {
 
         let written = String::from_utf8(sink.lock().unwrap().clone()).unwrap();
         assert_eq!(written.lines().count(), 5, "{written}");
+    }
+
+    /// The second look is not reachable from outside by timing — the window it
+    /// covers is nanoseconds wide — so it is asserted on its own terms: a look
+    /// that finds work must not park.
+    #[test]
+    fn work_found_on_the_second_look_cancels_the_park() {
+        let gate = WriterGate::new();
+        gate.writer_started();
+
+        let started = std::time::Instant::now();
+        gate.park_unless(|| true);
+
+        assert!(
+            started.elapsed() < std::time::Duration::from_millis(500),
+            "parked for {:?} although the second look found work",
+            started.elapsed()
+        );
+        assert!(!gate.parked.load(Ordering::Relaxed), "left the flag set");
+    }
+
+    /// The race the parking protocol has to win: a line that arrives while the
+    /// writer is on its way to sleep must still be written promptly, rather
+    /// than wait for the next line or for `PARK_TIMEOUT` to expire.
+    ///
+    /// Asserting on the delay is the only way to see this from outside. The
+    /// margin is wide on purpose — the wake-up path costs microseconds, so half
+    /// a second only fails if the line waited for the timeout instead.
+    #[test]
+    fn a_line_arriving_while_the_writer_sleeps_is_written_without_waiting() {
+        let sink = Arc::new(Mutex::new(Vec::new()));
+        let log = log(64);
+        let handle = log.spawn_writer(SharedSink(Arc::clone(&sink)));
+
+        // Long enough that the writer has found the queue empty and parked.
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        let sent = std::time::Instant::now();
+        log.producer(0).record(&record(Id::NONE, Id::NONE));
+
+        let waited = loop {
+            if !sink.lock().unwrap().is_empty() {
+                break sent.elapsed();
+            }
+            assert!(
+                sent.elapsed() < PARK_TIMEOUT,
+                "the line was never written; the writer slept through it"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        };
+        log.stop();
+        handle.join().unwrap();
+
+        assert!(
+            waited < std::time::Duration::from_millis(500),
+            "the line waited {waited:?}, which is the park timeout, not a wake-up"
+        );
+    }
+
+    /// `stop` has to reach a parked writer too, or shutting down waits out the
+    /// timeout.
+    #[test]
+    fn stop_wakes_a_parked_writer_rather_than_waiting_for_the_timeout() {
+        let log = log(64);
+        let handle = log.spawn_writer(SharedSink(Arc::new(Mutex::new(Vec::new()))));
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let asked = std::time::Instant::now();
+        log.stop();
+        handle.join().unwrap();
+        assert!(
+            asked.elapsed() < std::time::Duration::from_millis(500),
+            "stop took {:?}",
+            asked.elapsed()
+        );
     }
 
     struct SharedSink(Arc<Mutex<Vec<u8>>>);

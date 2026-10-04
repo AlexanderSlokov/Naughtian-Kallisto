@@ -81,78 +81,6 @@ pub fn epoch_ms_to_rfc3339(ms: u64) -> String {
     buf
 }
 
-/// Parse Go-style duration "3h25m19s" → milliseconds.
-/// Single-pass byte scanner — no regex, no allocations.
-#[inline]
-pub fn parse_vault_duration(s: &str) -> Result<u64, &'static str> {
-    if s.is_empty() {
-        return Ok(0);
-    }
-
-    let mut ms: u64 = 0;
-    let mut current_num: u64 = 0;
-    let mut has_num = false;
-
-    for b in s.bytes() {
-        match b {
-            b'0'..=b'9' => {
-                current_num = current_num * 10 + (b - b'0') as u64;
-                has_num = true;
-            }
-            b'h' => {
-                ms += current_num * 3_600_000;
-                current_num = 0;
-                has_num = false;
-            }
-            b'm' => {
-                ms += current_num * 60_000;
-                current_num = 0;
-                has_num = false;
-            }
-            b's' => {
-                ms += current_num * 1_000;
-                current_num = 0;
-                has_num = false;
-            }
-            _ => return Err("invalid duration character"),
-        }
-    }
-
-    if has_num {
-        return Err("missing unit in duration");
-    }
-
-    Ok(ms)
-}
-
-/// Format milliseconds → Go-style duration "3h25m19s"
-#[inline]
-pub fn ms_to_vault_duration(ms: u64) -> String {
-    if ms == 0 {
-        return "0s".to_string();
-    }
-
-    let secs = ms / 1000;
-    let h = secs / 3600;
-    let m = (secs % 3600) / 60;
-    let s = secs % 60;
-
-    let mut buf = String::with_capacity(20);
-    use std::fmt::Write;
-
-    if h > 0 {
-        let _ = write!(&mut buf, "{}h", h);
-    }
-    if m > 0 {
-        let _ = write!(&mut buf, "{}m", m);
-    }
-    if s > 0 || (h == 0 && m == 0) {
-        let _ = write!(&mut buf, "{}s", s);
-    }
-
-    buf
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -164,28 +92,6 @@ mod tests {
         assert_eq!(
             epoch_ms_to_rfc3339(1672531200123),
             "2023-01-01T00:00:00.123Z"
-        );
-    }
-
-    #[test]
-    fn test_parse_vault_duration() {
-        assert_eq!(parse_vault_duration("3h").unwrap(), 3 * 3600 * 1000);
-        assert_eq!(
-            parse_vault_duration("3h25m19s").unwrap(),
-            (3 * 3600 + 25 * 60 + 19) * 1000
-        );
-        parse_vault_duration("3").unwrap_err();
-        parse_vault_duration("3x").unwrap_err();
-    }
-
-    #[test]
-    fn test_ms_to_vault_duration() {
-        assert_eq!(ms_to_vault_duration(0), "0s");
-        assert_eq!(ms_to_vault_duration(3000), "3s");
-        assert_eq!(ms_to_vault_duration(60000), "1m");
-        assert_eq!(
-            ms_to_vault_duration((3 * 3600 + 25 * 60 + 19) * 1000),
-            "3h25m19s"
         );
     }
 }
