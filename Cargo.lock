@@ -279,7 +279,7 @@ dependencies = [
 
 [[package]]
 name = "core_crypto"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "aws-lc-rs",
  "libc",
@@ -830,7 +830,7 @@ dependencies = [
 
 [[package]]
 name = "kallisto-ctl"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "aws-lc-rs",
  "core_crypto",
@@ -842,7 +842,7 @@ dependencies = [
 
 [[package]]
 name = "kallisto-server"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "core_crypto",
  "naughtian-kallisto",
@@ -854,7 +854,7 @@ dependencies = [
 
 [[package]]
 name = "kallisto_queue"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "loom",
 ]
@@ -948,7 +948,7 @@ dependencies = [
 
 [[package]]
 name = "naughtian-kallisto"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "arc-swap",
  "aws-lc-rs",
@@ -1060,7 +1060,7 @@ dependencies = [
 
 [[package]]
 name = "policy_engine"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "aws-lc-rs",
  "core_crypto",
@@ -1545,7 +1545,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "aws-lc-rs",
  "core_crypto",

@@ -197,7 +197,7 @@ dependencies = [
 
 [[package]]
 name = "core_crypto"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "aws-lc-rs",
  "libc",
@@ -597,7 +597,7 @@ dependencies = [
 
 [[package]]
 name = "kallisto_queue"
-version = "1.0.0"
+version = "2.0.2"
 
 [[package]]
 name = "libc"
@@ -664,7 +664,7 @@ dependencies = [
 
 [[package]]
 name = "naughtian-kallisto"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "arc-swap",
  "aws-lc-rs",
@@ -732,7 +732,7 @@ checksum = "f6b464fbc74e149a392436b17d523f769e057cb6877f6a5c4618bc6f11800548"
 
 [[package]]
 name = "policy_engine"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "aws-lc-rs",
  "core_crypto",
@@ -1133,7 +1133,7 @@ dependencies = [
 
 [[package]]
 name = "telemetry"
-version = "1.0.0"
+version = "2.0.2"
 dependencies = [
  "aws-lc-rs",
  "core_crypto",
