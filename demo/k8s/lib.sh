@@ -14,6 +14,18 @@ k() { kubectl --context "$DEMO_CONTEXT" -n "$DEMO_NS" "$@"; }
 # The Garage image is the bare binary, no shell, so every admin step is an exec.
 garage() { k exec deploy/garage -- /garage "$@" 2>/dev/null; }
 
+# Gives a fresh Garage its layout, the demo key and the bucket. Idempotent.
+setup_garage() {
+    local node
+    node="$(garage node id -q | cut -d@ -f1)"
+    garage layout assign -z dc1 -c 1G "$node" >/dev/null
+    garage layout apply --version 1 >/dev/null || true # already applied on a re-run
+    garage key import --yes -n demo GK000000000000000000000000 \
+        0000000000000000000000000000000000000000000000000000000000000000 >/dev/null || true
+    garage bucket create kallisto-demo >/dev/null || true
+    garage bucket allow --read --write --owner kallisto-demo --key demo >/dev/null
+}
+
 # Seals secrets.v<N>.json and uploads it as the object the fleet polls.
 publish() {
     local version="$1"
@@ -25,13 +37,24 @@ publish() {
     k wait --for=condition=complete "job/seal-v$version" --timeout=180s >/dev/null
 }
 
-# Prints the file version every running fleet pod serves, one per line.
-# "down" for a pod whose Kallisto did not answer.
+# Running fleet pods, minus those already terminating: exec into one of those
+# fails with "container not found" halfway through a scale-down.
+running_fleet_pods() {
+    k get pod -l app=fleet --field-selector=status.phase=Running -o go-template \
+        --template='{{range .items}}{{if not .metadata.deletionTimestamp}}pod/{{.metadata.name}}{{"\n"}}{{end}}{{end}}'
+}
+
+# Prints what every running fleet pod serves, one line each: "v<N>", "sealed"
+# when Kallisto answered 503 because it holds no file, "down" when it did not answer.
 fleet_versions() {
-    k get pod -l app=fleet --field-selector=status.phase=Running -o name |
-        xargs -P 20 -I{} kubectl --context "$DEMO_CONTEXT" -n "$DEMO_NS" exec {} -c app -- \
-            sh -c 'wget -qO- http://127.0.0.1:8200/v1/sys/health 2>/dev/null |
-                   sed -n "s/.*\"kallisto_file_version\":\([0-9]*\).*/v\1/p" | grep . || echo down'
+    running_fleet_pods |
+        xargs -P 25 -I{} kubectl --context "$DEMO_CONTEXT" -n "$DEMO_NS" exec {} -c app -- sh -c '
+            out=$(wget -qO- http://127.0.0.1:8200/v1/sys/health 2>&1)
+            case "$out" in
+                *kallisto_file_version*) echo "$out" | sed -n "s/.*\"kallisto_file_version\":\([0-9]*\).*/v\1/p" ;;
+                *503*) echo sealed ;;
+                *) echo down ;;
+            esac'
 }
 
 # Turns fleet_versions output into one line, e.g. "20 pods: v1=12 v2=8".
