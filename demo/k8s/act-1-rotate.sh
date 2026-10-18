@@ -21,6 +21,6 @@ publish 2
 say "Uploaded. Waiting for every pod to serve it:"
 wait_fleet_on 2
 
-pod="$(k get pod -l app=fleet -o name | head -1)"
+pod="pod/$(k get pod -l app=fleet -o jsonpath='{.items[0].metadata.name}')"
 say "Password now, from ${pod#pod/}: $(k exec "$pod" -c app -- vault kv get -field=password secret/app/database)"
 say "Container restarts during the act: $(( $(restarts) - before ))"

@@ -34,19 +34,21 @@ fleet_versions() {
                    sed -n "s/.*\"kallisto_file_version\":\([0-9]*\).*/v\1/p" | grep . || echo down'
 }
 
-# One line, e.g. "20 pods: v1=12 v2=8".
-fleet_summary() {
-    fleet_versions | sort | uniq -c |
+# Turns fleet_versions output into one line, e.g. "20 pods: v1=12 v2=8".
+summarize() {
+    sort | uniq -c |
         awk '{ total += $1; parts = parts " " $2 "=" $1 } END { printf "%d pods:%s\n", total, parts }'
 }
 
+fleet_summary() { fleet_versions | summarize; }
+
 # Waits until every fleet pod serves version $1, printing progress.
 wait_fleet_on() {
-    local want="v$1" start=$SECONDS line
+    local want="v$1" start=$SECONDS versions
     while true; do
-        line="$(fleet_summary)"
-        say "t+$((SECONDS - start))s  $line"
-        [[ "$line" =~ ^([0-9]+)\ pods:\ $want=\1$ ]] && return 0
+        versions="$(fleet_versions)"
+        say "t+$((SECONDS - start))s  $(summarize <<<"$versions")"
+        [[ -n "$versions" ]] && ! grep -qvx "$want" <<<"$versions" && return 0
         sleep 1
     done
 }
