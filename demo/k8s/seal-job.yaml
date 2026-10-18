@@ -1,5 +1,10 @@
-# Seals secrets.v__VERSION__.json and uploads it as the one object the fleet polls.
-# A template: publish.sh replaces __VERSION__ before applying it.
+# Seals secrets.v<N>.json and uploads it as the one object the fleet polls.
+# A template: publish() in lib.sh fills in the three placeholders.
+#
+#   __VERSION__           which secrets.v<N>.json to seal
+#   __SEAL_KEY_SECRET__   the Secret holding the seal key; act 3 seals with a wrong one
+#   __REWRITE_VERSION__   empty, or a version number to write over the sealed file's
+#                         header before upload; act 3 uses it to tamper with a file
 #
 # Two steps in one pod, with nothing built: the production image is distroless,
 # so kallisto-ctl runs on its own as an init container and writes the sealed
@@ -8,7 +13,7 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: seal-v__VERSION__
+  name: publish-file
   namespace: kallisto-demo
 spec:
   backoffLimit: 2
@@ -33,7 +38,7 @@ spec:
           env:
             - name: KALLISTO_SEAL_KEY
               valueFrom:
-                secretKeyRef: { name: demo-credentials, key: KALLISTO_SEAL_KEY }
+                secretKeyRef: { name: __SEAL_KEY_SECRET__, key: KALLISTO_SEAL_KEY }
           volumeMounts:
             - { name: plain, mountPath: /plain, readOnly: true }
             - { name: out, mountPath: /out }
@@ -43,8 +48,22 @@ spec:
           resources:
             requests: { cpu: 10m, memory: 32Mi }
             limits: { memory: 128Mi }
-          args: ["copyto", "-v", "/out/demo.kal", ":s3:kallisto-demo/demo.kal"]
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              set -eu
+              file=/out/demo.kal
+              if [ -n "$REWRITE_VERSION" ]; then
+                # The header is "KALLISTO", one format byte, then the content
+                # version as a little-endian u64 at offset 9. Only the low byte
+                # is rewritten, which is enough for the versions used here.
+                cp /out/demo.kal /tmp/demo.kal && file=/tmp/demo.kal
+                printf "$(printf '\\%03o' "$REWRITE_VERSION")" |
+                  dd of="$file" bs=1 seek=9 conv=notrunc 2>/dev/null
+              fi
+              rclone copyto -v "$file" :s3:kallisto-demo/demo.kal
           env:
+            - { name: REWRITE_VERSION, value: "__REWRITE_VERSION__" }
             - { name: RCLONE_S3_PROVIDER, value: Other }
             - { name: RCLONE_S3_ENDPOINT, value: "http://garage:3900" }
             - { name: RCLONE_S3_REGION, value: us-east-1 }

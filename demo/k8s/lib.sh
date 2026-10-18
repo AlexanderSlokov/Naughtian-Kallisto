@@ -27,14 +27,18 @@ setup_garage() {
 }
 
 # Seals secrets.v<N>.json and uploads it as the object the fleet polls.
+#   publish <N> [seal-key-secret] [rewrite-version-to]
+# The last two exist for act 3: seal with a key that is not the fleet's, or
+# tamper with the version in the sealed file's header before uploading it.
 publish() {
-    local version="$1"
+    local version="$1" key_secret="${2:-demo-credentials}" rewrite="${3:-}"
     k create configmap "plain-v$version" \
         --from-file=secrets.json="$DEMO_DIR/secrets.v$version.json" \
         --dry-run=client -o yaml | k apply -f - >/dev/null
-    k delete job "seal-v$version" --ignore-not-found >/dev/null
-    sed "s/__VERSION__/$version/g" "$DEMO_DIR/seal-job.yaml" | k apply -f - >/dev/null
-    k wait --for=condition=complete "job/seal-v$version" --timeout=180s >/dev/null
+    k delete job publish-file --ignore-not-found --wait >/dev/null
+    sed -e "s/__VERSION__/$version/g" -e "s/__SEAL_KEY_SECRET__/$key_secret/g" \
+        -e "s/__REWRITE_VERSION__/$rewrite/g" "$DEMO_DIR/seal-job.yaml" | k apply -f - >/dev/null
+    k wait --for=condition=complete job/publish-file --timeout=180s >/dev/null
 }
 
 # Running fleet pods, minus those already terminating: exec into one of those
