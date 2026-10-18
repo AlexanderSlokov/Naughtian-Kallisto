@@ -85,48 +85,143 @@ Kindly take these notes seriously:
 
 ## Getting started
 
+### Building
+
+For developing and compiling, your instance should have `rustc`, `cargo`, `cmake`, `clang`, and `git` installed. Build tools, `make`, are assumed to be present.
+
+```bash
+make dev        # fmt + clippy + cargo-deny + tests, in CI's order
+make verify     # ADR-0013's blocking verification suite
+make duck       # three real Vault SDKs against the real server
+make bench-duck
+make bench-profile   # CPU and RAM, idle to saturated, with the chart
+```
+
+### Try it
+
+[`demo/`](demo/) runs the real deployment shape with one command: MinIO as the bucket, a
+sealed file uploaded into it, and Kallisto polling and serving Vault KV-v2 reads.
+
+```bash
+cd demo
+docker compose -f docker-compose.demo.yml --env-file .env.demo up
+```
+
+After ~20 seconds:
+
+```bash
+curl -s http://127.0.0.1:8200/v1/sys/health | python3 -m json.tool
+curl -s http://127.0.0.1:8200/v1/secret/data/app/database | python3 -m json.tool
+```
+
+See [`demo/README.md`](demo/README.md) for live refresh, write refusal (403), tear-down,
+and notes on Docker Desktop (the demo needs Linux host networking).
+
+### Running from source
+
+For developers who already have the toolchain and want to run against a local file
+without a bucket:
+
 ```bash
 make build
 
-# Create a key and a file to serve.
 export KALLISTO_SEAL_KEY=$(cargo run -q -p kallisto-ctl -- gen-key)
+
 cat > plain.json <<'JSON'
 {"version": 1, "secrets": {"app/db": {"username": "admin", "password": "duck-fixture-not-a-credential"}},
  "policies": {}, "tokens": {}}
 JSON
-cargo run -q -p kallisto-ctl -- seal --in plain.json --out secrets.kal
 
-# Serve it.
-cargo run -q -p kallisto-server -- --config kallisto.example.yaml
+cargo run -q -p kallisto-ctl -- seal --in plain.json --out secrets.kal
 ```
+
+Create a config that reads from disk instead of a bucket:
 
 ```bash
-VAULT_ADDR=http://127.0.0.1:8200 vault kv get secret/app/db      # works
-VAULT_ADDR=http://127.0.0.1:8200 vault kv put secret/app/db x=y  # 403, by design
-curl -s localhost:8200/v1/sys/health | jq .kallisto_file_version
+cat > kallisto.yaml <<'YAML'
+apiVersion: kallisto/v1
+kind: Resolver
+spec:
+  listen:
+    address: 127.0.0.1
+    port: 8200
+  workers: 1
+  mount: secret
+  source:
+    type: disk
+    path: secrets.kal
+  refresh:
+    intervalSeconds: 30
+  cacheDir: /tmp/kallisto-cache
+  limits:
+    requestsPerSecondPerWorker: 20000
+    burst: 20000
+  log:
+    queueCapacity: 8192
+    enabled: true
+YAML
 ```
 
-`kallisto.example.yaml` documents every setting. It contains no secrets and has nowhere to put them. Keys come from the environment. An unknown field fails to parse.
+Start the server:
+
+```bash
+cargo run -q -p kallisto-server -- --config kallisto.yaml
+```
+
+Verify:
+
+```bash
+# read a secret
+curl -s http://127.0.0.1:8200/v1/secret/data/app/db | python3 -m json.tool
+
+# 403, by design
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT http://127.0.0.1:8200/v1/secret/data/app/db
+
+# health
+curl -s http://127.0.0.1:8200/v1/sys/health | python3 -m json.tool
+```
 
 ## The offline tool
 
-Everything that writes a sealed file happens in `kallisto-ctl`:
+Naughtian Kallisto comes with a CLI tool `kallisto-ctl` for offline operations:
 
 | Command | |
 | --- | --- |
-| `seal --in plain.json --out secrets.kal [--version N]` | Encrypt. Refuses to write a version the resolver would reject as a rollback. |
-| `verify --in secrets.kal` | Check the tag and report counts. Never prints a secret or a path. |
-| `bump-version --in secrets.kal [--to N]` | Raise the content version in place. |
+| `seal --in plain.json --out secrets.kal [--version N]` | Encrypt the file. But will refuse to create previous versions (preventing rollback). |
+| `verify --in secrets.kal` | Check the tag and report counts. No print out secrets or paths. |
+| `bump-version --in secrets.kal [--to N]` | Raise the content version of the sealed file in place. |
 | `mint-token [--in secrets.kal] --policy <name>` | Generate a token and the table row to paste. Shown once. |
-| `gen-key` | 32 bytes from the system RNG. |
-| `validate --config kallisto.yaml` | Parse and resolve. Print what the server would do. |
-| `open --in secrets.kal --yes-print-secrets-to-stdout` | Exactly as dangerous as it sounds. |
+| `gen-key` | Generate 32 bytes of random data from the system RNG. Useful to quickly make a new seal key. |
+| `validate --config kallisto.yaml` | Validate the configuration and how the server would operate. |
+| `open --in secrets.kal --yes-print-secrets-to-stdout` | Print out secrets to stdout. Very discouraged to use as it makes secrets appear in shell history, etc. |
 
-## What it costs to run
+## Resource footprint
 
-Measured on a laptop, not a server: an HP Pavilion Gaming 15-ec0xxx with an AMD Ryzen 5 3550H (4 cores, 8 threads) and 13 GiB of RAM visible to the OS, running Ubuntu 24.04 on mains power. The configuration is the default one, 2 workers and the access log on, written to a file, serving a file of 64 secrets. The rate limiter is lifted so that the serving path is measured, not the token bucket. The server runs on logical CPUs 0-3 and the load generator on 4-7 of the same machine. Every figure is the median of 3 runs.
+The server and the load generator share one machine and a desktop session was running during the measurement, so treat these as the order of magnitude, not a figure to size a fleet by.
 
-The binary is 7.5 MiB (5.7 MiB stripped). `kallisto-ctl` is 2.4 MiB. Neither links anything beyond libc and libgcc_s.
+To measure your own machine, run `make bench-profile`. It writes its results under `target/bench/`.
+
+### Setups
+
+The author measured the resource footprint on a `HP Pavilion Gaming 15-ec0xxx`. In details:
+
+- CPU: `AMD Ryzen 5 3550H (4 cores, 8 threads)`
+- RAM: 13 GiB visible to the OS
+- OS: Ubuntu 24.04 LTS
+
+The configuration:
+
+- 2 workers
+- Access log on
+- Serving a file of 64 secrets
+- The rate limiter is lifted so that the serving path is measured, not the token bucket.
+- The server runs on logical CPUs 0-3 and the load generator on 4-7 of the same machine.
+
+### Results
+
+The binary is 7.5 MiB (5.7 MiB stripped). `kallisto-ctl` is 2.4 MiB. Linked with `libc` and `libgcc_s`.
+
+The figures in this below table are the median of 3 runs:
 
 | State | Requests per second | RAM (RSS) | CPU, % of one logical CPU | Latency p50 / p99 |
 | --- | --- | --- | --- | --- |
@@ -134,9 +229,11 @@ The binary is 7.5 MiB (5.7 MiB stripped). `kallisto-ctl` is 2.4 MiB. Neither lin
 | Stress | 39,247 | 11.8 MiB | 132% | 1.35 ms / 3.22 ms |
 | Saturated | 63,648 | 16.7 MiB | 216% | 4.04 ms / 6.04 ms |
 
-Stress is 40,000 requests per second offered, because that is the most the default configuration will ever serve: 20,000 per worker, 2 workers. Saturated is wrk with 256 connections, sending as fast as the server answers.
+Stress is 40,000 requests per second because that is the most the default configuration will ever occour: 20,000 per worker, 2 workers. Saturated is `wrk` with 256 connections.
 
-The idle row is from 2.0.1. The stress and saturated rows, and the sweep below, were measured on 2.0.0: 2.0.1 changed when the log writer sleeps and which CPUs the workers are pinned to, and the sweep has not been run again since. Saturation was compared directly, five runs of each, 20 seconds apiece: 58.3k requests per second against the old pinning's 57.0k, at 208% CPU against 215%.
+> NOTE: The `idle` row is from 2.0.1. The `stress` and `saturated` rows, and the sweep below, were measured on 2.0.0.
+
+> Version 2.0.1 of Naughtian Kallisto changed when the log writer sleeps and which CPUs the workers are pinned to, but the benchmark was not run again since. However, a comparison of saturated vs saturated has shown that the new pinning gives ~2% more throughput, from 57k to 58.3k requests per second, while using 4% less CPU, from 215% to 208%.
 
 ![CPU and RAM against request rate](docs/references/benchmarks/resource-profile-hp-pavilion-15.svg)
 
@@ -151,37 +248,24 @@ The idle row is from 2.0.1. The stress and saturated rows, and the sweep below, 
 | 50,000 | 49,793 | 11.9 MiB | 159% | 32 us | 1.27 ms | 4.48 ms |
 | 60,000 | 59,752 | 12.0 MiB | 185% | 31 us | 1.42 ms | 6.61 ms |
 
-No request in any run answered anything but 200.
+All requests are answered with code `200` status.
 
 What the numbers say:
 
 - RAM does not grow with load. It sits near 12 MiB from 1,000 to 60,000 requests per second. The step to 16.7 MiB at saturation comes with 256 open connections instead of 100.
+
 - The ceiling is the server's, not the load generator's. At saturation both worker threads are fully busy, while wrk used about half of the four CPUs it had. Until 2.0.1 the two workers were pinned to logical CPUs 0 and 1, which on this machine are the two hardware threads of one physical core, so the default configuration served the whole of that from a single core. They now take one physical core each, stay inside whatever affinity mask the process was given, and leave CPU 0 alone where they can.
+
 - CPU per request falls as load rises, from 143 us at 1,000 requests per second to 31 us at 60,000. The likely reason is that a request arriving alone pays for waking a worker and the log writer by itself, while under load one wake-up serves many. This has not been measured separately.
-- Idle is zero, as of 2.0.1. The access log writer used to sleep at most 1 ms and look again, waking about a thousand times a second and costing 1.3% of a logical CPU on a resolver nobody was calling. It now parks once the queue has been empty for 50 ms, and a worker wakes it when it writes a line. The wait is 50 ms rather than immediate because parking the moment the queue ran dry put a futex wake on the read path, once per request, and measured 5% slower.
 
-The server and the load generator share one machine and a desktop session was running during the measurement, so treat these as the order of magnitude, not a figure to size a fleet by. To measure your own machine, run `make bench-profile`. It writes its results under `target/bench/`.
-
-## Building and testing
-
-```bash
-make dev       # fmt + clippy + cargo-deny + tests, in CI's order
-make verify    # ADR-0013's blocking verification suite
-make duck      # three real Vault SDKs against the real server
-make bench-duck
-make bench-profile   # CPU and RAM, idle to saturated, with the chart
-```
-
-Building requires `cmake` and `clang` for `aws-lc-rs`, the only native dependency left.
+- Idle is zero, as of 2.0.1. The access log writer used to sleep at most 1 ms and look again, waking about a thousand times a second and costing 1.3% of a logical CPU on a resolver nobody was calling. It now parks once the queue has been empty for 50 ms, and a worker wakes it. The wait is 50 ms as parking the moment the queue ran dry put a futex wake on the read path, once per request, and measured 5% slower.
 
 ## Documentation
 
-The `docs/` directory is plain markdown, read on GitHub. Start at [docs/README.md](docs/README.md).
+Start at [docs/README.md](docs/README.md).
 
-`docs/references/ADRs/` holds the design decisions.
+Take a look at [docs/references/ADRs/](docs/references/ADRs/) for the design decisions.
 
-ADR-0015 and ADR-0016 produced the current design.
-
-`docs/references/verification-status.md` records what is proven versus merely believed.
+[docs/references/verification-status.md](docs/references/verification-status.md) for independent verification.
 
 Guides for running Kallisto live at [docs.naughtian.org/kallisto](https://docs.naughtian.org/kallisto/).
