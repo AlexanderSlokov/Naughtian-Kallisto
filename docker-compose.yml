@@ -1,88 +1,111 @@
-# Kallisto is a sidecar.
+# Kallisto runs as a local-only sidecar. It has no authentication on its API
+# surface; loopback binding is the access control boundary.
 #
-# Read this before running it: there are two settings here that are security
-# properties, and both are easy to undo by accident.
+# Two settings in this file are security properties. Both are easy to break
+# silently.
 #
-#   1. The port is published on 127.0.0.1. Writing "8200:8200" publishes on
-#      0.0.0.0 — every interface. Kallisto has no network authentication story;
-#      it is a sidecar for one machine's applications, and
-#      the server itself refuses to bind a non-loopback address without
-#      --i-accept-the-risk flag. Docker's port publishing sits *outside* that check,
-#      so this line is the one place the guarantee lives.
-#   2. The seal key comes from the environment running this Docker Compose. It is
-#      required, and there is deliberately no default: a compose file with a
-#      working key in it is a secret in your repository.
+#   1. Port binding: 127.0.0.1:8200:8200
+#      The leading `127.0.0.1` restricts the published port to loopback.
+#      Removing it (writing `8200:8200`) publishes on 0.0.0.0, exposing the
+#      server to every network interface on the host.
+#      The kallisto-server binary refuses to bind a non-loopback address
+#      unless started with `--i-accept-the-risk`, but Docker's port-publish
+#      happens outside the container's network namespace. The server never
+#      sees the host-side bind address, so its own check does not protect you
+#      here. This `127.0.0.1` prefix is the only thing that does.
+#
+#   2. Seal key: KALLISTO_SEAL_KEY
+#      The variable is required and has no default. The `:?` expansion in the
+#      environment block makes `docker compose up` fail immediately when it is
+#      unset. Do not add a default value or commit a real key to this file.
 #
 # Usage:
 #   export KALLISTO_SEAL_KEY=$(cargo run -q -p kallisto-ctl -- gen-key)
 #   docker compose up
 #
-# The bucket credentials are only needed when the source is a bucket; drop them
-# for `type: disk`.
+# KALLISTO_S3_ACCESS_KEY_ID and KALLISTO_S3_SECRET_ACCESS_KEY are only read
+# when the config file sets `source.type: bucket`. For `source.type: disk`
+# they can be empty or absent.
 
 services:
-  # Docker creates named volumes owned by root, and the production image runs as
-  # `nonroot` (uid 65532) on a distro-less base with no shell to fix it. Without
-  # this one-shot the encrypted fallback copy silently fails to write and the
-  # machine loses its ability to cold-start while the bucket is down.
-  # The server says so on stderr, and nothing else notices.
+  # Why this init container exists:
+  # Docker creates named volumes owned by root (uid 0). The production image
+  # is distroless (gcr.io/distroless/cc) and runs as `nonroot` (uid 65532).
+  # Without this one-shot container, the server cannot write to
+  # /var/lib/kallisto. The encrypted fallback copy of the sealed file fails
+  # silently (the server logs the error to stderr, but the process stays up),
+  # and the machine loses its ability to cold-start while the bucket is
+  # unreachable.
   cache-owner:
     image: alpine:3.20
     command: chown -R 65532:65532 /var/lib/kallisto
     volumes:
       - kallisto-cache:/var/lib/kallisto
+    # Runs as root so `chown` works. Exits immediately after.
     user: "0:0"
 
   kallisto:
-    build:
-      context: .
-      target: production
     image: ghcr.io/alexanderslokov/naughtian-kallisto:latest
-    # Build from THIS tree, always. Without it compose reuses whatever is
-    # already tagged `latest` on the machine. Which is the old versions of Kallisto.
-    pull_policy: build
     container_name: kallisto-server
     depends_on:
       cache-owner:
+        # Block until the chown container exits 0. If it fails, this service
+        # does not start.
         condition: service_completed_successfully
-    # Loopback only. See note 1 at the top of this file.
+    # Loopback only. See security property 1 at the top of this file.
     ports:
       - "127.0.0.1:8200:8200"
     volumes:
-      # Your resolver configuration.
-      # `kallisto-ctl validate --config` checks it before you deploy it.
+      # Resolver configuration, mounted read-only.
+      # Validate before deploying by run:
+      # kallisto-ctl validate --config kallisto.example.yaml
       - ./kallisto.example.yaml:/etc/kallisto/kallisto.yaml:ro
-      # The encrypted copy of the secret file, so an application can still start
-      # when the bucket is unreachable.
+      # Persistent cache for the encrypted fallback copy of the sealed file.
+      # The server writes here on every successful refresh so the resolver can
+      # cold-start from this copy when the bucket is unreachable.
       - kallisto-cache:/var/lib/kallisto
     environment:
-      # Required. Set it in your shell or your orchestrator's secret store;
+      # Required. The `:?` syntax aborts `docker compose up` when unset.
+      # Generate a key: `cargo run -q -p kallisto-ctl -- gen-key`
       KALLISTO_SEAL_KEY: "${KALLISTO_SEAL_KEY:?generate one with kallisto-ctl gen-key}"
+      # Points the server at the mounted config. Overrides the compiled default
+      # (which is `kallisto.yaml` in the working directory).
       KALLISTO_CONFIG: /etc/kallisto/kallisto.yaml
-      # Bucket credentials, for `source.type: bucket`. Empty is fine for disk.
+      # Bucket credentials. Only read when config sets `source.type: bucket`.
+      # The `:-` expansion defaults to empty, which is correct for disk sources.
       KALLISTO_S3_ACCESS_KEY_ID: "${KALLISTO_S3_ACCESS_KEY_ID:-}"
       KALLISTO_S3_SECRET_ACCESS_KEY: "${KALLISTO_S3_SECRET_ACCESS_KEY:-}"
-      # Anything in the config file can be overridden here; the order is
-      # CLI > env > file > defaults
+      # Config precedence, highest to lowest: CLI flags > env vars > config
+      # file values > compiled defaults.
       KALLISTO_CACHE_DIR: /var/lib/kallisto
     restart: unless-stopped
 
-    # No tool inside this image to run health check. The image is distro-less.
-    # Probe it from outside instead:
+    # Health checking.
+    # The image is distroless, so you cannot define a Docker HEALTHCHECK inside this container. Probe from outside:
     #
     #   curl -sf http://127.0.0.1:8200/v1/sys/health
     #
-    # `GET /v1/sys/health` answers 200 with a file loaded and 503 without,
-    # exactly as Vault does for unsealed/sealed.
-    # In Kubernetes that is an httpGet probe on the pod, which needs no shell.
+    # Response codes:
+    #   200  sealed file loaded, resolver is serving secrets
+    #   503  no file loaded (equivalent to Vault's "sealed" state)
+    #
+    # In Kubernetes, use an httpGet liveness/readiness probe on port 8200
+    # path /v1/sys/health.
 
-    # Dropping every capability as Kallisto needs none:
-    # it binds a port above 1024, reads one file over HTTPS, and never writes outside its cache directory.
-    # `mlock` for the barrier key is the one thing it asks the kernel for.
+    # Security hardening.
+    # cap_drop ALL removes every Linux capability. Kallisto needs none:
+    # it binds port 8200 (above 1024, no CAP_NET_BIND_SERVICE), reads one
+    # file over HTTPS, and writes only to /var/lib/kallisto.
+    # The barrier key uses mlock(2) to pin memory; the default Docker seccomp
+    # profile allows mlock without CAP_IPC_LOCK.
     cap_drop:
       - ALL
+    # Prevent the process from gaining new privileges via setuid, setgid, or
+    # execve of a set-user-ID binary.
     security_opt:
       - no-new-privileges:true
+    # Mount the root filesystem read-only. The only writable path is the
+    # kallisto-cache volume at /var/lib/kallisto and the tmpfs at /tmp.
     read_only: true
     tmpfs:
       - /tmp

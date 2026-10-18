@@ -97,69 +97,88 @@ make bench-duck
 make bench-profile   # CPU and RAM, idle to saturated, with the chart
 ```
 
-### Manual testing
+### Try it
 
-Firstly, clone the repository:
+[`demo/`](demo/) runs the real deployment shape with one command: MinIO as the bucket, a
+sealed file uploaded into it, and Kallisto polling and serving Vault KV-v2 reads.
 
 ```bash
-git clone \
-	-b main \
-	https://github.com/AlexanderSlokov/Naughtian-Kallisto.git \
-	kallisto
-
-cd kallisto
+cd demo
+docker compose -f docker-compose.demo.yml --env-file .env.demo up
 ```
 
-Then compile it:
+After ~20 seconds:
+
+```bash
+curl -s http://127.0.0.1:8200/v1/sys/health | python3 -m json.tool
+curl -s http://127.0.0.1:8200/v1/secret/data/app/database | python3 -m json.tool
+```
+
+See [`demo/README.md`](demo/README.md) for live refresh, write refusal (403), tear-down,
+and notes on Docker Desktop (the demo needs Linux host networking).
+
+### Running from source
+
+For developers who already have the toolchain and want to run against a local file
+without a bucket:
 
 ```bash
 make build
-```
 
-Create a seal key and a secrets file:
-
-```bash
 export KALLISTO_SEAL_KEY=$(cargo run -q -p kallisto-ctl -- gen-key)
+
 cat > plain.json <<'JSON'
 {"version": 1, "secrets": {"app/db": {"username": "admin", "password": "duck-fixture-not-a-credential"}},
  "policies": {}, "tokens": {}}
 JSON
-```
 
-Seal it up with `kallisto-ctl`:
-
-```bash
 cargo run -q -p kallisto-ctl -- seal --in plain.json --out secrets.kal
 ```
 
-The `.kal` file will be the encrypted file you put on S3 endpoints. Copy it to your bucket, for example, to `s3://my-bucket/secrets.kal`.
-
-Then copy the `kallisto.example.yaml` to `kallisto.yaml` and edit it. Follow the comments in the example file.
-
-> **IMPORTANT**:
-> The S3 endpoint must be reachable from the kallisto server and it must support `list-objects` and `head-object` calls.
+Create a config that reads from disk instead of a bucket:
 
 ```bash
-cp kallisto.example.yaml kallisto.yaml
+cat > kallisto.yaml <<'YAML'
+apiVersion: kallisto/v1
+kind: Resolver
+spec:
+  listen:
+    address: 127.0.0.1
+    port: 8200
+  workers: 1
+  mount: secret
+  source:
+    type: disk
+    path: secrets.kal
+  refresh:
+    intervalSeconds: 30
+  cacheDir: /tmp/kallisto-cache
+  limits:
+    requestsPerSecondPerWorker: 20000
+    burst: 20000
+  log:
+    queueCapacity: 8192
+    enabled: true
+YAML
 ```
 
-Now serve with your `kallisto.yaml`:
+Start the server:
 
 ```bash
 cargo run -q -p kallisto-server -- --config kallisto.yaml
 ```
 
-You can verify its operation and compability with Vault's CLI:
+Verify:
 
 ```bash
-export VAULT_ADDR=http://127.0.0.1:8200
+# read a secret
+curl -s http://127.0.0.1:8200/v1/secret/data/app/db | python3 -m json.tool
 
-# works
-vault kv get secret/app/db
 # 403, by design
-vault kv put secret/app/db x=y
-# works
-curl -s localhost:8200/v1/sys/health | jq .kallisto_file_version
+curl -s -o /dev/null -w '%{http_code}\n' -X PUT http://127.0.0.1:8200/v1/secret/data/app/db
+
+# health
+curl -s http://127.0.0.1:8200/v1/sys/health | python3 -m json.tool
 ```
 
 ## The offline tool

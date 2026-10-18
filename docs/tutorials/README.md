@@ -18,8 +18,7 @@ refused with a 403.
 ## Elsewhere
 
 The hosted quickstart is at
-[docs.naughtian.org/kallisto/tutorials/quickstart](https://docs.naughtian.org/kallisto/tutorials/quickstart/),
-which is the front door for people running Kallisto rather than changing it.
+[docs.naughtian.org/kallisto/tutorials/quickstart](https://docs.naughtian.org/kallisto/tutorials/quickstart/).
 
 For what Kallisto is before you run anything, start at
 [what-is-kallisto.md](../explanation/what-is-kallisto.md).
