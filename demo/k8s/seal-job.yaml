@@ -1,0 +1,67 @@
+# Seals secrets.v__VERSION__.json and uploads it as the one object the fleet polls.
+# A template: publish.sh replaces __VERSION__ before applying it.
+#
+# Two steps in one pod, with nothing built: the production image is distroless,
+# so kallisto-ctl runs on its own as an init container and writes the sealed
+# file to a shared emptyDir; rclone then uploads it. up.sh has already created
+# the bucket and the key.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seal-v__VERSION__
+  namespace: kallisto-demo
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: Never
+      automountServiceAccountToken: false
+      initContainers:
+        - name: seal
+          image: ghcr.io/alexanderslokov/naughtian-kallisto:2.0.2
+          command:
+            - /usr/local/bin/kallisto-ctl
+            - seal
+            - --in
+            - /plain/secrets.json
+            - --out
+            - /out/demo.kal
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+          env:
+            - name: KALLISTO_SEAL_KEY
+              valueFrom:
+                secretKeyRef: { name: demo-credentials, key: KALLISTO_SEAL_KEY }
+          volumeMounts:
+            - { name: plain, mountPath: /plain, readOnly: true }
+            - { name: out, mountPath: /out }
+      containers:
+        - name: upload
+          image: rclone/rclone:1.71
+          resources:
+            requests: { cpu: 10m, memory: 32Mi }
+            limits: { memory: 128Mi }
+          args: ["copyto", "-v", "/out/demo.kal", ":s3:kallisto-demo/demo.kal"]
+          env:
+            - { name: RCLONE_S3_PROVIDER, value: Other }
+            - { name: RCLONE_S3_ENDPOINT, value: "http://garage:3900" }
+            - { name: RCLONE_S3_REGION, value: us-east-1 }
+            - { name: RCLONE_S3_FORCE_PATH_STYLE, value: "true" }
+            # The bucket exists already; rclone would otherwise try to create it.
+            - { name: RCLONE_S3_NO_CHECK_BUCKET, value: "true" }
+            - name: RCLONE_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: demo-credentials, key: KALLISTO_S3_ACCESS_KEY_ID }
+            - name: RCLONE_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: demo-credentials, key: KALLISTO_S3_SECRET_ACCESS_KEY }
+          volumeMounts:
+            - { name: out, mountPath: /out, readOnly: true }
+      volumes:
+        - name: plain
+          configMap:
+            name: plain-v__VERSION__
+        - name: out
+          emptyDir: {}

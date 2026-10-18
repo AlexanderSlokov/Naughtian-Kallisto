@@ -1,0 +1,125 @@
+# Twenty pods, each an app plus its own Kallisto, the sidecar shape of ADR-0015.
+#
+# The app is the stock Vault CLI pointed at 127.0.0.1:8200. It has no idea it
+# is not talking to Vault. Every two seconds it prints one line:
+#
+#   20:51:07 file=v1 password=v1-password-not-a-real-credential
+#
+# so `kubectl logs` (or `l` in k9s) on any pod shows the moment it changes.
+#
+# Kallisto is a native sidecar (an init container with restartPolicy: Always),
+# so it starts before the app and lives as long as the pod.
+#
+# Known gap, on purpose: no probes. Kallisto listens on loopback only, and the
+# kubelet probes the pod IP; the image is distroless, so there is no shell for
+# an exec probe either. Until that is solved the app's first lines may show a
+# connection error while Kallisto loads the file.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: kallisto-config
+  namespace: kallisto-demo
+data:
+  kallisto.yaml: |
+    apiVersion: kallisto/v1
+    kind: Resolver
+    spec:
+      listen:
+        address: 127.0.0.1
+        port: 8200
+      workers: 1
+      mount: secret
+      source:
+        type: bucket
+        endpoint: http://garage.kallisto-demo.svc.cluster.local:3900
+        bucket: kallisto-demo
+        objectKey: demo.kal
+        region: us-east-1
+        pathStyle: true
+      refresh:
+        intervalSeconds: 5
+      cacheDir: /var/lib/kallisto
+      log:
+        enabled: false
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: fleet
+  namespace: kallisto-demo
+spec:
+  replicas: 20
+  selector:
+    matchLabels: { app: fleet }
+  template:
+    metadata:
+      labels: { app: fleet }
+    spec:
+      # Nothing in the pod talks to the API server, least of all the process
+      # holding the secrets.
+      automountServiceAccountToken: false
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        # The cache emptyDir is created root-owned; this hands it to the
+        # nonroot user, which the compose demo needs a whole extra container for.
+        fsGroup: 65532
+        seccompProfile: { type: RuntimeDefault }
+      initContainers:
+        - name: kallisto
+          image: ghcr.io/alexanderslokov/naughtian-kallisto:2.0.2
+          restartPolicy: Always
+          env:
+            - { name: KALLISTO_CONFIG, value: /etc/kallisto/kallisto.yaml }
+            - name: KALLISTO_SEAL_KEY
+              valueFrom:
+                secretKeyRef: { name: demo-credentials, key: KALLISTO_SEAL_KEY }
+            - name: KALLISTO_S3_ACCESS_KEY_ID
+              valueFrom:
+                secretKeyRef: { name: demo-credentials, key: KALLISTO_S3_ACCESS_KEY_ID }
+            - name: KALLISTO_S3_SECRET_ACCESS_KEY
+              valueFrom:
+                secretKeyRef: { name: demo-credentials, key: KALLISTO_S3_SECRET_ACCESS_KEY }
+          resources:
+            requests: { cpu: 10m, memory: 16Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: config, mountPath: /etc/kallisto, readOnly: true }
+            - { name: cache, mountPath: /var/lib/kallisto }
+      containers:
+        - name: app
+          image: hashicorp/vault:1.20
+          command: ["/bin/sh", "-c"]
+          args:
+            - |
+              while true; do
+                file=$(wget -qO- http://127.0.0.1:8200/v1/sys/health 2>/dev/null \
+                  | sed -n 's/.*"kallisto_file_version":\([0-9]*\).*/\1/p')
+                password=$(vault kv get -field=password secret/app/database 2>&1 | tail -n 1)
+                echo "$(date +%T) file=v${file:-?} password=${password}"
+                sleep 2
+              done
+          env:
+            - { name: VAULT_ADDR, value: "http://127.0.0.1:8200" }
+            - { name: HOME, value: /tmp }
+          resources:
+            requests: { cpu: 5m, memory: 16Mi }
+            limits: { memory: 64Mi }
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: config
+          configMap: { name: kallisto-config }
+        - name: cache
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
