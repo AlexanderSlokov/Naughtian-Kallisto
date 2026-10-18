@@ -138,7 +138,7 @@ Listing needs the `list` capability on the **`metadata`** path, while reading ne
   "replication_performance_mode": "disabled", "replication_dr_mode": "disabled",
   "server_time_utc": 1789814141, "version": "1.13.0",
   "cluster_name": "kallisto", "cluster_id": "",
-  "kallisto_version": "1.0.0",
+  "kallisto_version": "2.0.2",
   "kallisto_file_version": 7,
   "kallisto_etag": null,
   "kallisto_loaded_at": "2026-09-19T10:35:38.540Z",
