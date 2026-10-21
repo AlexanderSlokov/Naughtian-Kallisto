@@ -274,3 +274,16 @@ git commit -s -m "your commit message"
 ```
 
 The `-s` flag adds `Signed-off-by: Your Name <email>` to the commit.
+
+## Release Instructions
+
+### Tags
+
+Release tags are `vX.Y.Z`, annotated and GPG-signed: `git tag -s v2.1.0`.
+
+The `v` is not decoration. `.github/workflows/main-publish.yml` publishes the versioned image only for a
+tag matching `v*.*.*`. A tag without it builds nothing, and the release has no image under its version.
+
+2.0.0, 2.0.1 and 2.0.2 were tagged without the `v`, so none got a versioned image from the tag. The
+2.0.2 image was built afterwards with `gh workflow run main-publish.yml --ref 2.0.2`; 2.0.0 and 2.0.1
+have no versioned image.
