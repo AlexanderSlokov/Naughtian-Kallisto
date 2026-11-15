@@ -11,7 +11,7 @@ be checked. ADR-0016 rests on numbers from this archive, and `verification-statu
 what is proven from what is merely believed.
 
 **For what the current read path measures, see
-[serving-kv-secrets.md](../../explanation/why-use-naughtian-kallisto/serving-kv-secrets.md).** That
+[performance.md](../performance.md).** That
 page is the canonical one, and the method behind the two cost figures is in
 [plans/duck/plan.md](../plans/duck/plan.md).
 
