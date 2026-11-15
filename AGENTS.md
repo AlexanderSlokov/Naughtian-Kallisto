@@ -231,7 +231,7 @@ make bench-duck       # wrk2 on the read path, seeded from a sealed file
 ```
 
 Current read-path numbers, and the method behind the two cost figures, are in
-`docs/explanation/why-use-naughtian-kallisto/serving-kv-secrets.md`. The reports under
+`docs/references/performance.md`. The reports under
 `docs/references/benchmarks/` mostly predate ADR-0015 and measure the deleted write path.
 
 ### Toolchain

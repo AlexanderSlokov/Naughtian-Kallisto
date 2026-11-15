@@ -11,7 +11,7 @@ các con số trong kho này, và `verification-status.md` phân biệt cái gì
 là tin vậy.
 
 **Số đo của đường đọc hiện tại nằm ở
-[serving-kv-secrets.md](../../explanation/why-use-naughtian-kallisto/serving-kv-secrets.md).** Đó
+[performance.md](../performance.md).** Đó
 là trang chuẩn, và phương pháp đo hai con số chi phí ở
 [plans/duck/plan.md](../plans/duck/plan.md).
 

@@ -1,0 +1,138 @@
+---
+title: Kallisto
+description: A local, read-only secrets resolver that speaks the Vault KV-v2 API over one encrypted file on an S3-compatible bucket.
+---
+
+import { Card, CardGrid, LinkCard, Badge } from '@astrojs/starlight/components';
+
+<p>
+	<Badge text="2.0.0" variant="note" size="medium" />
+	<Badge text="Prototype" variant="danger" size="medium" />
+	<Badge text="AGPLv3" variant="note" size="medium" />
+	<Badge text="Rust 2024" variant="tip" size="medium" />
+</p>
+
+**A local, read-only secrets resolver that speaks Vault KV-v2.**
+
+Naughtian Kallisto runs beside your application on localhost. It answers Vault
+KV-v2 reads from one encrypted file that it pulls from an S3-compatible bucket.
+It cannot write. There is no cluster, no database, no replication and no admin
+API.
+
+```
+  operator                        bucket                      each machine
+  ────────                        ──────                      ────────────
+  kallisto-ctl seal   ──────►   secrets.kal   ──────►   kallisto-server :8200
+    (AES-256-GCM,               (encrypted,             (polls, authenticates,
+     version N)                  versioned)              refuses rollbacks,
+                                                         serves KV-v2 reads)
+                                                              │
+                                                     app ─────┘  VAULT_ADDR=127.0.0.1
+```
+
+## Adoption is one line
+
+```diff
+- VAULT_ADDR=https://vault.internal:8200
++ VAULT_ADDR=http://127.0.0.1:8200
+```
+
+Removing it is the same line. If your application uses a Vault SDK, it should
+not notice the difference. The project tests this with three real clients:
+the official Go client, Python's `hvac`, and PHP's `vault-php`.
+
+## Why run it
+
+When an application keeps re-reading a handful of secrets, a central Vault adds
+a network round trip to every request, and an outage whenever it becomes
+unreachable. Kallisto holds the current values on the machine, refreshes them
+on a timer, and keeps serving from an encrypted copy on local disk when the
+bucket goes down.
+
+At runtime your request path depends on a local process and a file. Vault,
+OpenBao or whatever produced the secrets can be sealed, failing over or
+mid-upgrade, and reads keep answering.
+
+## What changed in 2.0.0
+
+2.0.0 is the third architecture. The earlier secrets *server*, with its cuckoo
+cache, RocksDB storage, write path, gossip controlplane and admin port on 8202,
+has been deleted. What replaced it is much smaller:
+
+- **Sidecar resolver.** One process per machine or pod, reading one sealed file.
+- **Loopback only.** Port 8200 on `127.0.0.1`. The server refuses any other
+  address unless you pass `--i-accept-the-risk`.
+- **Bucket source.** Any S3-compatible store (S3, R2, MinIO, SeaweedFS, RustFS,
+  Garage), or a file on local disk.
+- **Read-only by design.** Every write route answers `403 permission denied`.
+- **Tokenless by default.** A file with no token table serves every read to
+  whoever can reach the loopback port. Add a token table when several apps
+  share one file.
+
+See [the architecture](/kallisto/explanation/architecture/) for how the pieces
+fit.
+
+:::danger[Prototype. Do not run this where it matters yet.]
+The project describes itself as a prototype under active rework, with no
+stability promise. Read [project status](/kallisto/references/status/) before
+going near a production system.
+:::
+
+## It sits beside a root of trust
+
+Kallisto has no auth methods, dynamic secrets, leases, PKI or transit engine.
+If you need those, run OpenBao or Vault. Kallisto holds the operational secrets
+your services read on every request, exported and sealed by an operator, and
+leaves the crown jewels where they are.
+
+## Start here
+
+<CardGrid>
+	<LinkCard
+		title="Run the demo"
+		description="MinIO, a sealed file and a resolver, running locally with Docker Compose in a few minutes."
+		href="/kallisto/tutorials/quickstart/"
+	/>
+	<LinkCard
+		title="Seal and publish a secrets file"
+		description="Generate a key, write the plaintext, seal it and upload it to a bucket."
+		href="/kallisto/how-to/seal-and-publish-a-file/"
+	/>
+	<LinkCard
+		title="Run Kallisto as a sidecar"
+		description="Docker Compose and Kubernetes layouts that keep the port on loopback."
+		href="/kallisto/how-to/run-as-a-sidecar/"
+	/>
+	<LinkCard
+		title="Configuration reference"
+		description="Every YAML field, environment variable and flag, with defaults."
+		href="/kallisto/references/configuration/"
+	/>
+</CardGrid>
+
+## Use cases
+
+<CardGrid>
+	<Card title="Hot-path operational secrets" icon="rocket">
+		Service tokens, cache passwords and session keys that an app fetches right
+		before each use and discards right after.
+	</Card>
+	<Card title="Surviving an unreachable upstream" icon="approve-check">
+		The bucket, Vault or the network link can be down. Each machine keeps
+		serving the last authenticated file from its encrypted local copy.
+	</Card>
+	<Card title="Edge and mTLS material" icon="setting">
+		Certificates and keys for gateways and service meshes on links that are not
+		always up.
+	</Card>
+</CardGrid>
+
+See [use cases](/kallisto/explanation/use-cases/) for what belongs in Kallisto
+and what stays in Vault.
+
+## Engineering records
+
+This site carries the operator documentation. The Kallisto repository keeps
+the engineering records under `docs/`: the ADRs (ADR-0015 and ADR-0016 define
+the current design), the verification ledger and the benchmark archive. They
+are plain markdown, read on GitHub.

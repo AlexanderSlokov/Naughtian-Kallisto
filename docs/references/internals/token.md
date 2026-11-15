@@ -22,7 +22,7 @@ recompute them from.
 
 The key is used under a domain-separation label, `kallisto/token/v1`, so it can never be reused for
 another purpose and produce a value that means something here. The access log derives its own key
-under a different label — see [telemetry/README.md](./telemetry/README.md) for why that separation
+under a different label — see [security.md](../../explanation/security.md) for why that separation
 is load-bearing rather than tidy.
 
 ## Lookup is constant-time
