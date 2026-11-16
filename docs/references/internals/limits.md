@@ -56,7 +56,7 @@ spec:
 Floored at 2. This is the only queue in the serving path, and it drops rather than blocks when
 full. Raising it buys tolerance for short bursts; it does not change the drop-on-full behaviour,
 which is the design and not a limit to tune away. See
-[telemetry/key-metrics.md](./telemetry/key-metrics.md) for the counter to alert on.
+[metrics.md](../metrics.md) for the counter to alert on.
 
 ## Timeouts and intervals
 

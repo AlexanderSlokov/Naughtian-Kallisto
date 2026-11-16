@@ -1,13 +1,13 @@
-# Architecture Overview
+---
+title: Architecture
+description: How one kallisto-server process refreshes, holds and serves a sealed file, and why 2.0.0 took this shape.
+sidebar:
+  order: 1
+---
 
-Kallisto is a local, read-only secrets resolver that provides Vault KV-v2 over one encrypted file on
-an S3-compatible bucket. It is important to note that Kallisto is not a secrets server: 
-it stores nothing, replicates nothing, and answers 403 to every route that writes.
-
-ADR-0015 redefined the problem from "a high-performance secrets server" to "a resolver for one
-machine's apps", and ADR-0016 amended two of its details after the read path turned out to be hot.
-The shape below is the result. For why the two previous architectures were abandoned, see
-[Architecture in Depth](./how-to-create-naughtian-kallisto/architecture-in-deep.md).
+Kallisto 2.0.0 is one process with one port. A refresh loop pulls a sealed file
+from a source, a snapshot holds what it decrypted, and a set of pinned workers
+answer Vault KV-v2 reads from that snapshot on loopback.
 
 ## The shape
 
@@ -26,7 +26,6 @@ The shape below is the result. For why the two previous architectures were aband
 │                                  │ store whole snapshot               │
 │                                  ▼                                    │
 │                  ┌──────────────────────────────┐                     │
-│                  │  SnapshotSlot                │                     │
 │                  │  ArcSwapOption<Snapshot>     │                     │
 │                  │  None = sealed = 503         │                     │
 │                  │  HashMap<path, Sealed>       │                     │
@@ -37,134 +36,134 @@ The shape below is the result. For why the two previous architectures were aband
 │        ▼              ▼                ▼                              │
 │   ┌─────────┐    ┌─────────┐      ┌─────────┐                         │
 │   │Worker 0 │    │Worker 1 │      │Worker N │  pinned, one            │
-│   │ axum    │    │ axum    │      │ axum    │  current_thread         │
-│   │ limiter │    │ limiter │      │ limiter │  runtime each;          │
-│   │ log prod│    │ log prod│      │ log prod│  nothing shared         │
-│   │ counters│    │ counters│      │ counters│  on the read path       │
+│   │ limiter │    │ limiter │      │ limiter │  current_thread         │
+│   │ log     │    │ log     │      │ log     │  runtime each;          │
+│   │ counters│    │ counters│      │ counters│  nothing shared         │
 │   └────┬────┘    └────┬────┘      └────┬────┘                         │
 │        └──────────────┴────────────────┘                              │
-│                       │ SO_REUSEPORT — kernel balances connections    │
+│                       │ SO_REUSEPORT                                  │
 └───────────────────────┼───────────────────────────────────────────────┘
                         ▼
               port 8200, loopback only
 ```
 
-There is one plane and one port. Port 8202, the admin server, the FFI bridge to a C++ core and the
-gossip cluster are gone — as are the storage engine, the RocksDB backend, the sharded cuckoo table
-and the registry of pluggable engines. The workspace is Rust only.
-
-## The data plane
-
-Port 8200, bound to loopback. `config` refuses a non-loopback bind unless the operator
-passes `--i-accept-the-risk` flag, because ADR-0015's first operating constraint is that this port is not
-reachable from the network.
-
-Each worker is one `current_thread` Tokio runtime on its own thread, pinned with `core_affinity`,
-and several workers share the one port through `SO_REUSEPORT` (ADR-0016 QĐ-3). There is no
-work-stealing. The router is built once per worker, on that worker's own thread, so the rate
-limiter, the access-log producer and the metrics counters each belong to one core and the read path
-never touches a shared cache line. Two workers unless configured otherwise.
-
-The output port is welded shut (ADR-0016 QĐ-4). There is no `SecretEngine` trait, no
-`EngineRegistry`, no `Arc<dyn>` on the read path: a handler loads the current snapshot and reads a
-`HashMap`. The abstraction that used to sit here charged a virtual call per request for a
-substitutability nobody asked for.
-
-Every write route answers 403, and `subkeys`, `delete`, `undelete` and `destroy` are routed
-explicitly so they answer 403 rather than 404 — a 404 would read as "not deployed yet", where 403
-says the door exists and is shut.
-
-Alongside the KV surface, `sys/health`, `sys/init`, `sys/metrics`, `sys/seal-status`, `sys/mounts`,
-`sys/internal/ui/mounts/*` and `auth/token/{lookup-self,renew-self}` exist so an unmodified Vault
-SDK can start up (ADR-0015 D7). None of them serve a secret, and `sys/health` reports the version
-actually loaded rather than a string literal.
-
 ## The refresh loop
 
-Its own thread and its own runtime, deliberately not pinned: a fifteen-second bucket timeout must
-never occupy a core that is answering reads. It polls every thirty seconds by default.
+The refresh loop runs on its own thread and runtime, deliberately left
+unpinned. A bucket request can take up to its 15-second timeout, and that wait
+must never occupy a core that is answering reads. It polls every 30 seconds by
+default, and each poll follows four steps:
 
-`SecretSource` is a real port with two implementations — an S3 bucket (SigV4-signed) and a local
-file. It was kept as a port because a third source is plausible and it runs twice a minute, so
-dynamic dispatch costs nothing there.
+1. Ask the source whether the sealed file changed. A bucket poll sends the last
+   ETag, so an unchanged object costs a `304`.
+2. If it changed, authenticate it and check that its content version is not
+   older than the one being served.
+3. If it is valid, swap the whole table in. If not, keep the old table, log the
+   refusal and count it.
+4. The workers answer from whatever table is in place.
 
-Four steps, in order (ADR-0015 D10):
+On startup the loop loads the encrypted fallback copy on local disk *before* it
+first asks the source. The version it finds becomes the floor for the rollback
+check, so a restart gives an attacker no opening, and a machine can boot while
+the bucket is down.
 
-1. ask the source whether the sealed file changed;
-2. if it did, open it, authenticate it, and check it is not older than what is already served;
-3. valid file, swap the whole table in; invalid file, keep the old table and say so on the error log;
-4. the HTTP layer answers out of whatever table is currently in place.
-
-On startup the loop warms from the encrypted copy on local disk first, so the version it finds
-becomes the floor for the anti-rollback check before the bucket is ever asked. Every poll is
-reported: discarding the later ones is how a forged file in the bucket would become invisible after
-the first thirty seconds. A rejection or an outage also increments
-`kallisto_refresh_failures_total`, so "this machine has been serving a stale file for an hour" is
-something a scrape notices.
+The source is a real port with two adapters, bucket and disk. It stays a port
+because a third source is plausible, and at two calls a minute the dynamic
+dispatch costs nothing.
 
 ## The snapshot
 
-`ArcSwapOption<Snapshot>`, swapped in whole. A request never sees a half-updated table, and a bad
-file leaves the previous one exactly where it was. `None` is Vault's sealed state and answers 503,
-not an empty 200.
+The decrypted file becomes a `Snapshot`, stored in an `ArcSwapOption` and
+replaced whole. A request never sees a half-updated table, and a bad file
+leaves the previous one exactly where it was. `None` is Vault's sealed state:
+every read answers 503 until the first file loads.
 
-ADR-0015 D11 sized this deliberately: a few dozen secrets, read almost exclusively, so a plain
-`HashMap` behind `arc-swap` is enough — the project's own benchmark put the time in the HTTP layer,
-not the lookup. Paths are also held sorted so a LIST finds its prefix range by binary search instead
-of scanning.
+The snapshot is a plain `HashMap`, sized for a few dozen secrets read almost
+exclusively. The project's own measurements put the time in the HTTP layer, so
+a cleverer structure would buy nothing. Paths are also kept sorted, so a LIST
+finds its prefix by binary search.
 
-Secrets are sealed individually in RAM under a per-snapshot AES-256-GCM key that is never written
-anywhere, and opened into a `thread_local` buffer for the length of one response (ADR-0015 D13). The
-response body is built inside that callback, so the cleartext exists for exactly as long as it takes
-to copy it into the body; the buffer is wiped when the closure returns. A new file means a new key,
-and the old one is zeroed when the old snapshot drops.
+Inside the snapshot, each secret is sealed individually under a key that exists
+only in this process and only for this snapshot. A request opens exactly the
+one secret it asked for, into a buffer owned by its worker thread, builds the
+response inside that window, and the buffer is wiped. A new file brings a new
+key, and the old key is zeroed when the old snapshot drops. See
+[security](/kallisto/explanation/security/) for what this is worth.
 
-## The file, and what makes it trustworthy
+## The workers
 
-The sealed file is `KALLISTO` magic, a format version, the content version as a little-endian
-`u64`, a 12-byte nonce, then AES-256-GCM ciphertext. The header is plaintext so the version can be
-checked before anything is decrypted, and it is passed as additional authenticated data, so editing
-any of it — the content version most of all — fails authentication.
+Each worker is a single-threaded Tokio runtime on its own thread, pinned to a
+core with `core_affinity`. All workers share port 8200 through `SO_REUSEPORT`,
+and the kernel balances connections between them. There is no work-stealing.
 
-Anti-rollback matters because the attacker in the threat model is whoever can write to the bucket.
-Bucket versioning is therefore under their control, and only an in-process check helps: a file whose
-version is older than the one held is refused.
+The router is built once per worker, on that worker's thread. The rate limiter,
+the access-log producer and the metrics counters therefore each belong to one
+core, and the read path never touches a cache line another core writes. The
+rate limit is per worker for this reason, and the configuration field is named
+`requestsPerSecondPerWorker` to say so.
 
-The 32-byte seal key comes from the environment, never from the config file and never from a flag,
-because command-line arguments are world-readable through `ps`. Everything that *writes* a sealed
-file happens offline in `kallisto-ctl`, never over the network. Before any secret is read the process
-drops core dumps and refuses `ptrace`.
+A handler loads the current snapshot and reads a `HashMap`. There is no engine
+trait, no registry and no virtual call on the read path. An earlier abstraction
+here charged a dynamic dispatch per request for a substitutability nobody
+needed, so 2.0.0 removed it.
+
+## Why the read path is treated as hot
+
+ADR-0015 first assumed one thread was enough, since most applications read
+their secrets once at startup. ADR-0016 reversed that for one real pattern:
+fetching a secret right before each use and discarding it right after. That
+pattern keeps secrets out of application memory for as long as possible, and it
+turns every use of a secret into a request. For those applications the read
+path is the hot path, so it is built like one.
+
+Applications that read once at startup lose nothing: set `workers: 1`.
 
 ## Authorization
 
-A token table built from the file, looked up in constant time, with Vault-style path matching.
+A token table travels inside the sealed file, as keyed hashes mapped to policy
+names. Lookup is constant-time and visits every entry. Policies use Vault's path
+syntax. A file with no token table permits every read, which suits one app with
+its own file. Any file with a table is default deny.
 
-A file that carries no token key and no tokens is the sidecar deployment of ADR-0015 D8: one app,
-its own file, and the bucket credential is the boundary. Every read is then permitted, and
-`sys/health` reports that rather than leaving an operator to discover it. Anything else is default
-deny, including a request that carried no token. A file carrying tokens but no key to check them
-against is refused outright, rather than served with authorization quietly switched off.
+## Telemetry
 
-Overload is answered the way Vault answers it — 429 with `Retry-After` — from a token bucket per
-worker. The configured rate is therefore per worker, and the configuration field says so in its
-name; a process-wide limiter would put a contended atomic in front of every read.
+One access-log line and one counter increment per request, emitted from a
+single middleware layer so that no route can bypass it. Lines travel over a
+lock-free queue to a writer thread, and when the queue is full they are dropped
+and counted. stdout carries the access log only. Operational messages go to
+stderr.
 
-## Telemetry, which is not an audit log
+## What the process does not have
 
-One access-log line and one counter per request, emitted from a single middleware layer rather than
-from each handler: an access log's whole value is that every request appears in it, and a layer
-cannot be bypassed by adding a route. Lines go over a lock-free queue to a writer thread, and stdout
-carries the access log and nothing else — operational messages go to stderr.
+One plane and one port. There is no admin API, no port 8202, no cluster, no
+gossip, no storage engine and no write path. The workspace is Rust only.
 
-This is not an audit log, and a test enforces that nothing in the telemetry crate is named one. The
-distinction is the design (ADR-0015 D15): an audit log records *before* it serves, so a full queue
-means refusing to serve, whereas this records after the fact and drops when it falls behind. Calling
-a drop-on-full log "audit" would let somebody believe they can answer "who read the Stripe key" when
-they cannot.
+## How it got here
 
-Paths and tokens are written as keyed hashes, never as themselves, and no secret value is written at
-all — the error log included. Identifiers are computed when the file loads rather than per request,
-because an HMAC costs roughly what the whole barrier costs, and paying one per request would make
-observing a read more expensive than serving it. The log key is derived from the file's own token
-key so identifiers survive a restart; with no token table it falls back to a key that lives only as
-long as the process, and the startup log says so.
+2.0.0 is the third architecture:
+
+1. **A C++ core behind an FFI bridge.**
+2. **A pure-Rust secrets server**, with a sharded cuckoo table, a B-tree index,
+   RocksDB storage, a KV-v2 write path, an admin port and a planned gossip
+   controlplane.
+3. **The resolver.** ADR-0015 changed the question from "how do we build a fast
+   secrets server" to "what does one machine's application actually need". The
+   answer was much smaller, and about nine thousand lines were removed.
+
+Each deletion also retired a class of risk. With no storage engine there is
+no durability bug to have, and with no write endpoint there is no endpoint
+that can be tricked into writing. The Kallisto repository keeps the full account under
+`docs/explanation/how-to-create-naughtian-kallisto/`.
+
+## The one-line contract
+
+```diff
+- VAULT_ADDR=https://vault.internal:8200
++ VAULT_ADDR=http://127.0.0.1:8200
+```
+
+Removing it is the same line. A component that is painful to remove is one
+nobody dares to experiment with, and it becomes permanent by accident. The same
+principle runs through the ecosystem: remove [Helvilette](/helvilette/) and you
+still have working Ansible playbooks, ignore a [Kuberina](/kuberina/) blueprint
+and your cluster schedules normally.

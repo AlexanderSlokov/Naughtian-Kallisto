@@ -122,7 +122,7 @@ bucket and serves normally, so the line is alarming but harmless.
 
 ## Where to read more
 
-- [What Kallisto is](../docs/explanation/what-is-kallisto.md)
+- [What Kallisto is](../docs/index.mdx)
 - [Architecture](../docs/explanation/architecture.md)
-- [Configuring the source](../docs/operations/configuration/source.md)
+- [Configure the source](../docs/how-to/configure-the-source.md)
 - [Security and the threat model](../docs/explanation/security.md)
