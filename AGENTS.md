@@ -91,7 +91,7 @@ Use `unsafe` when it is the most appropriate solution, e.g. for FFI, extreme per
 
 - `/cmd/` - Binary entry points only, no business logic
     - `/cmd/kallisto-server/` - The resolver. Reads config, takes the seal key from the environment, starts the refresh thread and the worker pool.
-    - `/cmd/kallisto-ctl/` - The offline half: `seal`, `verify`, `bump-version`, `mint-token`, `gen-key`, `validate`, `open`. Everything that *writes* a sealed file happens here, never over the network.
+    - `/cmd/kallisto-ctl/` - The offline half: `seal`, `verify`, `bump-version`, `mint-token`, `gen-key`, `validate`, `open`. Everything that *writes* a sealed file happens here, never over the network. `health` is the one command that opens a socket: it asks the local server over loopback whether it is serving, for Kubernetes exec probes (#60).
 
 - `/src/` - The `naughtian_kallisto` library crate
     - `/src/config.rs` - K8s-shaped YAML (ADR-0003). Refuses a non-loopback bind without an explicit risk flag.

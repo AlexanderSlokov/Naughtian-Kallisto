@@ -5,6 +5,10 @@
 //! ADR-0015 D1 makes "cannot write" a property of the server, and this is where
 //! the writing went instead.
 //!
+//! One command opens a socket: `health` asks the server on this machine, over
+//! loopback, whether it is serving (issue #60). It writes nothing and reads no
+//! secret; [`health`] says why it is here and not in the server.
+//!
 //! Two rules hold throughout, and both are enforced rather than documented:
 //!
 //! * **No key is ever a command-line argument.** Arguments are readable by
@@ -20,6 +24,7 @@
 
 mod args;
 mod commands;
+mod health;
 
 use std::process::ExitCode;
 
@@ -60,6 +65,14 @@ COMMANDS
                   Print the decrypted contents. Exactly as dangerous as it
                   sounds, which is why the flag is spelled out.
 
+    health        [--ready] [--config <kallisto.yaml>] [--listen-address IP]
+                  [--listen-port PORT] [--timeout-millis N]
+                  Ask the server on this machine whether it is up. Exits 0 if
+                  it answers; with --ready, only if it has a sealed file
+                  loaded. Exits 1 otherwise. Made for Kubernetes exec probes:
+                  it finds the server through the same flags, KALLISTO_LISTEN_*
+                  and KALLISTO_CONFIG as the server itself.
+
 ENVIRONMENT
     KALLISTO_SEAL_KEY   the 32-byte seal key, hex-encoded. Required by every
                         command that opens or writes a sealed file.
@@ -98,6 +111,7 @@ fn main() -> ExitCode {
         "mint-token" => commands::run_mint_token(&parsed),
         "gen-key" => commands::run_gen_key(&parsed),
         "open" => commands::run_open(&parsed),
+        "health" => health::run_health(&parsed),
         other => Err(Failure::Usage(format!(
             "unknown command {other:?}\n\n{USAGE}"
         ))),

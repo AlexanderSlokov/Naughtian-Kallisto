@@ -10,10 +10,19 @@
 # Kallisto is a native sidecar (an init container with restartPolicy: Always),
 # so it starts before the app and lives as long as the pod.
 #
-# Known gap, on purpose: no probes. Kallisto listens on loopback only, and the
-# kubelet probes the pod IP; the image is distroless, so there is no shell for
-# an exec probe either. Until that is solved the app's first lines may show a
-# connection error while Kallisto loads the file.
+# The three probes are exec probes that run kallisto-ctl, which is in the image.
+# Nothing else reaches Kallisto: it listens on loopback only, the kubelet sends
+# httpGet and tcpSocket probes to the pod IP, and the image is distroless, so
+# there is no shell or HTTP client to exec (issue #60). kallisto-ctl finds the
+# port through KALLISTO_CONFIG, the same variable the server reads.
+#
+#   startup    `health`          the app container starts once Kallisto answers
+#   readiness  `health --ready`  the pod is Ready only while a file is loaded
+#   liveness   `health`          a Kallisto that stops answering is restarted
+#
+# Startup is not `--ready` on purpose. A failed startup probe restarts the
+# container, and a Kallisto with no file and no bucket is not helped by a
+# restart: it would loop, and the pod would never get past Init.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -68,7 +77,8 @@ spec:
         seccompProfile: { type: RuntimeDefault }
       initContainers:
         - name: kallisto
-          image: ghcr.io/alexanderslokov/naughtian-kallisto:2.0.2
+          # 2.1.0 is the first release whose kallisto-ctl has `health`.
+          image: ghcr.io/alexanderslokov/naughtian-kallisto:2.1.0
           restartPolicy: Always
           env:
             - { name: KALLISTO_CONFIG, value: /etc/kallisto/kallisto.yaml }
@@ -81,6 +91,22 @@ spec:
             - name: KALLISTO_S3_SECRET_ACCESS_KEY
               valueFrom:
                 secretKeyRef: { name: demo-credentials, key: KALLISTO_S3_SECRET_ACCESS_KEY }
+          startupProbe:
+            exec: { command: ["/usr/local/bin/kallisto-ctl", "health"] }
+            periodSeconds: 1
+            failureThreshold: 30
+          # An exec probe is not free: each one starts a process inside the
+          # container, about 45 ms of CPU on the demo machine. At a 2 s and a
+          # 10 s period an idle sidecar went from about 1 millicore to 27. The
+          # periods below are as long as the demo allows: a file cannot arrive
+          # faster than the 5 s poll, so readiness need not be asked faster.
+          readinessProbe:
+            exec: { command: ["/usr/local/bin/kallisto-ctl", "health", "--ready"] }
+            periodSeconds: 5
+          livenessProbe:
+            exec: { command: ["/usr/local/bin/kallisto-ctl", "health"] }
+            periodSeconds: 20
+            failureThreshold: 3
           resources:
             requests: { cpu: 10m, memory: 16Mi }
             limits: { memory: 64Mi }
@@ -123,3 +149,17 @@ spec:
           emptyDir: {}
         - name: tmp
           emptyDir: {}
+---
+# Nothing connects through this Service: the app is a shell loop with no
+# listener. It is here so that the cluster shows which pods it would route to.
+# A pod whose Kallisto holds no file is not Ready and gets no endpoint
+# (experiment 2, step 3).
+apiVersion: v1
+kind: Service
+metadata:
+  name: fleet
+  namespace: kallisto-demo
+spec:
+  selector: { app: fleet }
+  ports:
+    - { name: app, port: 80 }

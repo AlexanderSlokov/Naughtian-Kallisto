@@ -24,7 +24,7 @@ spec:
       automountServiceAccountToken: false
       initContainers:
         - name: seal
-          image: ghcr.io/alexanderslokov/naughtian-kallisto:2.0.2
+          image: ghcr.io/alexanderslokov/naughtian-kallisto:2.1.0
           command:
             - /usr/local/bin/kallisto-ctl
             - seal

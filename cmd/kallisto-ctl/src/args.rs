@@ -29,7 +29,17 @@ impl std::fmt::Display for ArgError {
 /// Flags that take a value. Anything else beginning with `--` is a bare flag,
 /// so a typo in a value-taking flag is caught here rather than silently
 /// swallowing the next argument.
-const TAKES_VALUE: &[&str] = &["--in", "--out", "--config", "--version", "--to", "--policy"];
+const TAKES_VALUE: &[&str] = &[
+    "--in",
+    "--out",
+    "--config",
+    "--version",
+    "--to",
+    "--policy",
+    "--listen-address",
+    "--listen-port",
+    "--timeout-millis",
+];
 
 impl Args {
     pub fn parse<I: Iterator<Item = String>>(args: I) -> Result<Self, ArgError> {
