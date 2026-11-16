@@ -30,18 +30,26 @@ GREEN='\033[0;32m'; RED='\033[0;31m'; CYAN='\033[0;36m'; YELLOW='\033[1;33m'; NC
 PORT=8200
 BUCKET=kallisto
 OBJECT=prod/secrets.kal
-MINIO=http://127.0.0.1:9000
-# MinIO's own root credentials, and the names Kallisto reads them under. Both
-# are the environment rather than the config file, deliberately: the config file
-# has no field for a credential and inventing one fails to parse.
+GARAGE_S3=http://127.0.0.1:3900
+# Pinned for the same reason as the Garage image: see docker-compose.yml.
+RCLONE_IMAGE=rclone/rclone:1.71.2
+# The bucket key, and the names Kallisto reads it under. Both are the
+# environment rather than the config file, deliberately: the config file has no
+# field for a credential and inventing one fails to parse.
 # Generated per run and never written to the repository. They live as long as
-# one MinIO container on loopback.
-ACCESS_KEY="duck$(head -c 12 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-SECRET_KEY="$(head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n')"
-export DUCK_MINIO_USER="$ACCESS_KEY"
-export DUCK_MINIO_PASSWORD="$SECRET_KEY"
+# one Garage container on loopback.
+# Garage insists on the shape: "GK" plus 24 hex characters for the key id, 64
+# hex characters for the secret, and 64 for the secret its nodes share.
+random_hex() { head -c "$1" /dev/urandom | od -An -tx1 | tr -d ' \n'; }
+ACCESS_KEY="GK$(random_hex 12)"
+SECRET_KEY="$(random_hex 32)"
+export DUCK_GARAGE_RPC_SECRET="$(random_hex 32)"
 export KALLISTO_S3_ACCESS_KEY_ID="$ACCESS_KEY"
 export KALLISTO_S3_SECRET_ACCESS_KEY="$SECRET_KEY"
+# rclone reads the same pair from these. Exported so that `docker run -e NAME`
+# passes them on without either one appearing in a process listing.
+export RCLONE_S3_ACCESS_KEY_ID="$ACCESS_KEY"
+export RCLONE_S3_SECRET_ACCESS_KEY="$SECRET_KEY"
 
 CTL="$REPO/target/release/kallisto-ctl"
 SERVER="$REPO/target/release/kallisto-server"
@@ -67,19 +75,44 @@ command -v docker &>/dev/null || { echo -e "${RED}docker is required${NC}"; exit
     cargo build --release -p kallisto-server -p kallisto-ctl || exit 1
 }
 
-mc() { docker run --rm --network host -v "$WORK:/w" --entrypoint /bin/sh quay.io/minio/mc:latest -c "$1"; }
+# The Garage image is the bare binary, no shell, so every admin step is an exec.
+garage() { docker compose -f "$HERE/docker-compose.yml" exec -T garage /garage "$@"; }
+
+# Puts $WORK/$1 in the bucket as the object the resolver polls.
+upload() {
+    docker run --rm --network host -v "$WORK:/w:ro" \
+        -e RCLONE_S3_ACCESS_KEY_ID -e RCLONE_S3_SECRET_ACCESS_KEY \
+        -e RCLONE_S3_PROVIDER=Other -e RCLONE_S3_ENDPOINT="$GARAGE_S3" \
+        -e RCLONE_S3_REGION=us-east-1 -e RCLONE_S3_FORCE_PATH_STYLE=true \
+        -e RCLONE_S3_NO_CHECK_BUCKET=true \
+        "$RCLONE_IMAGE" copyto -q "/w/$1" ":s3:$BUCKET/$OBJECT" >/dev/null
+}
+
+# A new Garage stores nothing until it has a layout, and serves nobody until a
+# key is allowed on a bucket.
+setup_garage() {
+    local node
+    node="$(garage node id -q | cut -d@ -f1)" || return 1
+    garage layout assign -z dc1 -c 1G "$node" >/dev/null || return 1
+    garage layout apply --version 1 >/dev/null || return 1
+    garage key import --yes -n duck "$ACCESS_KEY" "$SECRET_KEY" >/dev/null || return 1
+    garage bucket create "$BUCKET" >/dev/null || return 1
+    garage bucket allow --read --write --owner "$BUCKET" --key duck >/dev/null
+}
 
 # ---------------------------------------------------------------------------
 step "[1/6] The bucket"
 # ---------------------------------------------------------------------------
-docker compose -f "$HERE/docker-compose.yml" up -d minio &>/dev/null
+docker compose -f "$HERE/docker-compose.yml" up -d garage &>"$WORK/garage-up.log" \
+    || { echo -e "${RED}garage did not start${NC}"; tail -5 "$WORK/garage-up.log"; exit 1; }
 for _ in $(seq 1 60); do
-    curl -sf "$MINIO/minio/health/live" &>/dev/null && break
+    garage status &>/dev/null && break
     sleep 1
 done
-curl -sf "$MINIO/minio/health/live" &>/dev/null || { echo -e "${RED}minio did not come up${NC}"; exit 1; }
-mc "mc alias set d $MINIO $ACCESS_KEY $SECRET_KEY >/dev/null && mc mb -p d/$BUCKET >/dev/null" || exit 1
-echo "  minio up, bucket $BUCKET created"
+garage status &>/dev/null || { echo -e "${RED}garage did not come up${NC}"; exit 1; }
+setup_garage 2>"$WORK/garage-setup.log" \
+    || { echo -e "${RED}garage could not be set up${NC}"; cat "$WORK/garage-setup.log"; exit 1; }
+echo "  garage up, bucket $BUCKET created"
 
 # ---------------------------------------------------------------------------
 step "[2/6] Sealing a file and putting it in the bucket"
@@ -126,7 +159,7 @@ JSON
 
 write_plain 1 yes
 "$CTL" seal --in "$WORK/plain.json" --out "$WORK/secrets.kal" >/dev/null || exit 1
-mc "mc alias set d $MINIO $ACCESS_KEY $SECRET_KEY >/dev/null && mc cp /w/secrets.kal d/$BUCKET/$OBJECT >/dev/null" || exit 1
+upload secrets.kal || exit 1
 echo "  sealed version 1, uploaded to s3://$BUCKET/$OBJECT"
 
 cat > "$WORK/kallisto.yaml" <<YAML
@@ -138,7 +171,7 @@ spec:
   mount: secret
   source:
     type: bucket
-    endpoint: $MINIO
+    endpoint: $GARAGE_S3
     bucket: $BUCKET
     objectKey: $OBJECT
     region: us-east-1
@@ -212,7 +245,7 @@ code() { curl -s -o /dev/null -w '%{http_code}' -H "X-Vault-Token: ${2:-}" "http
 # ---------------------------------------------------------------------------
 step "[5/6] The bad cases"
 # ---------------------------------------------------------------------------
-reupload() { mc "mc alias set d $MINIO $ACCESS_KEY $SECRET_KEY >/dev/null && mc cp /w/$1 d/$BUCKET/$OBJECT >/dev/null"; }
+reupload() { upload "$1"; }
 served_version() { curl -s "http://127.0.0.1:$PORT/v1/sys/health" | grep -o '"kallisto_file_version":[0-9]*' | cut -d: -f2; }
 
 # Revoking a token means deleting its line and re-sealing.
@@ -287,7 +320,7 @@ else
 fi
 
 # The bucket dies. ADR-0015 D14: keep serving what is held, never exit.
-docker compose -f "$HERE/docker-compose.yml" stop minio &>/dev/null
+docker compose -f "$HERE/docker-compose.yml" stop garage &>/dev/null
 sleep 5
 if [ "$(code /v1/secret/data/app/db "$APP_TOKEN")" = 200 ]; then
     pass "the bucket dies and reads keep working"
@@ -306,7 +339,7 @@ fi
     && pass "and that cache is encrypted on disk" \
     || fail "and that cache is encrypted on disk"
 
-docker compose -f "$HERE/docker-compose.yml" start minio &>/dev/null
+docker compose -f "$HERE/docker-compose.yml" start garage &>/dev/null
 
 # ---------------------------------------------------------------------------
 step "[6/6] The pattern that produced QĐ-3"

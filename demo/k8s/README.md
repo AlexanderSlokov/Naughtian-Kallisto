@@ -38,8 +38,8 @@ S3-compatible bucket, and never writes to it. Three properties of its design are
 | Client | Vault CLI v1.20.4 (`hashicorp/vault:1.20`), unmodified |
 | Upload tool | rclone 1.71 |
 
-Garage is used because MinIO no longer publishes container images; at the time of writing neither
-`quay.io/minio/minio` nor `minio/minio` can be pulled.
+Garage is used because MinIO no longer publishes container images; at the time of writing its image
+can be pulled neither from quay.io nor from Docker Hub.
 
 ### 2.2 Topology
 

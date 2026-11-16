@@ -7,7 +7,6 @@
 #   docker compose -f docker-compose.demo.yml --env-file .env.demo up
 #
 # After ~20s:
-#   MinIO UI   : http://localhost:9001  (demo-access-key / demo-secret-key)
 #   Health     : curl http://127.0.0.1:8200/v1/sys/health
 #   Read secret: curl http://127.0.0.1:8200/v1/secret/data/app/database
 #
@@ -20,26 +19,30 @@
 # host networking the same way; see "Running without host networking" in
 # README.md for what would have to change.
 
+# Every image is pinned to a version. This file used to pull MinIO's `latest`,
+# and broke when MinIO stopped publishing images (issue #61).
+
 services:
-  minio:
-    image: quay.io/minio/minio:latest
+  # The bucket. Garage, S3 API on 127.0.0.1:3900. The image is the bare binary,
+  # so the healthcheck is Garage asking itself for its status.
+  garage:
+    image: dxflrs/garage:v2.4.1
     network_mode: host
-    command: server /data --address 127.0.0.1:9000 --console-address 127.0.0.1:9001
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
     volumes:
-      - minio-data:/data
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-data:/var/lib/garage
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "/garage", "status"]
       interval: 2s
       timeout: 5s
       retries: 30
       start_period: 5s
 
-
-  #Waits for MinIO healthy, creates the bucket, seals plain.demo.json,
-  # uploads demo.kal. Kallisto starts only after this exits 0.
+  # Waits for Garage, gives it a layout, the demo key and the bucket, seals
+  # plain.demo.json and uploads demo.kal. Kallisto starts only after this
+  # exits 0.
   kallisto-init:
     build:
       context: ..
@@ -47,38 +50,41 @@ services:
       target: init
     network_mode: host
     depends_on:
-      minio:
+      garage:
         condition: service_healthy
     environment:
       KALLISTO_SEAL_KEY: ${KALLISTO_SEAL_KEY}
-      MINIO_ENDPOINT: http://127.0.0.1:9000
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      KALLISTO_S3_ACCESS_KEY_ID: ${KALLISTO_S3_ACCESS_KEY_ID}
+      KALLISTO_S3_SECRET_ACCESS_KEY: ${KALLISTO_S3_SECRET_ACCESS_KEY}
+      GARAGE_RPC_SECRET: ${GARAGE_RPC_SECRET}
       BUCKET: kallisto-demo
       OBJECT: demo.kal
+      # An rclone remote named "demo", so that `rclone ... demo:` works in this
+      # container without a configuration file.
+      RCLONE_CONFIG_DEMO_TYPE: s3
+      RCLONE_CONFIG_DEMO_PROVIDER: Other
+      RCLONE_CONFIG_DEMO_ENDPOINT: http://127.0.0.1:3900
+      RCLONE_CONFIG_DEMO_REGION: us-east-1
+      RCLONE_CONFIG_DEMO_FORCE_PATH_STYLE: "true"
+      RCLONE_CONFIG_DEMO_ACCESS_KEY_ID: ${KALLISTO_S3_ACCESS_KEY_ID}
+      RCLONE_CONFIG_DEMO_SECRET_ACCESS_KEY: ${KALLISTO_S3_SECRET_ACCESS_KEY}
+      # The bucket exists already; rclone would otherwise try to create it.
+      RCLONE_CONFIG_DEMO_NO_CHECK_BUCKET: "true"
     volumes:
       - ./plain.demo.json:/demo/plain.demo.json:ro
+      # The Garage CLI finds its node through the same configuration and the
+      # node's key, which is in the metadata directory.
+      - ./garage.toml:/etc/garage.toml:ro
+      - garage-data:/var/lib/garage
+      # Chowned to Kallisto's uid by the init script.
+      - kallisto-cache:/var/lib/kallisto
     restart: "no"
 
-  # Volume ownership fix
-  # Docker creates named volumes owned by root. The production image runs as
-  # nonroot (uid 65532) on a distroless base with no shell to fix it at runtime.
-  # Without this the encrypted fallback copy silently fails to write.
-  cache-owner:
-    image: alpine:3.20
-    command: chown -R 65532:65532 /var/lib/kallisto
-    volumes:
-      - kallisto-cache:/var/lib/kallisto
-    user: "0:0"
-    network_mode: host
-
   kallisto:
-    image: ghcr.io/alexanderslokov/naughtian-kallisto:latest
+    image: ghcr.io/alexanderslokov/naughtian-kallisto:2.1.0
     network_mode: host
     depends_on:
       kallisto-init:
-        condition: service_completed_successfully
-      cache-owner:
         condition: service_completed_successfully
     volumes:
       - ./kallisto.demo.yaml:/etc/kallisto/kallisto.yaml:ro
@@ -100,7 +106,16 @@ services:
     # mlock for the barrier key.
     ulimits:
       memlock: -1
+    # The image is distroless: kallisto-ctl is the only thing in it that can ask.
+    healthcheck:
+      test: ["CMD", "/usr/local/bin/kallisto-ctl", "health", "--ready"]
+      # Each check is a line in the access log, so not often.
+      interval: 30s
+      timeout: 2s
+      retries: 3
+      start_period: 10s
+      start_interval: 1s
 
 volumes:
-  minio-data:
+  garage-data:
   kallisto-cache:

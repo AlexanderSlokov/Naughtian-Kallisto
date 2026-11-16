@@ -16,22 +16,28 @@
 # application on the same machine does.
 
 services:
-  # The bucket. MinIO rather than Garage only because its image is smaller and
-  # its setup is one environment variable; ADR-0015 D2 cares that it is
-  # S3-compatible, not which one.
-  minio:
-    image: quay.io/minio/minio:latest
+  # The bucket. Garage, because MinIO stopped publishing images and the
+  # `latest` this file used to pull is gone (issue #61). ADR-0015 D2 cares that
+  # it is S3-compatible, not which one. Pinned, so the next image to disappear
+  # is one somebody chose to move to.
+  #
+  # run.sh gives it a layout, a key and a bucket with `docker compose exec`:
+  # the image is the bare binary, so there is no shell to script it from.
+  garage:
+    image: dxflrs/garage:v2.4.1
     network_mode: host
-    command: server /data --address 127.0.0.1:9000 --console-address 127.0.0.1:9001
     # Credentials come from the environment, generated fresh by run.sh for each
     # run. Nothing is committed: a static pair in this file is a real
     # credential in a public repository however loudly the surrounding comment
     # insists it is only for tests, and secret scanners are right to say so.
     environment:
-      MINIO_ROOT_USER: ${DUCK_MINIO_USER:?run this through tests/duck/run.sh}
-      MINIO_ROOT_PASSWORD: ${DUCK_MINIO_PASSWORD:?run this through tests/duck/run.sh}
+      GARAGE_RPC_SECRET: ${DUCK_GARAGE_RPC_SECRET:?run this through tests/duck/run.sh}
+    volumes:
+      # One Garage configuration for the demo and for this suite. It binds
+      # loopback only: S3 on 3900, RPC on 3901.
+      - ../../demo/garage.toml:/etc/garage.toml:ro
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "/garage", "status"]
       interval: 2s
       timeout: 2s
       retries: 30

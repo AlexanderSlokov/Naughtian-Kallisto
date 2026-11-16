@@ -1,12 +1,13 @@
 # The bucket every Kallisto in the fleet polls, plus the demo credentials.
 #
 # Garage (https://garagehq.deuxfleurs.fr), single node. MinIO stopped publishing
-# images, so the compose demo's quay.io/minio/minio no longer pulls.
+# images, which is also why the compose demo and `make duck` moved to Garage
+# (issue #61).
 #
 # Every value below is a deliberately fake placeholder: all-zero hex of the
 # length each field demands. Garage insists on the shape of its keys, "GK" plus
-# 24 hex for the key id and 64 hex for the secret, so the compose demo's
-# "demo-access-key" would not be accepted here. Do not use any of them anywhere.
+# 24 hex for the key id and 64 hex for the secret. Do not use any of them
+# anywhere.
 #
 # Garage keeps its data in an emptyDir, so deleting the pod empties the bucket
 # and forgets the layout. up.sh sets both up again. Act 2 relies on that.
