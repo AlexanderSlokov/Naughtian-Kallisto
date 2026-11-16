@@ -34,23 +34,34 @@ deny = [
     { name = "ed25519" },
     # Message authentication codes
     { name = "hmac"},
-    # `rustls` and `ring` were on this list upstream because TiKV prefers system
-    # native TLS or OpenSSL. Kallisto removed them in ADR-0015/ADR-0016 (plan
-    # "duck", 2026-09-17). Three reasons, in order of weight:
+    # `rustls` was on this list upstream because TiKV prefers system native TLS
+    # or OpenSSL. Kallisto removed it in ADR-0015/ADR-0016 (plan "duck",
+    # 2026-09-17). `ring` was removed with it then, and is back on the list
+    # since issue #58; see below.
     #
     #  1. Kallisto must fetch its sealed secret file over HTTPS from an
     #     S3-compatible bucket (ADR-0015 D2), so it needs TLS in-process. Linking
     #     OpenSSL would put a C library back in the way of the static musl binary
     #     and the few-MB distroless image that ADR-0015 D12 exists to produce.
-    #  2. rustls 0.23 defaults to the aws-lc-rs provider, which wraps AWS-LC — the
-    #     same module that carries the FIPS 140-3 validation. So this is not the
-    #     "unvalidated pure-Rust crypto" the rest of this list guards against; the
-    #     upstream comment two lines above already names aws-lc-rs as the FIPS path.
-    #  3. Because aws-lc-rs is in the tree for TLS regardless, ADR-0015 D13's
-    #     encryption barrier uses `aws_lc_rs::aead::AES_256_GCM` and D15's keyed
-    #     hashing uses `aws_lc_rs::hmac`. That adds no dependency, and it is why
-    #     `aes-gcm`, `hmac`, `sha2` and friends stay banned below — Kallisto does
-    #     not need them.
+    #  2. rustls runs on the aws-lc-rs provider, which wraps AWS-LC. Kallisto
+    #     names that provider itself (src/resolver/tls.rs); it does not rely on
+    #     a feature default.
+    #  3. ADR-0015 D13's encryption barrier uses `aws_lc_rs::aead::AES_256_GCM`
+    #     and D15's keyed hashing uses `aws_lc_rs::hmac`, so TLS and the barrier
+    #     share one crypto library. That is why `aes-gcm`, `hmac`, `sha2` and
+    #     friends stay banned in this list: Kallisto does not need them.
+    #
+    # What this is not: FIPS compliance. The header of this file is inherited
+    # from TiKV and describes TiKV's goal. AWS-LC has a FIPS 140-3 validated
+    # build, but it is a separate one (aws-lc-fips-sys, rustls's `fips`
+    # feature) and Kallisto does not build it. The bans below keep every
+    # primitive in one library; they do not make that library a validated module.
+    #
+    # Reasons 2 and 3 were written here before they were true. From 2.0.0 to
+    # 2.0.2 reqwest's `rustls-tls` feature selected `ring`, so TLS ran on `ring`
+    # while this comment said AWS-LC (issue #58). The ban makes the next such
+    # drift a failed `make deny` instead of a wrong comment.
+    { name = "ring" },
     #
     # Everything else on this list is inherited unchanged and still applies.
     # Ban trait crates from RustCrypto.
