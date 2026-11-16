@@ -5,8 +5,8 @@
 #   2. One Kallisto crashes while the bucket is down: it comes back from its
 #      encrypted copy on disk.
 #   3. A brand-new pod while the bucket is down: it has nothing to serve and
-#      says "sealed". Kubernetes still calls it Running 2/2, because there are
-#      no probes (see README, "Known gap").
+#      says "sealed". Its readiness probe fails, so Kubernetes shows it 1/2 and
+#      the fleet Service has no endpoint for it (issue #60).
 #   4. Bucket back: the new pod loads the file and the fleet is whole again.
 #
 # Step 2 stops a container with crictl on the node, so it needs k3d (or kind):
@@ -28,6 +28,13 @@ crash_sidecar() {
     pod_id="$(docker exec "$node" crictl pods --name "^$1\$" --namespace "$DEMO_NS" -q)"
     container="$(docker exec "$node" crictl ps --pod "$pod_id" --name '^kallisto$' -q)"
     docker exec "$node" crictl stop "$container" >/dev/null
+}
+
+# How many pods the fleet Service holds a ready endpoint for.
+ready_endpoints() {
+    k get endpointslice -l kubernetes.io/service-name=fleet \
+        -o jsonpath='{range .items[*].endpoints[?(@.conditions.ready==true)]}{.addresses[0]}{"\n"}{end}' |
+        grep -c .
 }
 
 # Prints the fleet summary every 5 s for $1 seconds.
@@ -62,11 +69,14 @@ crash_one() {
 fresh_pod() {
     say "3/4 A brand-new pod, bucket still down"
     k scale deploy/fleet --replicas=21 >/dev/null
-    k rollout status deploy/fleet --timeout=120s >/dev/null
+    # Not `rollout status`: the new pod will not become Ready while the bucket
+    # is down, and that is the result this step is here to show.
+    until (($(running_fleet_pods | wc -l) == 21)); do sleep 1; done
     sleep 6
     say "  $(fleet_summary)"
     say "  What Kubernetes thinks of them:"
     k get pod -l app=fleet --no-headers | awk '{ print $2, $3 }' | sort | uniq -c | sed 's/^/        /'
+    say "  Pods the fleet Service routes to: $(ready_endpoints) of 21"
 }
 
 bucket_back() {
