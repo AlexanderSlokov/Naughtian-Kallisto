@@ -27,11 +27,24 @@ socket2 = { version = "0.5", features = ["all"] }
 core_affinity = "0.8"
 zeroize = { version = "1.7", features = ["derive"] }
 # AEAD + keyed hashing for the sealed secret file (ADR-0015 D13/D15, ADR-0016
-# QĐ-1). Chosen over RustCrypto because rustls already pulls aws-lc-rs in as its
-# default provider for the bucket's HTTPS, so this costs no new dependency and
-# keeps a FIPS-validated module underneath. See the comment in deny.toml.
+# QĐ-1), and the provider under rustls for the bucket's HTTPS. One crypto
+# library for both, which is the reason it was chosen over RustCrypto.
+#
+# That reason was written down before it was true: until issue #58 reqwest's
+# `rustls-tls` feature selected `ring`, so the binary carried both. The three
+# entries below are what make it true, and deny.toml bans `ring` so it stays so.
+#
+# This is the ordinary AWS-LC build, not the FIPS 140-3 validated one. See the
+# comment in deny.toml.
 aws-lc-rs = "1"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# `-no-provider`: reqwest brings rustls and no crypto library. The provider and
+# the roots are given to it in src/resolver/tls.rs.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-manual-roots-no-provider"] }
+# Must stay on the minor version reqwest uses: the configuration is handed over
+# as `dyn Any`, and a second rustls in the tree fails at start-up, not at
+# compile time. A unit test in src/resolver/bucket.rs builds the client.
+rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std", "tls12"] }
+webpki-roots = "1"
 # serde_yaml is archived; ADR-0003 names this fork as the replacement to
 # evaluate. Picked over serde_yaml_ng because it is the one that kept taking
 # releases after the archive.
@@ -51,6 +64,8 @@ policy_engine = { path = "components/kallisto_policy" }
 aws-lc-rs = { workspace = true }
 url = "2"
 reqwest = { workspace = true }
+rustls = { workspace = true }
+webpki-roots = { workspace = true }
 kallisto_queue = { path = "components/kallisto_queue" }
 telemetry = { path = "components/kallisto_telemetry" }
 serde_norway = { workspace = true }

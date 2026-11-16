@@ -187,7 +187,7 @@ make clippy                 # scripts/clippy — the same gate CI runs
                              # clippy.toml disallows several methods (see file) — read the reasons before working around them
 
 # Run dependency + advisory policy
-make deny                   # cargo deny check (deny.toml bans pure-Rust crypto for FIPS)
+make deny                   # cargo deny check (deny.toml bans pure-Rust crypto and ring: one crypto library, aws-lc-rs)
 
 # Run full development checks (format + clippy + deny + tests)
 make dev
