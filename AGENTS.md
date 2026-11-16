@@ -91,7 +91,7 @@ Use `unsafe` when it is the most appropriate solution, e.g. for FFI, extreme per
 
 - `/cmd/` - Binary entry points only, no business logic
     - `/cmd/kallisto-server/` - The resolver. Reads config, takes the seal key from the environment, starts the refresh thread and the worker pool.
-    - `/cmd/kallisto-ctl/` - The offline half: `seal`, `verify`, `bump-version`, `mint-token`, `gen-key`, `validate`, `open`. Everything that *writes* a sealed file happens here, never over the network.
+    - `/cmd/kallisto-ctl/` - The offline half: `seal`, `verify`, `bump-version`, `mint-token`, `gen-key`, `validate`, `open`. Everything that *writes* a sealed file happens here, never over the network. `health` is the one command that opens a socket: it asks the local server over loopback whether it is serving, for Kubernetes exec probes (#60).
 
 - `/src/` - The `naughtian_kallisto` library crate
     - `/src/config.rs` - K8s-shaped YAML (ADR-0003). Refuses a non-loopback bind without an explicit risk flag.
@@ -187,7 +187,7 @@ make clippy                 # scripts/clippy — the same gate CI runs
                              # clippy.toml disallows several methods (see file) — read the reasons before working around them
 
 # Run dependency + advisory policy
-make deny                   # cargo deny check (deny.toml bans pure-Rust crypto for FIPS)
+make deny                   # cargo deny check (deny.toml bans pure-Rust crypto and ring: one crypto library, aws-lc-rs)
 
 # Run full development checks (format + clippy + deny + tests)
 make dev
@@ -274,3 +274,16 @@ git commit -s -m "your commit message"
 ```
 
 The `-s` flag adds `Signed-off-by: Your Name <email>` to the commit.
+
+## Release Instructions
+
+### Tags
+
+Release tags are `vX.Y.Z`, annotated and GPG-signed: `git tag -s v2.1.0`.
+
+The `v` is not decoration. `.github/workflows/main-publish.yml` publishes the versioned image only for a
+tag matching `v*.*.*`. A tag without it builds nothing, and the release has no image under its version.
+
+2.0.0, 2.0.1 and 2.0.2 were tagged without the `v`, so none got a versioned image from the tag. The
+2.0.2 image was built afterwards with `gh workflow run main-publish.yml --ref 2.0.2`; 2.0.0 and 2.0.1
+have no versioned image.

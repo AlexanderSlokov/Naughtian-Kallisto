@@ -1,9 +1,11 @@
 # Kallisto demo
 
-A local environment that runs the real deployment shape: an S3 bucket (MinIO), a sealed file
+A local environment that runs the real deployment shape: an S3 bucket (Garage), a sealed file
 uploaded into it, and Kallisto polling that bucket and serving Vault KV-v2 reads.
 
-Nothing is built from source — both images are pulled, so no Rust toolchain is needed.
+Nothing is compiled — every image is pulled, so no Rust toolchain is needed. Every image is pinned
+to a version. The bucket used to be MinIO at `latest`, and the demo broke when MinIO stopped
+publishing images (issue #61).
 
 ## Before you start
 
@@ -39,16 +41,25 @@ The last one prints `403`.
 A plain `GET` on `metadata/app/` without `?list=true` answers 404, not a listing — Vault
 distinguishes reading a path's metadata from listing under it, and `curl -X LIST` works too.
 
-MinIO UI at http://localhost:9001 (demo-access-key / demo-secret-key). Open the `kallisto-demo`
-bucket to see `demo.kal` — the AES-256-GCM file Kallisto pulled. Downloading it gets you
-ciphertext; the plaintext it was sealed from is `plain.demo.json`.
+Garage has no web console. To see `demo.kal`, the AES-256-GCM file Kallisto pulled, list the
+bucket with the rclone that is in the init image:
+
+```bash
+docker compose -f docker-compose.demo.yml --env-file .env.demo \
+  run --rm --entrypoint rclone kallisto-init lsl demo:kallisto-demo
+```
+
+Replace `lsl demo:kallisto-demo` with `cat demo:kallisto-demo/demo.kal | head -c 64 | xxd` to look
+inside: it starts with `KALLISTO` and the rest is ciphertext. The plaintext it was sealed from is
+`plain.demo.json`.
 
 ## What's running
 
 ```
-MinIO (:9000 S3, :9001 UI)
+Garage (:3900 S3, loopback only)
   → kallisto-init [one-shot]
-      creates bucket, seals plain.demo.json → demo.kal, uploads
+      gives Garage a layout, a key and the bucket,
+      seals plain.demo.json → demo.kal, uploads
   → kallisto (:8200)
       polls bucket every 5s, serves KV-v2 reads
 ```
@@ -56,6 +67,10 @@ MinIO (:9000 S3, :9001 UI)
 `"sealed": false` in the health response means it loaded the file. `kallisto_file_version` is the
 content version inside the sealed file, and `"kallisto_authorization": "none"` means this file
 carries no token table, so every read is permitted — the single-app sidecar shape.
+
+`docker compose ps` shows `kallisto` as `healthy` once it has loaded the file. The check is
+`kallisto-ctl health --ready`, run inside the container: the image is distroless, and that binary is
+the only thing in it that can ask.
 
 ## See a refresh happen
 
@@ -86,7 +101,8 @@ If you are on Docker Desktop, or you cannot use `network_mode: host`, the demo n
 and they are not made for you here because they have not been tested on those platforms:
 
 1. Put the services on a bridge network and point `source.endpoint` in `kallisto.demo.yaml` at
-   `http://minio:9000` instead of `127.0.0.1:9000`.
+   `http://garage:3900` instead of `127.0.0.1:3900`. Garage must then bind `[::]:3900` and
+   `[::]:3901` in `garage.toml`, as `k8s/bucket.yaml` does.
 2. Kallisto must then bind `0.0.0.0` *inside its container*, which requires
    `--i-accept-the-risk`. Publish it as `127.0.0.1:8200:8200` so the host-side exposure is still
    loopback only.
@@ -100,6 +116,9 @@ this shape the container's network namespace is the boundary instead of the loop
 `.env.demo` holds deliberately fake placeholders — the seal key is thirty-two zero bytes. Nothing
 in it is a credential, which is why no scanner exclusion is needed for it.
 
+The bucket key is zeros as well, but not free-form: Garage requires a key id of `GK` followed by 24
+hex characters and a secret of 64 hex characters, and refuses anything else.
+
 Generate a real key with:
 
 ```bash
@@ -112,7 +131,7 @@ cargo run -p kallisto-ctl -- gen-key
 docker compose -f docker-compose.demo.yml --env-file .env.demo down -v
 ```
 
-`-v` removes the MinIO data and Kallisto's encrypted fallback copy. Without it, the next `up`
+`-v` removes Garage's data and Kallisto's encrypted fallback copy. Without it, the next `up`
 starts from the file already in the bucket.
 
 Use `-v` in particular after changing `KALLISTO_SEAL_KEY`. The fallback copy is sealed under the

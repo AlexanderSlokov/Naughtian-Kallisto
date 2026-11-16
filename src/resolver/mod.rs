@@ -16,6 +16,7 @@ pub mod refresh;
 pub mod sigv4;
 pub mod snapshot;
 pub mod source;
+pub mod tls;
 
 pub use bucket::{BucketConfig, BucketError, BucketSource};
 pub use refresh::{RefreshError, Refresher};

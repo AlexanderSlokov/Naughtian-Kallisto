@@ -15,6 +15,7 @@ use reqwest::{Client, StatusCode, header};
 use super::{
     sigv4::{SigningInputs, presign_query, uri_encode},
     source::{BoxFuture, Fetched, SecretSource, SourceError},
+    tls::{bucket_tls_config, bucket_tls_provider},
 };
 
 /// How long a signed URL stays valid. Short, because it is used immediately;
@@ -74,7 +75,12 @@ impl BucketSource {
         let origin = format!("{}://{host}", config.endpoint.scheme());
         let canonical_uri = canonical_uri(&config);
 
+        // The provider is named here, not left to a feature default: that
+        // default is how `ring` ended up under the bucket fetch (issue #58).
+        let tls = bucket_tls_config(bucket_tls_provider())
+            .map_err(|e| BucketError::Client(e.to_string()))?;
         let client = Client::builder()
+            .use_preconfigured_tls(tls)
             .timeout(REQUEST_TIMEOUT)
             .build()
             .map_err(|e| BucketError::Client(e.to_string()))?;

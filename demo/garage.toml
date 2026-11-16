@@ -1,0 +1,18 @@
+# Garage, single node, for the compose demo and for `make duck`
+# (tests/duck/docker-compose.yml mounts this same file).
+#
+# Everything binds loopback. Both setups use network_mode: host, so a wider
+# bind would put an S3 endpoint with placeholder credentials on the network.
+#
+# The RPC secret is not here: Garage reads it from GARAGE_RPC_SECRET.
+metadata_dir = "/var/lib/garage/meta"
+data_dir = "/var/lib/garage/data"
+db_engine = "sqlite"
+replication_factor = 1
+rpc_bind_addr = "127.0.0.1:3901"
+rpc_public_addr = "127.0.0.1:3901"
+
+[s3_api]
+# SigV4 signs the region, so it has to be the one kallisto.yaml names.
+s3_region = "us-east-1"
+api_bind_addr = "127.0.0.1:3900"

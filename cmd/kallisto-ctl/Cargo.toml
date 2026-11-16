@@ -3,7 +3,7 @@ name = "kallisto-ctl"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Offline tool for the sealed secret file: seal it, check it, bump its version, mint a token, validate a configuration."
+description = "Offline tool for the sealed secret file: seal it, check it, bump its version, mint a token, validate a configuration. Also the health probe for a local server."
 
 [[bin]]
 name = "kallisto-ctl"

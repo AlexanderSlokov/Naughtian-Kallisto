@@ -26,7 +26,7 @@ mod file;
 mod overrides;
 
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     path::PathBuf,
     time::Duration,
 };
@@ -148,6 +148,34 @@ impl Config {
             log: ResolvedLog::from_spec(spec.log.as_ref()),
         })
     }
+}
+
+/// Where a probe on the same machine finds the server (issue #60).
+///
+/// The same layers as [`Config::resolve`], merged the same way, so a port set
+/// in the file, the environment or a flag needs no second setting on the
+/// probe. `spec` is `None` when no configuration file was named.
+///
+/// Two differences from `resolve`, both because this binds nothing. It does
+/// not refuse a non-loopback address. And an unspecified address, which is
+/// somewhere to listen and nowhere to connect, becomes the loopback address of
+/// the same family.
+///
+/// ```
+/// use naughtian_kallisto::config::{Overrides, probe_address};
+///
+/// let target = probe_address(None, Overrides::default(), Overrides::default());
+/// assert_eq!(target.to_string(), "127.0.0.1:8200");
+/// ```
+pub fn probe_address(spec: Option<&Spec>, env: Overrides, cli: Overrides) -> SocketAddr {
+    let file = spec.map(Overrides::from_spec).unwrap_or_default();
+    let merged = file.overlay(env).overlay(cli);
+    let address = match merged.address.unwrap_or(DEFAULT_ADDRESS) {
+        IpAddr::V4(listen) if listen.is_unspecified() => IpAddr::V4(Ipv4Addr::LOCALHOST),
+        IpAddr::V6(listen) if listen.is_unspecified() => IpAddr::V6(Ipv6Addr::LOCALHOST),
+        reachable => reachable,
+    };
+    SocketAddr::new(address, merged.port.unwrap_or(DEFAULT_PORT))
 }
 
 /// The first operating constraint of ADR-0015, enforced rather than documented.
@@ -319,6 +347,43 @@ spec:
         let cli = parse_args(["--listen-port=3333".to_string()].into_iter()).unwrap();
         let cli_wins = Config::resolve(parse(with_port).unwrap(), env, cli).unwrap();
         assert_eq!(cli_wins.listen.port(), 3333);
+    }
+
+    /// Issue #60: the probe has to find the server wherever the server's own
+    /// configuration put it.
+    #[test]
+    fn a_probe_is_aimed_where_the_file_says_the_server_listens() {
+        let file = parse(
+            r#"
+apiVersion: kallisto/v1
+kind: Resolver
+spec:
+  listen:
+    address: "::1"
+    port: 1111
+  source:
+    type: disk
+    path: /x.kal
+"#,
+        )
+        .unwrap();
+        let from_file = probe_address(Some(&file.spec), Overrides::default(), Overrides::default());
+        assert_eq!(from_file.to_string(), "[::1]:1111");
+
+        let cli = parse_args(["--listen-port=3333".to_string()].into_iter()).unwrap();
+        let cli_wins = probe_address(Some(&file.spec), Overrides::default(), cli);
+        assert_eq!(cli_wins.to_string(), "[::1]:3333");
+    }
+
+    /// A server told to bind every address is still reached on loopback:
+    /// 0.0.0.0 is not an address anything can connect to.
+    #[test]
+    fn a_probe_of_a_wildcard_bind_goes_to_loopback() {
+        for (bind, reach) in [("0.0.0.0", "127.0.0.1:8200"), ("::", "[::1]:8200")] {
+            let cli = parse_args([format!("--listen-address={bind}")].into_iter()).unwrap();
+            let target = probe_address(None, Overrides::default(), cli);
+            assert_eq!(target.to_string(), reach);
+        }
     }
 
     #[test]
