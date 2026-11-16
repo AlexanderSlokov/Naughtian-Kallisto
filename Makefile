@@ -54,11 +54,15 @@ test: ## Unit and integration tests across the workspace
 	cargo test --workspace
 
 # The fitness function of the whole project (ADR-0015 Confirmation, duck plan
-# M8): three real Vault SDKs, a real MinIO bucket, and the failure modes an
+# M8): three real Vault SDKs, a real Garage bucket, and the failure modes an
 # operator actually meets — forged file, rolled-back file, dead bucket, wrong
 # key, revoked token, starved log writer. Needs docker. It found two bugs on its
 # first run that every in-process test had missed.
-duck: ## Three real Vault SDKs against the real server (needs docker)
+#
+# The binaries are built first, every time. run.sh builds them only when they
+# are missing, so on its own it tests whatever was last built: found while
+# fixing #61, with a server binary seven weeks older than the source.
+duck: build-server build-ctl ## Three real Vault SDKs against the real server (needs docker)
 	@bash tests/duck/run.sh
 
 ##@ Static analysis

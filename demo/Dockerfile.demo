@@ -1,11 +1,21 @@
-# mc + kallisto-ctl (copied from the published production image)
+# The init image: rclone's Alpine, plus the two binaries the init script runs.
+# Nothing is compiled here; both binaries are copied from published images.
+#
+# Every image is pinned to a version. The demo used to pull MinIO's `latest`,
+# and stopped working the day MinIO stopped publishing images, without a line
+# changing in this repository (issue #61).
 
-FROM ghcr.io/alexanderslokov/naughtian-kallisto:latest AS kal-bins
+FROM ghcr.io/alexanderslokov/naughtian-kallisto:2.1.0 AS kal-bins
 
-FROM quay.io/minio/mc:latest AS init
+# The Garage image is the bare binary: no shell, so the admin commands cannot
+# run from it in a script.
+FROM dxflrs/garage:v2.4.1 AS garage-bin
 
-# mc base is Alpine. The musl binary from the production image runs on it.
+FROM rclone/rclone:1.71.2 AS init
+
+# Both are static binaries, so they run on Alpine as they are.
 COPY --from=kal-bins /usr/local/bin/kallisto-ctl /usr/local/bin/kallisto-ctl
+COPY --from=garage-bin /garage /usr/local/bin/garage
 
 COPY demo/init.sh /init.sh
 RUN chmod +x /init.sh

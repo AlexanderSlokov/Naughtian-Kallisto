@@ -99,7 +99,7 @@ make bench-profile   # CPU and RAM, idle to saturated, with the chart
 
 ### Try it
 
-[`demo/`](demo/) runs the real deployment shape with one command: MinIO as the bucket, a
+[`demo/`](demo/) runs the real deployment shape with one command: Garage as the bucket, a
 sealed file uploaded into it, and Kallisto polling and serving Vault KV-v2 reads.
 
 ```bash

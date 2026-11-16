@@ -1,8 +1,8 @@
 name: Verification (Scheduled)
 
 # ADR-0013 §5: only `make verify` sits on the PR critical path. Everything here
-# is too slow for a PR gate and runs on a schedule instead. Every job is
-# `continue-on-error` so a red scheduled run cannot block a merge.
+# is too slow for a PR gate and runs on a schedule instead. Every job but
+# `duck` is `continue-on-error`; that job says why it is not.
 #
 # Three-strikes rule (ADR-0013 §5): a job that fails three consecutive runs
 # without a fix gets removed. A permanently red job is worse than no job.
@@ -16,7 +16,7 @@ on:
   workflow_dispatch:
     inputs:
       job:
-        description: 'Which suite to run (all, loom, fuzz, mutants)'
+        description: 'Which suite to run (all, loom, fuzz, duck, mutants)'
         required: false
         default: 'all'
 
@@ -94,6 +94,47 @@ jobs:
           name: fuzz-artifacts
           path: fuzz/artifacts/
           if-no-files-found: ignore
+
+  # The duck suite pulls images this repository does not control. For a month
+  # one of them, MinIO, could not be pulled, and nothing reported it because
+  # nothing ran the suite (issue #61). It needs docker and several minutes, so
+  # it runs here and not on the PR path.
+  #
+  # Not `continue-on-error`, unlike the jobs above: the point of this job is
+  # that a missing image shows up as a red run. A scheduled run blocks no merge
+  # either way.
+  duck:
+    name: Duck (three Vault SDKs, real bucket)
+    if: github.event.schedule != '0 4 * * 0'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      # The toolchain comes from rust-toolchain.toml so there is exactly one
+      # place to change it. Leaving it out is fatal: this action derives the
+      # toolchain from its own ref, and pinning the action to a SHA leaves it
+      # nothing to derive from.
+      - name: Read the pinned toolchain
+        id: toolchain
+        run: |
+          channel=$(grep -oP 'channel\s*=\s*"\K[^"]+' rust-toolchain.toml)
+          echo "channel=$channel" >> "$GITHUB_OUTPUT"
+
+      - name: Install the pinned toolchain
+        uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # v1
+        with:
+          toolchain: ${{ steps.toolchain.outputs.channel }}
+
+      # cmake and clang are for aws-lc-rs.
+      - name: Install OS dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake clang
+
+      - name: Rust Cache
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Run the duck suite
+        run: make duck
 
   mutants:
     name: Mutation testing (weekly)

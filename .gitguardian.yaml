@@ -13,7 +13,7 @@ secret:
 
   ignored-paths:
     # Fixture data generated at run time and written to a temp directory. The
-    # MinIO credentials the duck suite uses are created fresh per run from
+    # Garage credentials the duck suite uses are created fresh per run from
     # /dev/urandom and never committed — see tests/duck/run.sh.
     - "tests/duck/**/vendor/**"
 
